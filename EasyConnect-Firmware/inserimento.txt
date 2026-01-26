@@ -1,0 +1,92 @@
+#include <Arduino.h>
+#include <WiFi.h>
+#include <Preferences.h>
+#include "Pins.h"
+#include "GestioneMemoria.h"
+
+void setupMasterWiFi();
+void gestisciWebEWiFi();
+
+Preferences memoria;
+Impostazioni config;
+bool listaPerifericheAttive[101] = {false};
+struct DatiSlave { float t, h, p; int sic, grp; char sn[32]; };
+DatiSlave databaseSlave[101];
+unsigned long timerStampa = 0;
+
+void modoRicezione() { Serial1.flush(); digitalWrite(PIN_RS485_DIR, LOW); }
+void modoTrasmissione() { digitalWrite(PIN_RS485_DIR, HIGH); delayMicroseconds(50); }
+
+void gestisciMenuSeriale() {
+    if (Serial.available()) {
+        String cmd = Serial.readStringUntil('\n');
+        cmd.trim();
+        if (cmd == "INFO") {
+            Serial.printf("\n--- MASTER %s ---\n", config.configurata ? "CONFIGURATA" : "NON CONFIGURATA");
+            Serial.printf("SN: %s | MODO: %s | SIC_LOCALE: %s\n", config.serialeID, (config.modalitaMaster == 2 ? "REWAMPING" : "STANDALONE"), config.usaSicurezzaLocale ? "ON" : "OFF");
+        }
+        else if (cmd.startsWith("SET_SERIAL=")) {
+            String s = cmd.substring(11); s.toCharArray(config.serialeID, 32);
+            memoria.putString("serialeID", s); Serial.println("OK SERIAL");
+        }
+        else if (cmd.startsWith("SET_MODE=")) {
+            config.modalitaMaster = cmd.substring(9).toInt();
+            memoria.putInt("m_mode", config.modalitaMaster); Serial.println("OK MODE");
+        }
+        else if (cmd.startsWith("SET_SIC=")) {
+            config.usaSicurezzaLocale = (cmd.substring(8) == "ON");
+            memoria.putBool("m_sic", config.usaSicurezzaLocale); Serial.println("OK SIC");
+        }
+        else if (cmd == "SAVE") {
+            config.configurata = true; memoria.putBool("set", true);
+            Serial.println("OK SAVE. Riavvio..."); delay(1000); ESP.restart();
+        }
+        else if (cmd == "CLEAR_MEM") {
+            memoria.clear(); Serial.println("MEMORIA CANCELLATA! Riavvio...");
+            delay(1000); ESP.restart();
+        }
+    }
+}
+
+void setup() {
+    Serial.begin(115200);
+    memoria.begin("easy", false);
+    
+    // Caricamento
+    config.configurata = memoria.getBool("set", false);
+    config.modalitaMaster = memoria.getInt("m_mode", 2);
+    config.usaSicurezzaLocale = memoria.getBool("m_sic", false);
+    String s = memoria.getString("serialeID", "NON_SET");
+    s.toCharArray(config.serialeID, 32);
+
+    // Inizializzazione LED Esterni
+    pinMode(PIN_LED_EXT_1, OUTPUT); pinMode(PIN_LED_EXT_2, OUTPUT);
+    pinMode(PIN_LED_EXT_3, OUTPUT); pinMode(PIN_LED_EXT_4, OUTPUT);
+    pinMode(PIN_LED_EXT_5, OUTPUT);
+    pinMode(PIN_MASTER_SICUREZZA, INPUT_PULLUP);
+
+    while (!config.configurata) {
+        Serial.println("[MASTER] Non configurato. Inserire SET_SERIAL, SET_MODE, SET_SIC e poi SAVE.");
+        gestisciMenuSeriale();
+        delay(2000);
+    }
+
+    Serial1.begin(9600, SERIAL_8N1, PIN_RS485_RX, PIN_RS485_TX);
+    pinMode(PIN_LED_VERDE, OUTPUT); pinMode(PIN_LED_ROSSO, OUTPUT);
+    pinMode(PIN_RS485_DIR, OUTPUT);
+    
+    // Scansione e WiFi partono solo se configurato
+    setupMasterWiFi();
+}
+
+void loop() {
+    gestisciMenuSeriale();
+    gestisciWebEWiFi();
+    // ... Logica di interrogazione 485 già presente ...
+    
+    // Monitoraggio Sicurezza Locale se abilitato
+    if (config.usaSicurezzaLocale) {
+        bool sic = (digitalRead(PIN_MASTER_SICUREZZA) == LOW);
+        if (!sic) digitalWrite(PIN_LED_ROSSO, HIGH); // Esempio: allarme se aperto
+    }
+}
