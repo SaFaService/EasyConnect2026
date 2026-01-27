@@ -249,6 +249,8 @@ void setup() {
     s.toCharArray(config.serialeID, 32);
     String k = memoria.isKey("apiKey") ? memoria.getString("apiKey") : "";
     k.toCharArray(config.apiKey, 65);
+    String u = memoria.isKey("api_url") ? memoria.getString("api_url") : "";
+    u.toCharArray(config.apiUrl, 250);
 
     // Inizializzazione Pin LED Esterni
     pinMode(PIN_LED_EXT_1, OUTPUT); pinMode(PIN_LED_EXT_2, OUTPUT);

@@ -126,8 +126,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $id = $_POST['master_id'];
         $stmt = $pdo->prepare("UPDATE masters SET deleted_at = NULL WHERE id = ?");
         $stmt->execute([$id]);
-        $message = "Impianto rimosso dalla dashboard.";
-        $message_type = 'warning';
+        $message = "Impianto ripristinato con successo.";
+        $message_type = 'success';
+    }
+
+    // Azione: Eliminazione definitiva (solo Admin)
+    if ($action === 'hard_delete_master' && $isAdmin) {
+        $id = $_POST['master_id'];
+        // La foreign key con ON DELETE CASCADE si occuperà di eliminare i record collegati
+        // in 'measurements' e 'maintainer_requests'.
+        $stmt = $pdo->prepare("DELETE FROM masters WHERE id = ?");
+        $stmt->execute([$id]);
+        $message = "Impianto eliminato definitivamente dal sistema.";
+        $message_type = 'danger';
     }
 
 }
@@ -292,7 +303,8 @@ $masters = $stmtM->fetchAll();
                         <?php endif; ?>
 
                         <?php if($isDeleted && $isAdmin): ?>
-                             <button type="submit" name="action" value="restore_master" class="btn btn-warning btn-sm">Ripristina</button>
+                            <button type="submit" name="action" value="restore_master" class="btn btn-warning btn-sm">Ripristina</button>
+                            <button type="submit" name="action" value="hard_delete_master" class="btn btn-dark btn-sm" onclick="return confirm('Sei sicuro di voler eliminare definitivamente questo impianto? Questa operazione non potrà più essere ripristinata.');">Elimina Definitivamente</button>
                         <?php endif; ?>
                     </div>
                 </form>

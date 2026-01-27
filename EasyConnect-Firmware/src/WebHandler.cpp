@@ -227,6 +227,7 @@ void handleWifiPage() {
     html += "<script>";
     html += "function selNet(ssid) { document.getElementById('ssid').value = ssid; document.getElementById('pass').focus(); }";
     html += "function toggleStatic() { var d = document.getElementById('static_div'); d.classList.toggle('hidden'); }";
+    html += "function toggleKey() { var x = document.getElementById('api_key'); x.type = (x.type === 'password') ? 'text' : 'password'; }";
     html += "</script>";
     html += "</head><body><div class='container'>";
 
@@ -306,7 +307,10 @@ void handleWifiPage() {
     html += "<label>URL Endpoint JSON</label>";
     html += "<input type='text' name='api_url' value='" + api + "' placeholder='http://server.com/api/data'>";
     html += "<label>API Key (Codice Sicurezza)</label>";
-    html += "<input type='password' name='api_key' value='" + key + "' placeholder='Inserire codice a 64 caratteri'>";
+    html += "<div style='position:relative'>";
+    html += "<input type='password' name='api_key' id='api_key' value='" + key + "' placeholder='Inserire codice a 64 caratteri' style='padding-right:40px;'>";
+    html += "<span onclick='toggleKey()' style='position:absolute; right:10px; top:15px; cursor:pointer; font-size:1.2em;'>&#128065;</span>";
+    html += "</div>";
     html += "</div>";
 
     // TASTI
