@@ -3,245 +3,62 @@
 #include <WiFiClientSecure.h> // Per HTTPS
 #include <HTTPClient.h>       // Per richieste API
 #include <Preferences.h>
+#include <ArduinoOTA.h>       // Libreria per aggiornamento OTA
 #include "Pins.h"
 #include "GestioneMemoria.h"
+#include <HTTPUpdate.h>       // Libreria per aggiornamento HTTP/HTTPS
 #include "Calibration.h"
+#include "Led.h"
+#include "Serial_Manager.h"
+#include "RS485_Manager.h"
+#include "MembraneKeyboard.h"
 
-// Funzioni esterne
+// --- FUNZIONI DEFINITE IN ALTRI FILE ---
 void setupMasterWiFi();
 void gestisciWebEWiFi();
 
 // --- VERSIONE FIRMWARE MASTER ---
 const char* FW_VERSION = "1.0.1";
 
+// --- OGGETTI GLOBALI ---
+Led greenLed(PIN_LED_VERDE);
+Led redLed(PIN_LED_ROSSO);
+
 Preferences memoria;
 Impostazioni config;
-bool listaPerifericheAttive[101] = {false};
-DatiSlave databaseSlave[101];
-unsigned long timerScansione = 0;
-unsigned long timerStampa = 0;
-bool qualchePerifericaTrovata = false;
-bool debugViewData = false; // Visualizzazione dati grezzi
-bool debugViewApi = false;  // NUOVO: Visualizzazione log invio API
-bool scansioneInCorso = false;
-int statoInternet = 0;
-float currentDeltaP = 0.0; // Variabile globale per DeltaP
-unsigned long timerRemoteSync = 0; // Timer per invio dati remoto
 
-void modoRicezione() { Serial1.flush(); digitalWrite(PIN_RS485_DIR, LOW); }
-void modoTrasmissione() { digitalWrite(PIN_RS485_DIR, HIGH); delayMicroseconds(50); }
+// Oggetto gestione tastiera membrana
+MembraneKeyboard membraneKey;
 
-void gestisciMenuSeriale() {
-    static String inputBuffer = "";
+// --- VARIABILI GLOBALI DI STATO ---
+bool listaPerifericheAttive[101] = {false}; // Array che tiene traccia degli slave trovati sulla rete.
+DatiSlave databaseSlave[101];               // Array di strutture per memorizzare i dati ricevuti da ogni slave.
+unsigned long timerScansione = 0;           // Timer per la scansione oraria della rete RS485.
+unsigned long timerStampa = 0;              // Timer per il polling (interrogazione) periodico degli slave.
+bool qualchePerifericaTrovata = false;      // Flag per sapere se almeno uno slave è stato trovato.
+bool debugViewData = false;                 // Flag per abilitare/disabilitare i log di debug RS485.
+bool debugViewApi = false;                  // Flag per abilitare/disabilitare i log di debug per l'invio dati al server.
+bool scansioneInCorso = false;              // Flag che indica se è in corso una scansione RS485.
+int statoInternet = 0;                      // Stato della connessione a Internet (non usato attivamente al momento).
+float currentDeltaP = 0.0;                  // Valore corrente del Delta P calcolato.
+int partialFailCycles = 0;                  // Contatore per i cicli di polling con fallimenti parziali.
+unsigned long timerRemoteSync = 0;          // Timer per l'invio periodico dei dati al server.
 
-    while (Serial.available()) {
-        char c = Serial.read();
-        
-        if (c == '\n') {
-            String cmd = inputBuffer;
-            inputBuffer = "";
-            cmd.trim();
-            if (cmd.length() == 0) return;
+// Dichiarazione 'extern' della funzione definita in RS485_Master.cpp.
+// Necessaria per poterla chiamare da qui (specificamente, dal setup).
+extern void scansionaSlave();
+extern void scansionaSlaveStandalone();
+extern void RS485_Master_Standalone_Loop();
 
-            Serial.print("> Ricevuto: "); Serial.println(cmd);
-            String cmdUpper = cmd;
-            cmdUpper.toUpperCase();
 
-        if (cmdUpper == "HELP" || cmdUpper == "?") {
-            Serial.println("\n=== ELENCO COMANDI MASTER ===");
-            Serial.println("INFO             : Visualizza configurazione");
-            Serial.println("READSERIAL       : Leggi Seriale");
-            Serial.println("READMODE         : Leggi Modo Master");
-            Serial.println("READSIC          : Leggi stato Sicurezza");
-            Serial.println("SETSERIAL x      : Imposta SN (es. SETSERIAL AABB)");
-            Serial.println("SETMODE x        : 1:Standalone, 2:Rewamping");
-            Serial.println("SETSIC ON/OFF    : Sicurezza locale (IO2)");
-            Serial.println("SETSLAVEGRP id g : Cambia gruppo a uno slave (es. SETSLAVEGRP 5 2)");
-            Serial.println("VIEWDATA         : Abilita visualizzazione dati RS485");
-            Serial.println("STOPDATA         : Disabilita visualizzazione dati RS485");
-            Serial.println("VIEWAPI          : Abilita log invio dati al server");
-            Serial.println("STOPAPI          : Disabilita log invio dati al server");
-            Serial.println("CLEARMEM         : Reset Fabbrica");
-            Serial.println("=============================\n");
-        }
-        else if (cmdUpper == "INFO") {
-            Serial.println("\n--- STATO ATTUALE MASTER ---");
-            Serial.printf("Configurato : %s\n", config.configurata ? "SI" : "NO");
-            Serial.printf("Seriale     : %s\n", config.serialeID);
-            Serial.printf("Modo        : %s\n", config.modalitaMaster == 2 ? "REWAMPING" : "STANDALONE");
-            Serial.printf("Sicurezza   : %s\n", config.usaSicurezzaLocale ? "ATTIVA (IO2)" : "DISABILITATA");
-            Serial.printf("Versione FW : %s\n", FW_VERSION);
-            if (WiFi.status() == WL_CONNECTED) {
-                Serial.printf("Rete WiFi   : %s\n", WiFi.SSID().c_str());
-                Serial.printf("Indirizzo IP: %s\n", WiFi.localIP().toString().c_str());
-            } else {
-                Serial.println("Rete WiFi   : DISCONNESSO");
-            }
-            Serial.println("----------------------------\n");
-        }
-        // Nuovi comandi READ
-        else if (cmdUpper == "READSERIAL") {
-            Serial.printf("Seriale: %s\n", config.serialeID);
-        }
-        else if (cmdUpper == "READMODE") {
-            Serial.printf("Modo: %s\n", config.modalitaMaster == 2 ? "REWAMPING" : "STANDALONE");
-        }
-        else if (cmdUpper == "READSIC") {
-            Serial.printf("Sicurezza: %s\n", config.usaSicurezzaLocale ? "ATTIVA (IO2)" : "DISABILITATA");
-        }
-        // Comandi SET
-        else if (cmdUpper.startsWith("SETSERIAL ") || cmdUpper.startsWith("SETSERIAL:")) {
-            String s = cmd.substring(10); s.trim();
-            s.toCharArray(config.serialeID, 32);
-            memoria.putString("serialeID", config.serialeID);
-            Serial.println("OK: Seriale Salvato");
-            
-            // Verifica configurazione e sblocco automatico
-            if (String(config.serialeID) != "NON_SET") {
-                 config.configurata = true;
-                 memoria.putBool("set", true);
-                 Serial.println("Configurazione Completa! (Configuration Complete!)");
-            }
-        }
-        else if (cmdUpper.startsWith("SETMODE ") || cmdUpper.startsWith("SETMODE:")) {
-            String val = cmd.substring(8); val.trim();
-            config.modalitaMaster = val.toInt();
-            memoria.putInt("m_mode", config.modalitaMaster);
-            Serial.println("OK: Modo Salvato");
-        }
-        else if (cmdUpper.startsWith("SETSIC ") || cmdUpper.startsWith("SETSIC:")) {
-            String val = cmdUpper.substring(7); val.trim();
-            config.usaSicurezzaLocale = (val == "ON");
-            memoria.putBool("m_sic", config.usaSicurezzaLocale);
-            Serial.println("OK: Sicurezza Salvata");
-        }
-        // Comando per cambiare gruppo a uno slave remoto
-        else if (cmdUpper.startsWith("SETSLAVEGRP ")) {
-            // Parsing: SETSLAVEGRP 5 2
-            int primoSpazio = cmdUpper.indexOf(' ', 12);
-            if (primoSpazio > 0) {
-                String idStr = cmdUpper.substring(12, primoSpazio);
-                String grpStr = cmdUpper.substring(primoSpazio + 1);
-                int id = idStr.toInt();
-                int grp = grpStr.toInt();
-                
-                if (id > 0 && grp > 0) {
-                    modoTrasmissione();
-                    Serial1.printf("GRP%d:%d!", id, grp);
-                    modoRicezione();
-                    Serial.printf("Inviato comando cambio gruppo a Slave %d -> Gruppo %d\n", id, grp);
-                } else {
-                    Serial.println("Errore parametri. Uso: SETSLAVEGRP <ID> <GRP>");
-                }
-            }
-        }
-        else if (cmdUpper == "VIEWDATA") {
-            debugViewData = true;
-            Serial.println("Visualizzazione Dati RS485: ATTIVA");
-        }
-        else if (cmdUpper == "STOPDATA") {
-            debugViewData = false;
-            Serial.println("Visualizzazione Dati RS485: DISATTIVA");
-        }
-        else if (cmdUpper == "VIEWAPI") {
-            debugViewApi = true;
-            Serial.println("Visualizzazione Log API: ATTIVA");
-        }
-        else if (cmdUpper == "STOPAPI") {
-            debugViewApi = false;
-            Serial.println("Visualizzazione Log API: DISATTIVA");
-        }
-        else if (cmdUpper == "CLEARMEM") {
-            memoria.begin("easy", false); // Assicura apertura namespace
-            memoria.clear();              // Cancella preferenze utente
-            memoria.end();
-            WiFi.disconnect(true, true);  // Cancella credenziali WiFi SDK
-            Serial.println("MEMORIA RESETTATA (FACTORY RESET). Riavvio...");
-            delay(1000); ESP.restart();
-        }
-        } else {
-            if (c != '\r') inputBuffer += c;
-        }
-    }
-}
-
-void scansionaSlave() {
-    Serial.println("[SCAN] Avvio scansione slave RS485...");
-    scansioneInCorso = true;
-    qualchePerifericaTrovata = false;
-    
-    // Resetta array
-    for (int i = 0; i < 101; i++) listaPerifericheAttive[i] = false;
-
-    // Scansiona indirizzi 1-30 (o più se necessario)
-    for (int i = 1; i <= 30; i++) {
-        modoTrasmissione();
-        Serial1.printf("?%d!", i);
-        modoRicezione();
-        
-        unsigned long startWait = millis();
-        while (millis() - startWait < 50) { // 50ms timeout per slave
-            if (Serial1.available()) {
-                String resp = Serial1.readStringUntil('!');
-                if (resp.startsWith("OK")) {
-                    listaPerifericheAttive[i] = true;
-                    qualchePerifericaTrovata = true;
-                    Serial.printf("[SCAN] Trovato Slave ID: %d\n", i);
-                }
-                break; 
-            }
-        }
-    }
-    scansioneInCorso = false;
-    Serial.println("[SCAN] Scansione terminata.");
-    timerScansione = millis();
-}
-
-void parseDatiSlave(String payload, int address) {
-    // Formato atteso: OK,T,H,P,S,G,SN,VER! (7 virgole)
-    // O formato vecchio: OK,T,H,P,S,G,SN! (6 virgole)
-
-    // Contiamo le virgole per determinare il formato
-    int commaCount = 0;
-    for (int k = 0; k < payload.length(); k++) {
-        if (payload.charAt(k) == ',') {
-            commaCount++;
-        }
-    }
-
-    int v[7]; 
-    int pos = 0;
-    // Il primo campo è "OK", quindi la prima virgola è v[0]
-    for (int j = 0; j < commaCount; j++) { 
-        pos = payload.indexOf(',', pos + 1); 
-        v[j] = pos; 
-    }
-
-    // Se abbiamo almeno 6 virgole, possiamo parsare i dati base
-    if (commaCount >= 6) {
-        databaseSlave[address].t = payload.substring(v[0] + 1, v[1]).toFloat();
-        databaseSlave[address].h = payload.substring(v[1] + 1, v[2]).toFloat();
-        databaseSlave[address].p = payload.substring(v[2] + 1, v[3]).toFloat();
-        databaseSlave[address].sic = payload.substring(v[3] + 1, v[4]).toInt();
-        databaseSlave[address].grp = payload.substring(v[4] + 1, v[5]).toInt();
-        
-        if (commaCount == 7) { // Formato nuovo con versione
-            String sn = payload.substring(v[5] + 1, v[6]);
-            sn.toCharArray(databaseSlave[address].sn, 32);
-            String ver = payload.substring(v[6] + 1);
-            ver.toCharArray(databaseSlave[address].version, 16);
-        } else { // Formato vecchio senza versione
-            String sn = payload.substring(v[5] + 1);
-            sn.toCharArray(databaseSlave[address].sn, 32);
-            strcpy(databaseSlave[address].version, "N/A"); // Mettiamo un placeholder
-        }
-    }
-}
-
+// Funzione di setup, eseguita una sola volta all'avvio della scheda.
 void setup() {
     Serial.begin(115200);
+    // Inizializza la memoria non volatile (Preferences) nel namespace "easy".
     memoria.begin("easy", false);
     
+    // Carica la configurazione salvata dalla memoria.
+    // Se una chiave non esiste, viene usato un valore di default.
     config.configurata = memoria.getBool("set", false);
     config.modalitaMaster = memoria.getInt("m_mode", 2);
     config.usaSicurezzaLocale = memoria.getBool("m_sic", false);
@@ -249,16 +66,23 @@ void setup() {
     s.toCharArray(config.serialeID, 32);
     String k = memoria.isKey("apiKey") ? memoria.getString("apiKey") : "";
     k.toCharArray(config.apiKey, 65);
+    String u = memoria.isKey("api_url") ? memoria.getString("api_url") : "";
+    u.toCharArray(config.apiUrl, 250);
 
-    // Inizializzazione Pin LED Esterni
+    // Inizializzazione dei pin di output e input.
     pinMode(PIN_LED_EXT_1, OUTPUT); pinMode(PIN_LED_EXT_2, OUTPUT);
     pinMode(PIN_LED_EXT_3, OUTPUT); pinMode(PIN_LED_EXT_4, OUTPUT);
     pinMode(PIN_LED_EXT_5, OUTPUT);
     pinMode(PIN_LED_ROSSO, OUTPUT); pinMode(PIN_LED_VERDE, OUTPUT);
     pinMode(PIN_MASTER_SICUREZZA, INPUT_PULLUP);
 
+    greenLed.begin();
+    redLed.begin();
+    membraneKey.begin(); // Inizializza i pin della tastiera
+
     Serial.println("\n--- EASY CONNECT MASTER ---");
 
+    // Se la scheda non è configurata, entra in un loop di blocco.
     while (!config.configurata) {
         static unsigned long tM = 0;
         if (millis() - tM > 2000) {
@@ -266,21 +90,87 @@ void setup() {
             Serial.println("Digitare 'HELP' per la lista comandi.");
             tM = millis();
         }
-        gestisciMenuSeriale();
+        // Fa lampeggiare il LED rosso per indicare lo stato di attesa configurazione.
+        redLed.setState(LED_BLINK_FAST);
+        redLed.update();
+        Serial_Master_Menu();
+        delay(10);
     }
 
+    // Inizializza la comunicazione seriale per la RS485.
     Serial1.begin(9600, SERIAL_8N1, PIN_RS485_RX, PIN_RS485_TX);
     pinMode(PIN_RS485_DIR, OUTPUT);
     modoRicezione();
 
-    // Scansione iniziale all'avvio
-    scansionaSlave();
+    // Gestione avvio in base alla modalità
+    if (config.modalitaMaster == 1) {
+        Serial.println("--- MODALITA' STANDALONE (MODE 1) ---");
+        Serial.println("WiFi e AP Disabilitati.");
+        scansionaSlaveStandalone();
+    } else {
+        // Modalità Rewamping (Default)
+        scansionaSlave();
+        setupMasterWiFi();
 
-    setupMasterWiFi();
+        // --- CONFIGURAZIONE OTA (Over-The-Air Update) ---
+        ArduinoOTA.setHostname("EasyConnect-Master");
+        // ArduinoOTA.setPassword("admin"); // Opzionale: password per l'aggiornamento
+
+        ArduinoOTA.onStart([]() {
+            String type = (ArduinoOTA.getCommand() == U_FLASH) ? "sketch" : "filesystem";
+            Serial.println("Start updating " + type);
+        });
+        ArduinoOTA.onEnd([]() {
+            Serial.println("\nEnd");
+        });
+        ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+            Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+        });
+        ArduinoOTA.onError([](ota_error_t error) {
+            Serial.printf("Error[%u]: ", error);
+            if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+            else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+            else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+            else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+            else if (error == OTA_END_ERROR) Serial.println("End Failed");
+        });
+        ArduinoOTA.begin();
+        Serial.println("OTA Ready");
+    }
+}
+
+// --- FUNZIONE ESECUZIONE AGGIORNAMENTO HTTP/HTTPS ---
+void execHttpUpdate(String url) {
+    Serial.println("[OTA] Rilevato comando di aggiornamento remoto.");
+    Serial.println("[OTA] URL Firmware: " + url);
+    
+    // Utilizziamo un client sicuro ma "permissivo" (come per le API)
+    WiFiClientSecure client;
+    client.setInsecure(); // Accetta certificati self-signed
+    
+    // Imposta il timeout (opzionale, default è spesso sufficiente)
+    httpUpdate.setLedPin(PIN_LED_ROSSO, HIGH); // Accende il LED Rosso durante l'update
+
+    // Avvia l'aggiornamento (Questa funzione è bloccante)
+    t_httpUpdate_return ret = httpUpdate.update(client, url);
+
+    switch (ret) {
+        case HTTP_UPDATE_FAILED:
+            Serial.printf("[OTA] Aggiornamento FALLITO. Errore (%d): %s\n", 
+                          httpUpdate.getLastError(), httpUpdate.getLastErrorString().c_str());
+            break;
+        case HTTP_UPDATE_NO_UPDATES:
+            Serial.println("[OTA] Nessun aggiornamento necessario.");
+            break;
+        case HTTP_UPDATE_OK:
+            Serial.println("[OTA] Aggiornamento completato con successo! Riavvio...");
+            break;
+    }
 }
 
 // --- FUNZIONE INVIO DATI REMOTO (HTTPS) ---
 void sendDataToRemoteServer() {
+    // Controlla le pre-condizioni: WiFi connesso e URL API configurato.
     if (WiFi.status() != WL_CONNECTED || String(config.apiUrl).length() < 5) {
         if (debugViewApi) Serial.println("[API] Invio saltato: WiFi non connesso o URL API non impostato.");
         return;
@@ -289,21 +179,25 @@ void sendDataToRemoteServer() {
     if (debugViewApi) Serial.println("[API] Avvio invio dati al server...");
 
     WiFiClientSecure client;
+    // IMPORTANTE: Questa riga permette la connessione a server con certificati
+    // non validati da una CA ufficiale (come i certificati self-signed).
+    // Rende la connessione vulnerabile ad attacchi "man-in-the-middle".
+    // Da usare con cautela in produzione.
     client.setInsecure(); // Accetta certificati self-signed o senza root CA (comune in IoT embedded)
     
     HTTPClient http;
     
-    // Inizio connessione
+    // Tenta di iniziare la connessione all'URL specificato.
     if (http.begin(client, config.apiUrl)) {
         if (debugViewApi) Serial.printf("[API] Connessione a: %s\n", config.apiUrl);
         http.addHeader("Content-Type", "application/json");
-        // Autenticazione tramite API Key nell'header
+        // Se presente, aggiunge la chiave API nell'header per l'autenticazione.
         if (String(config.apiKey).length() > 0) {
             http.addHeader("X-API-KEY", config.apiKey);
             if (debugViewApi) Serial.println("[API] Header X-API-KEY aggiunto.");
         }
 
-        // Costruzione JSON
+        // Costruzione dinamica della stringa JSON da inviare.
         String json = "{";
         json += "\"master_sn\":\"" + String(config.serialeID) + "\",";
         json += "\"fw_ver\":\"" + String(FW_VERSION) + "\",";
@@ -311,6 +205,7 @@ void sendDataToRemoteServer() {
         json += "\"slaves\":[";
         
         bool first = true;
+        // Aggiunge un oggetto JSON per ogni slave attivo trovato.
         for (int i = 1; i <= 100; i++) {
             if (listaPerifericheAttive[i]) {
                 if (!first) json += ",";
@@ -330,16 +225,30 @@ void sendDataToRemoteServer() {
 
         if (debugViewApi) Serial.println("[API] JSON da inviare: " + json);
 
+        // Esegue la richiesta POST inviando il JSON.
         int httpResponseCode = http.POST(json);
         
         if (debugViewApi) Serial.printf("[API] Codice risposta HTTP: %d\n", httpResponseCode);
 
+        // Se la richiesta ha avuto successo (codice > 0)...
         if (httpResponseCode > 0) {
             String response = http.getString();
             if (debugViewApi) Serial.println("[API] Risposta Server: " + response);
-            
-            // Qui potremmo parsare 'response' per ricevere comandi dal server
-            // Es. se response contiene {"cmd":"reset"}, eseguiamo reset.
+
+            // --- CONTROLLO AGGIORNAMENTO REMOTO ---
+            // Cerca se la risposta contiene il campo "ota_url"
+            // Esempio JSON atteso dal server: { "status": "ok", "ota_url": "https://..." }
+            String searchKey = "\"ota_url\":\"";
+            int startIdx = response.indexOf(searchKey);
+            if (startIdx != -1) {
+                startIdx += searchKey.length();
+                int endIdx = response.indexOf("\"", startIdx);
+                if (endIdx != -1) {
+                    String fwUrl = response.substring(startIdx, endIdx);
+                    // Se l'URL è valido, avvia l'aggiornamento
+                    if (fwUrl.startsWith("http")) execHttpUpdate(fwUrl);
+                }
+            }
         } else {
             Serial.printf("[API] Errore invio: %s\n", http.errorToString(httpResponseCode).c_str());
         }
@@ -350,47 +259,64 @@ void sendDataToRemoteServer() {
     }
 }
 
+void gestisciLedMaster() {
+    // --- Logica LED Rosso (Stato Scheda Master & Connettività) ---
+    
+    // Priorità 1: Allarme di sicurezza locale o configurazione API mancante
+    bool securityTriggered = (digitalRead(PIN_MASTER_SICUREZZA) == HIGH);
+    bool wifiConnected = (WiFi.status() == WL_CONNECTED);
+    bool apiConfigured = (String(config.apiUrl).length() > 5);
+
+    if (config.usaSicurezzaLocale && securityTriggered) {
+        redLed.setState(LED_BLINK_FAST);
+        return; // L'allarme di sicurezza ha la precedenza su tutto
+    }
+    if (wifiConnected && !apiConfigured) {
+        redLed.setState(LED_BLINK_FAST);
+        return;
+    }
+
+    // Priorità 2: Modalità Access Point attiva
+    if (WiFi.getMode() == WIFI_AP) {
+        redLed.setState(LED_BLINK_SLOW);
+        return;
+    }
+
+    // Priorità 3: Funzionamento regolare (connesso e configurato)
+    if (wifiConnected && apiConfigured) {
+        redLed.setState(LED_SOLID);
+        return;
+    }
+
+    // Stato di default: Non connesso
+    redLed.setState(LED_OFF);
+}
+
 void loop() {
-    gestisciMenuSeriale();
-    gestisciWebEWiFi();
-    calibrationLoop(); // Gestione campionamento calibrazione
-    unsigned long ora = millis();
+    Serial_Master_Menu();
+    
+    if (config.modalitaMaster == 1) {
+        // --- LOOP MODALITA' STANDALONE ---
+        RS485_Master_Standalone_Loop();
+        // In questa modalità i LED della tastiera sono gestiti direttamente dal loop RS485
+    } else {
+        // --- LOOP MODALITA' REWAMPING ---
+        ArduinoOTA.handle(); // Gestione richieste OTA
+        gestisciWebEWiFi();
+        greenLed.update();
+        redLed.update();
+        gestisciLedMaster();
+        membraneKey.update(); // Aggiorna logica LED tastiera
 
-    // Scansione oraria (3600000 ms)
-    if (ora - timerScansione >= 3600000) {
-        scansionaSlave();
-    }
+        calibrationLoop(); // Gestione campionamento calibrazione
+        
+        RS485_Master_Loop();
 
-    // Polling Slave Attivi (ogni 2 secondi)
-    if (ora - timerStampa >= 2000) {
-        for (int i = 1; i <= 100; i++) {
-            if (listaPerifericheAttive[i]) {
-                modoTrasmissione();
-                Serial1.printf("?%d!", i);
-                modoRicezione();
-                unsigned long st = millis();
-                while (millis() - st < 100) {
-                    if (Serial1.available()) {
-                        String d = Serial1.readStringUntil('!');
-                        if (d.startsWith("OK")) {
-                            if (debugViewData) Serial.println("RX: " + d);
-                            parseDatiSlave(d, i);
-                            
-                            if (debugViewData) {
-                                Serial.printf("ID:%d T:%.1f P:%.0f GRP:%d\n", i, databaseSlave[i].t, databaseSlave[i].p, databaseSlave[i].grp);
-                            }
-                        }
-                        break;
-                    }
-                }
-            }
+        // Sincronizzazione Remota (ogni 60 secondi)
+        unsigned long ora = millis();
+        if (ora - timerRemoteSync >= 60000) {
+            sendDataToRemoteServer();
+            timerRemoteSync = ora;
         }
-        timerStampa = ora;
-    }
-
-    // Sincronizzazione Remota (ogni 60 secondi)
-    if (ora - timerRemoteSync >= 60000) {
-        sendDataToRemoteServer();
-        timerRemoteSync = ora;
     }
 }

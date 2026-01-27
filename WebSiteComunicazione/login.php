@@ -46,6 +46,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <title>Login - Antralux EasyConnect</title>
     <link rel="icon" type="image/x-icon" href="assets/img/Icona.ico">
     <!-- Usiamo Bootstrap 5 via CDN per uno stile moderno immediato -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         body { background-color: #f0f2f5; display: flex; align-items: center; justify-content: center; height: 100vh; }
@@ -73,7 +74,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         </div>
         <div class="mb-3">
             <label>Password</label>
-            <input type="password" name="password" class="form-control" required>
+            <div class="input-group">
+                <input type="password" name="password" id="password" class="form-control" required>
+                <button class="btn btn-outline-secondary" type="button" id="togglePassword">
+                    <i class="fas fa-eye" id="toggleIcon"></i>
+                </button>
+            </div>
         </div>
         <button type="submit" class="btn btn-primary w-100">Accedi</button>
         <div class="text-center mt-3">
@@ -82,5 +88,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     </form>
 </div>
 
+<script>
+    const togglePassword = document.querySelector('#togglePassword');
+    const password = document.querySelector('#password');
+    const icon = document.querySelector('#toggleIcon');
+
+    togglePassword.addEventListener('click', function () {
+        // cambia l'attributo type
+        const type = password.getAttribute('type') === 'password' ? 'text' : 'password';
+        password.setAttribute('type', type);
+        // cambia l'icona
+        icon.classList.toggle('fa-eye-slash');
+    });
+</script>
 </body>
 </html>

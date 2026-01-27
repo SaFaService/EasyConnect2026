@@ -1,0 +1,60 @@
+MANUALE FUNZIONAMENTO TASTIERA A MEMBRANA - MODALITÀ REWAMPING
+==============================================================
+
+Questo documento descrive il comportamento dei LED presenti sulla tastiera a membrana
+collegata tramite connettore FFC alla scheda Master in modalità Rewamping.
+
+MAPPATURA PIN (Connettore Tastiera a Membrana)
+----------------------------------------------
+Pin 1: LED AUX 1 (BAL4 - Futuro)
+Pin 2: LED SCHEDA SENSORE 2 (BAL3)
+Pin 3: LED SCHEDA SENSORE 1 (BAL2)
+Pin 4: LED WIFI (BAL1)
+Pin 5: LED AUX 2 (ExpLifeTime - Futuro)
+Pin 6: PULSANTE (PULS ResetLifeTime - Input)
+Pin 7: LED SICUREZZA (SaftyAlarm)
+Pin 8: Comune di Alimentazione (GND o VCC a seconda dello schema)
+
+
+LOGICA DI FUNZIONAMENTO LED
+---------------------------
+
+1. LED WIFI (Pin 4)
+   - ACCESO FISSO: Wifi Connesso e funzionante.
+   - SPENTO: AP Disattivato e Wifi Disconnesso.
+   - LAMPEGGIANTE VELOCE: Wifi Disconnesso ma Access Point (AP) della scheda Attivo.
+   - LAMPEGGIANTE LENTO: Non utilizzato (Futuro).
+
+2. LED SCHEDA SENSORE 1 (Pin 3)
+   - ACCESO FISSO: Scheda Sensore del Gruppo 1 trovata sulla rete RS485 e funzionante.
+   - SPENTO: La scheda del Gruppo 1 ha un Allarme di Sicurezza attivo (o non è presente).
+   - LAMPEGGIANTE VELOCE: La scheda è configurata ma non risponde alle richieste RS485.
+   - LAMPEGGIANTE LENTO: La scheda risponde ma invia valori di pressione pari a 0.
+
+3. LED SCHEDA SENSORE 2 (Pin 2)
+   - ACCESO FISSO: Scheda Sensore del Gruppo 2 trovata sulla rete RS485 e funzionante.
+   - SPENTO: La scheda del Gruppo 2 ha un Allarme di Sicurezza attivo (o non è presente).
+   - LAMPEGGIANTE VELOCE: La scheda è configurata ma non risponde alle richieste RS485.
+   - LAMPEGGIANTE LENTO: La scheda risponde ma invia valori di pressione pari a 0.
+
+4. LED AUX 1 (Pin 1)
+   - SPENTO: Riservato per utilizzi futuri.
+
+5. LED SICUREZZA (Pin 7)
+   - ACCESO FISSO: Allarme Totale. Tutte le sicurezze del sistema (Master + Slave attivi) sono in allarme.
+   - LAMPEGGIANTE VELOCE: Allarme Master. L'ingresso di sicurezza locale della scheda Master è attivo.
+   - LAMPEGGIANTE LENTO: Allarme Parziale. Almeno una scheda (Master o Slave) è in allarme.
+   - SPENTO: Nessun allarme di sicurezza attivo.
+
+6. LED AUX 2 (Pin 5)
+   - SPENTO: Riservato per utilizzi futuri.
+
+
+NOTE TECNICHE
+-------------
+Il Pin 6 del connettore è un ingresso digitale collegato a un pulsante sulla membrana.
+Attualmente non è assegnata alcuna funzione logica a questo pulsante nel firmware Rewamping.
+
+Definizioni Lampeggi:
+- Veloce: 250ms ON / 250ms OFF
+- Lento: 200ms ON / 800ms OFF

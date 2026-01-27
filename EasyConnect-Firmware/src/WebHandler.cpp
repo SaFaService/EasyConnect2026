@@ -1,6 +1,5 @@
 #include <Arduino.h>
 #include <WiFi.h>
-#include <WebServer.h>
 #include <DNSServer.h>
 #include <Preferences.h>
 #include <ESPmDNS.h>
@@ -20,11 +19,13 @@ extern DatiSlave databaseSlave[101];
 // Riferimento alla versione FW definita nel main
 extern const char* FW_VERSION;
 
-// Variabili gestione AP
+// Funzione di setup calibrazione definita in Calibration.cpp
+extern void setupCalibration();
+
+// Variabili gestione WiFi/AP
 unsigned long lastWifiCheck = 0;
 bool apEnabled = true;
 int wifiRetryCount = 0; // Contatore tentativi riconnessione WiFi
-
 
 // Oggetti Globali
 WebServer server(80);
@@ -35,6 +36,9 @@ const char* LOGO_IMG = "data:image/jpeg;base64,/9j/4QlrRXhpZgAATU0AKgAAAAgABwESA
 
 // --- FAVICON (Base64 - Pallino Blu) ---
 const char* FAVICON_IMG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAFklEQVR42mNk+M9AAzDCo/6j/qP+QwwA+bg/wX44w18AAAAASUVORK5CYII=";
+
+// Dichiarazione forward per checkThresholds se usata qui ma definita in Calibration.cpp
+extern String checkThresholds(float currentP);
 
 // --- GENERAZIONE HTML DASHBOARD ---
 String getDashboardHTML() {
@@ -227,6 +231,7 @@ void handleWifiPage() {
     html += "<script>";
     html += "function selNet(ssid) { document.getElementById('ssid').value = ssid; document.getElementById('pass').focus(); }";
     html += "function toggleStatic() { var d = document.getElementById('static_div'); d.classList.toggle('hidden'); }";
+    html += "function toggleKey() { var x = document.getElementById('api_key'); x.type = (x.type === 'password') ? 'text' : 'password'; }";
     html += "</script>";
     html += "</head><body><div class='container'>";
 
@@ -306,7 +311,10 @@ void handleWifiPage() {
     html += "<label>URL Endpoint JSON</label>";
     html += "<input type='text' name='api_url' value='" + api + "' placeholder='http://server.com/api/data'>";
     html += "<label>API Key (Codice Sicurezza)</label>";
-    html += "<input type='password' name='api_key' value='" + key + "' placeholder='Inserire codice a 64 caratteri'>";
+    html += "<div style='position:relative'>";
+    html += "<input type='password' name='api_key' id='api_key' value='" + key + "' placeholder='Inserire codice a 64 caratteri' style='padding-right:40px;'>";
+    html += "<span onclick='toggleKey()' style='position:absolute; right:10px; top:15px; cursor:pointer; font-size:1.2em;'>&#128065;</span>";
+    html += "</div>";
     html += "</div>";
 
     // TASTI

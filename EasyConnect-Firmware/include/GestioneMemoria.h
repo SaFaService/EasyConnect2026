@@ -11,6 +11,7 @@ struct DatiSlave {
     int sic, grp; 
     char sn[32]; 
     char version[16]; // Nuova: Versione Firmware Slave
+    unsigned long lastResponseTime; // Timestamp dell'ultima risposta valida
 };
 
 struct Impostazioni {

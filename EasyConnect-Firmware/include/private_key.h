@@ -1,0 +1,42 @@
+#ifndef PRIVATE_KEY_H
+#define PRIVATE_KEY_H
+
+/*
+  Contenuto del file 'key.pem' generato con OpenSSL.
+  Comando per generare chiave e certificato (valido 10 anni):
+  openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 3650 -nodes -subj "/CN=easyconnect.local"
+
+  Il contenuto del file key.pem va incollato qui dentro.
+*/
+const char* private_key = R"EOF(
+-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCrrbe0nGKSCjIB
+ZhBgRfafpzWYdWFNP3QmzAZaUPz0k4ebaqAe7OJSNo2HibCEvgZfWj2OOJcqOnuA
+O+U95WTvk7M0GMpE/OLSjUx7LiyzWSw7+VSLmiK1z1U2zo22ujjfHYbqAQ2W+iv7
+p8N/A65dp809j3qRjtN10LiZLFlqbc6xgeO/UYGzPKHVNmwVvWZzSKzFLnzSjp0O
+VtpeIyDCGXDZqdQOPVH+Los3WlHVpFijjpucuw3sh37GNk0exiLcKMI6AYMIkzeh
+tC2iwKoYu7fphh6TLhM4tMzLD/4jF4sHciT2KwpKUnbVIpj3euNzl9vlJxCBrqFi
+nkRFSQiFAgMBAAECggEAAqxbUnQm8sg23B+3PJCKVRUY+A1H3RiSWfJOXQSq07Ii
+Z/Cimqiso4QW8xfZSE/fMIfqsna+H9m2R5pnKO4UAskFftet+qIHdCjgGoDvEEHg
+tvRcdSoKxVL7rDVOLpy6uvquOaGXkRTHL41+tVEc23d78iv0SCT1tP1xim0O3WHe
+0LoTHpPBnOGbFPAg7jpJ20OPju/KcTq6nHoOiJT14Ne0INIIjMXuxXhzoi5MSbmP
+QyWXLISBLr0mOneV9QUMOxlQ8xuYZ2yPumsywxLF5f+sQpjYWQk0WQCnE9fT8UOR
+0fHXg+kcYOWjarEx3lsJp5+IJQHC+pIpUGEmGY+xUQKBgQDWjRseLIfY9spnLZp+
+NRwTr4QO6EnE5X1PYUkYPnEnNVESfulhwqSigGJVstvVuZw6Ttg0mrtJgJ7m2Tq+
+Bm/o03/PhevijOtTdCjOxZgh606/R8d/osSNjzVUv/uMG2JQkJVCy+N0GlZLVGKx
+JV+4MDg0FhYuPdOg7zsAMJgguQKBgQDM2Es3TJQtyA5lqnDwrEV9BWNUHIYM1hI4
+rYNoaFHoChC/jkMs+1OQKJNdHqnD+XOdNoVnm5q/N8W7hKwufQ4K1fmWJ/gl7y8w
+0d/dOlfTXdLBH+ZFKXgZ3e1TCvpo+ehh2GfeVsZysGt4zz1xx5f3zAtM3QMXHM/e
+ErEJc/GILQKBgBFli6dcsP80s6C+H+LP56DpAGo9B45BlXGUT9r5ZS9qsVIwnDfj
+EnpispaEVDL2Q+aucfWB/mGtXjUVtB+oYfac/6YSE9hg2MwBhTWO7BEEBXSZG2IM
+Dqfzzr06e+kWZ1hlANVTtvO5Fvows3ftsd87ebMvf0jslnZcL4qKZitxAoGAOEyJ
+/5zQbPS64D5D5CG0x3OfpRJh1U1QnLszjpJ9UGTTzZHv7ID2qnw8ZC91QSNiHydI
+6vzdPwi5E5yXJf/AyEGe4yIBFYvzUFueR1MtqC31Kpb11rRbCeDwxQ4TXJ6yu5Ga
+moUG7aaHIyDyJj9RCQ3PXUSxAL0udD524b4399ECgYEAwkxYv00C4aX9QqoJQsGs
+67NFLG4JBiMzv862PiJN6LCmbB3NQ5XUj9TBs3QHtPKiqeDZQmvRypMr6UWDtsOS
+vcBGGfxex+zUBT/DQKllcXGNoxQ2Buig5jBK+xrhx9lQSA+CWwQD6LY2/wy9QUJR
+Nod67d3ImiiQzoe0qe+3axk=
+-----END PRIVATE KEY-----
+)EOF";
+
+#endif

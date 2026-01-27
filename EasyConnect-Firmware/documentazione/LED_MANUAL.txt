@@ -1,0 +1,82 @@
+Manuale Funzionamento LED di Stato - EasyConnect
+
+================================================
+DEFINIZIONI COMUNI DEI LAMPEGGI
+================================================
+- LED Spento: Il LED è completamente spento.
+- LED Fisso: Il LED è acceso con luce fissa.
+- LED Lampeggiante Lento: Impulso di 200ms acceso, seguito da 800ms spento.
+- LED Lampeggiante Veloce: Impulsi alternati di 250ms acceso e 250ms spento.
+
+
+================================================
+SCHEDA SLAVE (Pressione)
+================================================
+
+--- LED VERDE (Stato Comunicazione RS485) ---
+
+- Lampeggiante Veloce:
+  Condizione: Nessuna comunicazione rilevata sulla linea RS485 per più di 5 secondi.
+  Significato: Problema di comunicazione generale, controllare cablaggi o la scheda Master.
+
+- Fisso:
+  Condizione: La scheda rileva traffico dati sulla linea RS485, ma nessuna richiesta è indirizzata specificamente a lei da più di 5 secondi.
+  Significato: La rete RS485 è attiva, ma il Master non sta interrogando questo specifico Slave. Controllare la configurazione del Master.
+
+- Lampeggiante Lento:
+  Condizione: La scheda riceve una richiesta dal Master indirizzata a lei e invia una risposta.
+  Significato: Funzionamento nominale. La comunicazione con il Master è attiva e corretta.
+
+--- LED ROSSO (Stato Sensore di Pressione) ---
+
+- Spento:
+  Condizione: Scheda non alimentata (stato implicito).
+
+- Fisso:
+  Condizione: Funzionamento regolare.
+  Significato: Il sensore I2C viene letto correttamente e il valore di pressione è nel range operativo (>= 300 mBar).
+
+- Lampeggiante Lento:
+  Condizione: L'ingresso di sicurezza della scheda è attivo.
+  Significato: È stato rilevato un allarme dall'ingresso di sicurezza locale.
+
+- Lampeggiante Veloce:
+  Condizione: Il valore letto dal sensore di pressione è inferiore a 300 mBar, oppure non è possibile comunicare con il sensore I2C. L'errore deve persistere per più di 5 secondi.
+  Significato: Errore critico del sensore. Controllare il sensore, la sua connessione o la presenza di ostruzioni.
+
+
+================================================
+SCHEDA MASTER (Rewamping)
+================================================
+
+--- LED VERDE (Stato Polling Slave su RS485) ---
+
+- Lampeggiante Veloce:
+  Condizione: Il Master non riceve risposta da NESSUNO degli Slave configurati, oppure non ci sono Slave configurati in rete.
+  Significato: Fallimento totale della comunicazione. Controllare i cablaggi della rete RS485, l'alimentazione degli Slave o la loro configurazione.
+
+- Fisso:
+  Condizione: Il Master riceve risposta solo da ALCUNI degli Slave configurati, e questa condizione si ripete per più di 5 cicli di richiesta consecutivi.
+  Significato: Fallimento parziale persistente. Uno o più Slave non rispondono costantemente. Controllare gli Slave che non comunicano.
+
+- Lampeggiante Lento:
+  Condizione: Il Master invia richieste e riceve correttamente risposta da TUTTI gli Slave configurati in rete.
+  Significato: Funzionamento nominale. Tutta la rete di sensori risponde correttamente.
+
+--- LED ROSSO (Stato Scheda Master) ---
+
+- Spento:
+  Condizione: Scheda non collegata a una rete esterna e non in modalità Access Point.
+  Significato: La scheda non ha connettività di rete attiva.
+
+- Fisso:
+  Condizione: Funzionamento regolare. La scheda è collegata a una rete WiFi esterna ed è correttamente configurata per inviare dati al server remoto.
+  Significato: Connettività di rete e cloud pienamente operativa.
+
+- Lampeggiante Lento:
+  Condizione: La scheda ha l'Access Point (AP) attivo per la configurazione.
+  Significato: La scheda sta operando come hotspot WiFi per permettere la configurazione iniziale da un dispositivo come smartphone o PC.
+
+- Lampeggiante Veloce:
+  Condizione: L'ingresso di sicurezza locale è attivo, OPPURE la scheda è connessa al WiFi ma non ha una configurazione API valida per comunicare con il server.
+  Significato: Allarme di sicurezza prioritario o errore di configurazione che impedisce l'invio dei dati al cloud.

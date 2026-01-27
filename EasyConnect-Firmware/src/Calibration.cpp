@@ -1,10 +1,12 @@
 #include "Calibration.h"
 #include "GestioneMemoria.h"
 #include <Preferences.h>
+#include <WebServer.h>
 
 extern Impostazioni config;
 extern Preferences memoria;
 extern float currentDeltaP; // Variabile globale definita in main_master.cpp
+extern WebServer server; // Riferimento al server HTTP definito in WebHandler.cpp
 
 // Variabili di stato per il Wizard
 bool isSampling = false;
@@ -220,7 +222,7 @@ void handleApiSaveStep() {
 void handleApiUpdateThresholds() {
     if (server.hasArg("plain")) {
         String body = server.arg("plain");
-        // Parsing JSON semplificato manuale o assumendo ordine
+        // Parsing JSON semplificato manuale
         // Per semplicità, iteriamo sugli argomenti se inviati come form o parsing grezzo
         // Qui usiamo un approccio semplice: il JS invia un JSON, ma ArduinoJson non è incluso nel contesto.
         // Usiamo un parsing manuale veloce basato sulla stringa ricevuta {"p0":"10","p1":"20"...}
@@ -264,7 +266,7 @@ void calibrationLoop() {
 
 // --- SETUP SERVER ---
 void setupCalibration() {
-    server.on("/calibrazione", []() { getCalibrationPageHTML(); });
+    server.on("/calibrazione", []() { server.send(200, "text/html", getCalibrationPageHTML()); });
     server.on("/api/calib/start_sample", handleApiStartSample);
     server.on("/api/calib/status", handleApiStatus);
     server.on("/api/calib/save_step", HTTP_POST, handleApiSaveStep);
