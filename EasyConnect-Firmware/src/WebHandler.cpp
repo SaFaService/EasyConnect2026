@@ -522,12 +522,19 @@ void gestisciWebEWiFi() {
 
             // Se la modalità "Sempre Attivo" è disabilitata, gestiamo i tentativi
             if (!apAlwaysOn) {
-                wifiRetryCount++;
-                Serial.printf("[WIFI] Connessione persa. Tentativo di riconnessione %d/10...\n", wifiRetryCount);
+                // Se non sta già tentando di riconnettersi, avvia il processo
+                if (WiFi.getMode() != WIFI_STA) {
+                    WiFi.begin(config.wifiSSID, config.wifiPASS);
+                }
+                
+                wifiRetryCount++; // Incrementa il contatore dei tentativi
+                Serial.printf("[WIFI] Connessione persa. Tentativo %d/10...\n", wifiRetryCount);
 
                 // Se superiamo i 10 tentativi e l'AP è spento, lo attiviamo come fallback
                 if (wifiRetryCount > 10 && !apEnabled) {
-                    WiFi.softAP("AntraluxRewamping", NULL);
+                    String apName = "EasyConnect-" + String(config.serialeID);
+                    if (String(config.serialeID) == "NON_SET") apName = "EasyConnect-Recovery";
+                    WiFi.softAP(apName.c_str(), "12345678");
                     apEnabled = true;
                     Serial.println("[WIFI] Riconnessione fallita. AP Riattivato (Recovery).");
                 }

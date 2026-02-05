@@ -15,6 +15,7 @@ extern bool qualchePerifericaTrovata;
 extern bool debugViewData;
 extern int partialFailCycles;
 extern Led greenLed;
+extern float currentDeltaP; // Variabile globale definita in main_master.cpp
 
 // Variabili per la modalità Standalone
 bool relayBoardDetected[5]; // Indici 1-4 usati
@@ -158,6 +159,14 @@ void RS485_Master_Loop() {
             greenLed.setState(LED_BLINK_FAST);
         }
         timerStampa = ora; // Aggiorna il timer del polling.
+
+        // --- CALCOLO DELTA PRESSIONE ---
+        // Se abbiamo sia Slave 1 che Slave 2, calcoliamo la differenza
+        if (listaPerifericheAttive[1] && listaPerifericheAttive[2]) {
+            currentDeltaP = databaseSlave[1].p - databaseSlave[2].p;
+        } else {
+            currentDeltaP = 0.0;
+        }
     }
 }
 

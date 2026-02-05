@@ -1,24 +1,25 @@
 #include <Arduino.h>
 #include <WiFi.h>
-#include <WiFiClientSecure.h> // Per HTTPS
-#include <HTTPClient.h>       // Per richieste API
 #include <Preferences.h>
-#include <ArduinoOTA.h>       // Libreria per aggiornamento OTA
 #include "Pins.h"
 #include "GestioneMemoria.h"
-#include <HTTPUpdate.h>       // Libreria per aggiornamento HTTP/HTTPS
 #include "Calibration.h"
 #include "Led.h"
 #include "Serial_Manager.h"
 #include "RS485_Manager.h"
 #include "MembraneKeyboard.h"
+#include <esp_task_wdt.h>     // Gestione Watchdog
+
+// --- NUOVI MODULI INCLUSI ---
+#include "OTA_Manager.h"      // Gestione Aggiornamenti
+#include "API_Manager.h"      // Gestione Invio Dati
 
 // --- FUNZIONI DEFINITE IN ALTRI FILE ---
 void setupMasterWiFi();
 void gestisciWebEWiFi();
 
 // --- VERSIONE FIRMWARE MASTER ---
-const char* FW_VERSION = "1.0.1";
+const char* FW_VERSION = "1.0.4"; 
 
 // --- OGGETTI GLOBALI ---
 Led greenLed(PIN_LED_VERDE);
@@ -37,19 +38,19 @@ unsigned long timerScansione = 0;           // Timer per la scansione oraria del
 unsigned long timerStampa = 0;              // Timer per il polling (interrogazione) periodico degli slave.
 bool qualchePerifericaTrovata = false;      // Flag per sapere se almeno uno slave è stato trovato.
 bool debugViewData = false;                 // Flag per abilitare/disabilitare i log di debug RS485.
-bool debugViewApi = false;                  // Flag per abilitare/disabilitare i log di debug per l'invio dati al server.
+bool debugViewApi = true;                  // Flag per abilitare/disabilitare i log di debug per l'invio dati al server.
 bool scansioneInCorso = false;              // Flag che indica se è in corso una scansione RS485.
 int statoInternet = 0;                      // Stato della connessione a Internet (non usato attivamente al momento).
 float currentDeltaP = 0.0;                  // Valore corrente del Delta P calcolato.
 int partialFailCycles = 0;                  // Contatore per i cicli di polling con fallimenti parziali.
 unsigned long timerRemoteSync = 0;          // Timer per l'invio periodico dei dati al server.
+unsigned long timerUpdateCheck = 0;         // Timer per il controllo periodico degli aggiornamenti.
 
 // Dichiarazione 'extern' della funzione definita in RS485_Master.cpp.
 // Necessaria per poterla chiamare da qui (specificamente, dal setup).
 extern void scansionaSlave();
 extern void scansionaSlaveStandalone();
 extern void RS485_Master_Standalone_Loop();
-
 
 // Funzione di setup, eseguita una sola volta all'avvio della scheda.
 void setup() {
@@ -68,6 +69,10 @@ void setup() {
     k.toCharArray(config.apiKey, 65);
     String u = memoria.isKey("api_url") ? memoria.getString("api_url") : "";
     u.toCharArray(config.apiUrl, 250);
+    String cu = memoria.isKey("custApiUrl") ? memoria.getString("custApiUrl") : "";
+    cu.toCharArray(config.customerApiUrl, 128);
+    String ck = memoria.isKey("custApiKey") ? memoria.getString("custApiKey") : "";
+    ck.toCharArray(config.customerApiKey, 65);
 
     // Inizializzazione dei pin di output e input.
     pinMode(PIN_LED_EXT_1, OUTPUT); pinMode(PIN_LED_EXT_2, OUTPUT);
@@ -79,6 +84,11 @@ void setup() {
     greenLed.begin();
     redLed.begin();
     membraneKey.begin(); // Inizializza i pin della tastiera
+
+    // --- CONFIGURAZIONE WATCHDOG ---
+    // Imposta il timeout del Task Watchdog a 45 secondi per evitare reset durante operazioni lunghe (come OTA o SSL handshake)
+    esp_task_wdt_init(45, true);
+    esp_task_wdt_add(NULL); // Aggiunge il task corrente (loop) al watchdog
 
     Serial.println("\n--- EASY CONNECT MASTER ---");
 
@@ -113,158 +123,29 @@ void setup() {
         setupMasterWiFi();
 
         // --- CONFIGURAZIONE OTA (Over-The-Air Update) ---
-        ArduinoOTA.setHostname("EasyConnect-Master");
-        // ArduinoOTA.setPassword("admin"); // Opzionale: password per l'aggiornamento
+        // Tutta la logica OTA è stata spostata in OTA_Manager.cpp
+        setupOTA();
 
-        ArduinoOTA.onStart([]() {
-            String type = (ArduinoOTA.getCommand() == U_FLASH) ? "sketch" : "filesystem";
-            Serial.println("Start updating " + type);
-        });
-        ArduinoOTA.onEnd([]() {
-            Serial.println("\nEnd");
-        });
-        ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-            Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
-        });
-        ArduinoOTA.onError([](ota_error_t error) {
-            Serial.printf("Error[%u]: ", error);
-            if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
-            else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
-            else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
-            else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
-            else if (error == OTA_END_ERROR) Serial.println("End Failed");
-        });
-        ArduinoOTA.begin();
-        Serial.println("OTA Ready");
+        // --- CONTROLLO AGGIORNAMENTI ALL'AVVIO ---
+        Serial.println("[OTA] Eseguo controllo aggiornamenti all'avvio...");
+        checkForFirmwareUpdates();
+        timerUpdateCheck = millis(); // Avvia il timer per il prossimo controllo
     }
 }
 
-// --- FUNZIONE ESECUZIONE AGGIORNAMENTO HTTP/HTTPS ---
-void execHttpUpdate(String url) {
-    Serial.println("[OTA] Rilevato comando di aggiornamento remoto.");
-    Serial.println("[OTA] URL Firmware: " + url);
-    
-    // Utilizziamo un client sicuro ma "permissivo" (come per le API)
-    WiFiClientSecure client;
-    client.setInsecure(); // Accetta certificati self-signed
-    
-    // Imposta il timeout (opzionale, default è spesso sufficiente)
-    httpUpdate.setLedPin(PIN_LED_ROSSO, HIGH); // Accende il LED Rosso durante l'update
-
-    // Avvia l'aggiornamento (Questa funzione è bloccante)
-    t_httpUpdate_return ret = httpUpdate.update(client, url);
-
-    switch (ret) {
-        case HTTP_UPDATE_FAILED:
-            Serial.printf("[OTA] Aggiornamento FALLITO. Errore (%d): %s\n", 
-                          httpUpdate.getLastError(), httpUpdate.getLastErrorString().c_str());
-            break;
-        case HTTP_UPDATE_NO_UPDATES:
-            Serial.println("[OTA] Nessun aggiornamento necessario.");
-            break;
-        case HTTP_UPDATE_OK:
-            Serial.println("[OTA] Aggiornamento completato con successo! Riavvio...");
-            break;
-    }
-}
-
-// --- FUNZIONE INVIO DATI REMOTO (HTTPS) ---
-void sendDataToRemoteServer() {
-    // Controlla le pre-condizioni: WiFi connesso e URL API configurato.
-    if (WiFi.status() != WL_CONNECTED || String(config.apiUrl).length() < 5) {
-        if (debugViewApi) Serial.println("[API] Invio saltato: WiFi non connesso o URL API non impostato.");
-        return;
-    }
-
-    if (debugViewApi) Serial.println("[API] Avvio invio dati al server...");
-
-    WiFiClientSecure client;
-    // IMPORTANTE: Questa riga permette la connessione a server con certificati
-    // non validati da una CA ufficiale (come i certificati self-signed).
-    // Rende la connessione vulnerabile ad attacchi "man-in-the-middle".
-    // Da usare con cautela in produzione.
-    client.setInsecure(); // Accetta certificati self-signed o senza root CA (comune in IoT embedded)
-    
-    HTTPClient http;
-    
-    // Tenta di iniziare la connessione all'URL specificato.
-    if (http.begin(client, config.apiUrl)) {
-        if (debugViewApi) Serial.printf("[API] Connessione a: %s\n", config.apiUrl);
-        http.addHeader("Content-Type", "application/json");
-        // Se presente, aggiunge la chiave API nell'header per l'autenticazione.
-        if (String(config.apiKey).length() > 0) {
-            http.addHeader("X-API-KEY", config.apiKey);
-            if (debugViewApi) Serial.println("[API] Header X-API-KEY aggiunto.");
-        }
-
-        // Costruzione dinamica della stringa JSON da inviare.
-        String json = "{";
-        json += "\"master_sn\":\"" + String(config.serialeID) + "\",";
-        json += "\"fw_ver\":\"" + String(FW_VERSION) + "\",";
-        json += "\"delta_p\":" + String(currentDeltaP) + ",";
-        json += "\"slaves\":[";
-        
-        bool first = true;
-        // Aggiunge un oggetto JSON per ogni slave attivo trovato.
-        for (int i = 1; i <= 100; i++) {
-            if (listaPerifericheAttive[i]) {
-                if (!first) json += ",";
-                json += "{";
-                json += "\"id\":" + String(i) + ",";
-                json += "\"sn\":\"" + String(databaseSlave[i].sn) + "\",";
-                json += "\"ver\":\"" + String(databaseSlave[i].version) + "\",";
-                json += "\"grp\":" + String(databaseSlave[i].grp) + ",";
-                json += "\"p\":" + String(databaseSlave[i].p) + ",";
-                json += "\"t\":" + String(databaseSlave[i].t) + ",";
-                json += "\"sic\":" + String(databaseSlave[i].sic);
-                json += "}";
-                first = false;
-            }
-        }
-        json += "]}";
-
-        if (debugViewApi) Serial.println("[API] JSON da inviare: " + json);
-
-        // Esegue la richiesta POST inviando il JSON.
-        int httpResponseCode = http.POST(json);
-        
-        if (debugViewApi) Serial.printf("[API] Codice risposta HTTP: %d\n", httpResponseCode);
-
-        // Se la richiesta ha avuto successo (codice > 0)...
-        if (httpResponseCode > 0) {
-            String response = http.getString();
-            if (debugViewApi) Serial.println("[API] Risposta Server: " + response);
-
-            // --- CONTROLLO AGGIORNAMENTO REMOTO ---
-            // Cerca se la risposta contiene il campo "ota_url"
-            // Esempio JSON atteso dal server: { "status": "ok", "ota_url": "https://..." }
-            String searchKey = "\"ota_url\":\"";
-            int startIdx = response.indexOf(searchKey);
-            if (startIdx != -1) {
-                startIdx += searchKey.length();
-                int endIdx = response.indexOf("\"", startIdx);
-                if (endIdx != -1) {
-                    String fwUrl = response.substring(startIdx, endIdx);
-                    // Se l'URL è valido, avvia l'aggiornamento
-                    if (fwUrl.startsWith("http")) execHttpUpdate(fwUrl);
-                }
-            }
-        } else {
-            Serial.printf("[API] Errore invio: %s\n", http.errorToString(httpResponseCode).c_str());
-        }
-        
-        http.end();
-    } else {
-        if (debugViewApi) Serial.println("[API] Errore: Impossibile connettersi al server.");
-    }
-}
-
+// --- GESTIONE LED DI BORDO (PCB) ---
+// NOTA IMPORTANTE: Questa funzione gestisce SOLO il LED Rosso saldato sulla scheda elettronica (PCB).
+// NON gestisce i LED della tastiera a membrana esterna (quelli sono gestiti da MembraneKeyboard.cpp).
+//
+// Logica LED Rosso PCB:
+// - Lampeggio Veloce: Allarme Sicurezza attivo OPPURE WiFi connesso ma API non configurate.
+// - Lampeggio Lento: Modalità Access Point (AP) attiva per la configurazione.
+// - Fisso: Tutto OK (WiFi connesso e API configurate).
+// - Spento: Non connesso.
 void gestisciLedMaster() {
-    // --- Logica LED Rosso (Stato Scheda Master & Connettività) ---
-    
     // Priorità 1: Allarme di sicurezza locale o configurazione API mancante
     bool securityTriggered = (digitalRead(PIN_MASTER_SICUREZZA) == HIGH);
-    bool wifiConnected = (WiFi.status() == WL_CONNECTED);
+    bool wifiConnected = (WiFi.status() == WL_CONNECTED); 
     bool apiConfigured = (String(config.apiUrl).length() > 5);
 
     if (config.usaSicurezzaLocale && securityTriggered) {
@@ -293,6 +174,14 @@ void gestisciLedMaster() {
 }
 
 void loop() {
+    // Reset del Watchdog Timer ad ogni ciclo per confermare che il sistema non è bloccato
+    esp_task_wdt_reset();
+    // --- TEST OTA ---
+    static unsigned long tTest = 0;
+    if (millis() - tTest > 5000) {
+        tTest = millis();
+        Serial.println(">>> VERSIONE TEST OTA FUNZIONANTE (1.0.4) <<<");
+    }
     Serial_Master_Menu();
     
     if (config.modalitaMaster == 1) {
@@ -301,7 +190,7 @@ void loop() {
         // In questa modalità i LED della tastiera sono gestiti direttamente dal loop RS485
     } else {
         // --- LOOP MODALITA' REWAMPING ---
-        ArduinoOTA.handle(); // Gestione richieste OTA
+        handleOTA(); // Gestione richieste OTA locali (WiFi)
         gestisciWebEWiFi();
         greenLed.update();
         redLed.update();
@@ -312,11 +201,17 @@ void loop() {
         
         RS485_Master_Loop();
 
-        // Sincronizzazione Remota (ogni 60 secondi)
         unsigned long ora = millis();
+        // Invio dati al server (ogni 60 secondi)
         if (ora - timerRemoteSync >= 60000) {
             sendDataToRemoteServer();
             timerRemoteSync = ora;
+        }
+
+        // Controllo aggiornamenti periodico (ogni 2 minuti per reattività al pulsante web)
+        if (ora - timerUpdateCheck >= 120000) { 
+            checkForFirmwareUpdates();
+            timerUpdateCheck = ora;
         }
     }
 }

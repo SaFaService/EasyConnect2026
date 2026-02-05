@@ -46,6 +46,10 @@ void Serial_Master_Menu() {
                 Serial.println("SETSERIAL x      : Imposta SN (es. SETSERIAL AABB)");
                 Serial.println("SETMODE x        : 1:Standalone, 2:Rewamping");
                 Serial.println("SETSIC ON/OFF    : Sicurezza locale (IO2)");
+                Serial.println("SETAPIURL url    : Imposta URL API Antralux");
+                Serial.println("SETAPIKEY key    : Imposta API Key Antralux");
+                Serial.println("SETCUSTURL url   : Imposta URL API Cliente");
+                Serial.println("SETCUSTKEY key   : Imposta API Key Cliente");
                 Serial.println("SETSLAVEGRP id g : Cambia gruppo a uno slave (es. SETSLAVEGRP 5 2)");
                 Serial.println("VIEWDATA         : Abilita visualizzazione dati RS485");
                 Serial.println("STOPDATA         : Disabilita visualizzazione dati RS485");
@@ -61,6 +65,10 @@ void Serial_Master_Menu() {
                 Serial.printf("Modo        : %s\n", config.modalitaMaster == 2 ? "REWAMPING" : "STANDALONE");
                 Serial.printf("Sicurezza   : %s\n", config.usaSicurezzaLocale ? "ATTIVA (IO2)" : "DISABILITATA");
                 Serial.printf("Versione FW : %s\n", FW_VERSION);
+                Serial.printf("URL API Antralux : %s\n", config.apiUrl);
+                Serial.printf("URL API Cliente  : %s\n", config.customerApiUrl);
+                Serial.printf("API Key Antralux : %s\n", String(config.apiKey).length() > 0 ? "Impostata" : "NON IMPOSTATA");
+                Serial.printf("API Key Cliente  : %s\n", String(config.customerApiKey).length() > 0 ? "Impostata" : "NON IMPOSTATA");
                 if (WiFi.status() == WL_CONNECTED) {
                     Serial.printf("Rete WiFi   : %s\n", WiFi.SSID().c_str());
                     Serial.printf("Indirizzo IP: %s\n", WiFi.localIP().toString().c_str());
@@ -103,6 +111,30 @@ void Serial_Master_Menu() {
                 config.usaSicurezzaLocale = (val == "ON");
                 memoria.putBool("m_sic", config.usaSicurezzaLocale);
                 Serial.println("OK: Sicurezza Salvata");
+            }
+            else if (cmdUpper.startsWith("SETAPIURL ")) {
+                String val = cmd.substring(10); val.trim();
+                val.toCharArray(config.apiUrl, 128);
+                memoria.putString("api_url", val);
+                Serial.println("OK: URL API Antralux salvato.");
+            }
+            else if (cmdUpper.startsWith("SETAPIKEY ")) {
+                String val = cmd.substring(10); val.trim();
+                val.toCharArray(config.apiKey, 65);
+                memoria.putString("apiKey", val);
+                Serial.println("OK: API Key Antralux salvata.");
+            }
+            else if (cmdUpper.startsWith("SETCUSTURL ")) {
+                String val = cmd.substring(11); val.trim();
+                val.toCharArray(config.customerApiUrl, 128);
+                memoria.putString("custApiUrl", val);
+                Serial.println("OK: URL API Cliente salvato.");
+            }
+            else if (cmdUpper.startsWith("SETCUSTKEY ")) {
+                String val = cmd.substring(11); val.trim();
+                val.toCharArray(config.customerApiKey, 65);
+                memoria.putString("custApiKey", val);
+                Serial.println("OK: API Key Cliente salvata.");
             }
             // Comando speciale per configurare uno slave da remoto.
             else if (cmdUpper.startsWith("SETSLAVEGRP ")) {

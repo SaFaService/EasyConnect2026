@@ -11,7 +11,10 @@
         <?php if ($_SESSION['user_role'] !== 'client'): ?>
             <a href="contacts.php" class="btn btn-outline-light me-2"><i class="fas fa-address-book"></i> Rubrica</a>
         <?php endif; ?>
-        <a href="settings.php" class="btn btn-outline-light me-2"><i class="fas fa-sliders-h"></i> Gestione Impianti</a>
+        <a href="settings.php" class="btn btn-outline-light me-2"><i class="fas fa-cogs"></i> Gestione Impianti</a>
+        <?php if ($_SESSION['user_role'] === 'admin' || $_SESSION['user_role'] === 'builder'): ?>
+            <a href="firmware.php" class="btn btn-outline-warning me-2"><i class="fas fa-cloud-upload-alt"></i> Gestione Firmware</a>
+        <?php endif; ?>
         
         <div class="dropdown">
             <a href="#" class="btn btn-outline-primary ms-2 dropdown-toggle" role="button" id="dropdownUser" data-bs-toggle="dropdown" aria-expanded="false" title="Profilo Utente">

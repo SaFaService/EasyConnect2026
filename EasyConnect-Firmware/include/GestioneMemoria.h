@@ -39,8 +39,10 @@ struct Impostazioni {
     char ipManuale[16];
     char subnetManuale[16];
     char gatewayManuale[16];
-    char apiUrl[128];
-    char apiKey[65];           // Nuova: API Key per sicurezza (64 char + null)
+    char apiUrl[128];          // URL API Antralux (per aggiornamenti e clienti SaaS)
+    char apiKey[65];           // API Key Antralux
+    char customerApiUrl[128];  // URL API personalizzato del cliente
+    char customerApiKey[65];   // API Key personalizzata del cliente
     bool apAttivo;
 
     // Calibrazione Rewamping

@@ -34,8 +34,8 @@ if (!$data) {
 }
 
 // 3. Aggiorna stato Master
-$updateStmt = $pdo->prepare("UPDATE masters SET last_seen = NOW(), fw_version = ? WHERE id = ?");
-$updateStmt->execute([$data['fw_ver'] ?? 'unknown', $master['id']]);
+$updateStmt = $pdo->prepare("UPDATE masters SET last_seen = NOW(), fw_version = ?, rssi = ? WHERE id = ?");
+$updateStmt->execute([$data['fw_ver'] ?? 'unknown', $data['rssi'] ?? 0, $master['id']]);
 
 // 4. Salva i dati (Log)
 // DeltaP Master
