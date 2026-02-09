@@ -2,6 +2,9 @@
 session_start();
 require 'config.php';
 
+// Includi il gestore della lingua
+require 'lang.php';
+
 // Protezione: Solo Admin e Costruttori possono accedere
 if (!isset($_SESSION['user_id']) || ($_SESSION['user_role'] !== 'admin' && $_SESSION['user_role'] !== 'builder')) {
     header("Location: login.php");
@@ -105,20 +108,21 @@ try {
 
 ?>
 <!DOCTYPE html>
-<html lang="it">
+<html lang="<?php echo $_SESSION['lang']; ?>">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gestione Firmware - Antralux</title>
+    <title><?php echo $lang['fw_title']; ?> - Antralux</title>
     <link rel="icon" type="image/x-icon" href="assets/img/Icona.ico">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/lipis/flag-icons@6/css/flag-icons.min.css"/>
 </head>
-<body class="bg-light">
+<body class="d-flex flex-column min-vh-100 bg-light">
 
 <?php require 'navbar.php'; ?>
 
-<div class="container mt-4">
+<div class="container mt-4 flex-grow-1">
     <?php if ($message): ?>
         <div class="alert alert-<?php echo $message_type; ?>"><?php echo $message; ?></div>
     <?php endif; ?>
@@ -128,24 +132,24 @@ try {
         <div class="col-md-4">
             <div class="card shadow-sm mb-4">
                 <div class="card-header bg-primary text-white">
-                    <h5 class="mb-0"><i class="fas fa-cloud-upload-alt"></i> Nuova Release</h5>
+                    <h5 class="mb-0"><i class="fas fa-cloud-upload-alt"></i> <?php echo $lang['fw_new_release']; ?></h5>
                 </div>
                 <div class="card-body">
                     <form method="POST">
                         <input type="hidden" name="action" value="add_firmware">
                         
                         <div class="mb-3">
-                            <label class="form-label">Dispositivo Target</label>
+                            <label class="form-label"><?php echo $lang['fw_target']; ?></label>
                             <select name="device_type" id="deviceType" class="form-select" onchange="updateVersionSuggestion()">
-                                <option value="master">Rewamping/Standalone</option>
-                                <option value="slave_pressure">Slave Pressione</option>
-                                <option value="slave_relay">Slave Relay</option>
+                                <option value="master"><?php echo $lang['fw_target_master']; ?></option>
+                                <option value="slave_pressure"><?php echo $lang['fw_target_slave_p']; ?></option>
+                                <option value="slave_relay"><?php echo $lang['fw_target_slave_r']; ?></option>
                             </select>
-                            <small class="text-muted">Ultima versione: <span id="lastVerDisplay">...</span></small>
+                            <small class="text-muted"><?php echo $lang['fw_last_ver']; ?> <span id="lastVerDisplay">...</span></small>
                         </div>
 
                         <div class="mb-3">
-                            <label class="form-label">Tipo Aggiornamento</label>
+                            <label class="form-label"><?php echo $lang['fw_update_type']; ?></label>
                             <div class="btn-group w-100" role="group">
                                 <input type="radio" class="btn-check" name="update_type" id="typePatch" value="patch" checked onchange="updateVersionSuggestion()">
                                 <label class="btn btn-outline-secondary" for="typePatch">Patch (z)</label>
@@ -159,22 +163,22 @@ try {
                         </div>
 
                         <div class="mb-3">
-                            <label class="form-label">Versione (x.y.z)</label>
+                            <label class="form-label"><?php echo $lang['fw_ver_input']; ?></label>
                             <input type="text" name="version_number" id="versionInput" class="form-control fw-bold" required>
                         </div>
 
                         <div class="mb-3">
-                            <label class="form-label">Link Google Drive (Condiviso)</label>
+                            <label class="form-label"><?php echo $lang['fw_drive_link']; ?></label>
                             <input type="url" name="drive_link" class="form-control" placeholder="https://drive.google.com/..." required>
-                            <div class="form-text">Incolla il link di condivisione "Chiunque abbia il link".</div>
+                            <div class="form-text"><?php echo $lang['fw_drive_help']; ?></div>
                         </div>
 
                         <div class="mb-3">
-                            <label class="form-label">Note di Rilascio</label>
-                            <textarea name="description" class="form-control" rows="3" placeholder="Cosa c'è di nuovo?"></textarea>
+                            <label class="form-label"><?php echo $lang['fw_notes']; ?></label>
+                            <textarea name="description" class="form-control" rows="3" placeholder="<?php echo $lang['fw_notes_placeholder']; ?>"></textarea>
                         </div>
 
-                        <button type="submit" class="btn btn-primary w-100">Registra Firmware</button>
+                        <button type="submit" class="btn btn-primary w-100"><?php echo $lang['fw_btn_register']; ?></button>
                     </form>
                 </div>
             </div>
@@ -184,19 +188,19 @@ try {
         <div class="col-md-8">
             <div class="card shadow-sm">
                 <div class="card-header">
-                    <h5 class="mb-0"><i class="fas fa-history"></i> Storico Versioni</h5>
+                    <h5 class="mb-0"><i class="fas fa-history"></i> <?php echo $lang['fw_history_title']; ?></h5>
                 </div>
                 <div class="card-body p-0">
                     <div class="table-responsive">
                         <table class="table table-hover mb-0 align-middle">
                             <thead class="table-light">
                                 <tr>
-                                    <th>Ver.</th>
-                                    <th>Tipo</th>
-                                    <th>Note</th>
-                                    <th>Data</th>
-                                    <th>Stato</th>
-                                    <th>Azioni</th>
+                                    <th><?php echo $lang['fw_col_ver']; ?></th>
+                                    <th><?php echo $lang['fw_col_type']; ?></th>
+                                    <th><?php echo $lang['fw_col_notes']; ?></th>
+                                    <th><?php echo $lang['fw_col_date']; ?></th>
+                                    <th><?php echo $lang['fw_col_status']; ?></th>
+                                    <th><?php echo $lang['fw_col_actions']; ?></th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -205,16 +209,16 @@ try {
                                         <td><strong><?php echo htmlspecialchars($fw['version']); ?></strong></td>
                                         <td>
                                             <?php 
-                                            if($fw['device_type'] == 'master') echo '<span class="badge bg-dark">Rewamping/Standalone</span>';
-                                            elseif($fw['device_type'] == 'slave_pressure') echo '<span class="badge bg-info text-dark">Slave P</span>';
-                                            else echo '<span class="badge bg-secondary">Slave R</span>';
+                                            if($fw['device_type'] == 'master') echo '<span class="badge bg-dark">' . $lang['fw_target_master'] . '</span>';
+                                            elseif($fw['device_type'] == 'slave_pressure') echo '<span class="badge bg-info text-dark">' . $lang['fw_target_slave_p'] . '</span>';
+                                            else echo '<span class="badge bg-secondary">' . $lang['fw_target_slave_r'] . '</span>';
                                             ?>
                                         </td>
                                         <td><small><?php echo htmlspecialchars($fw['description']); ?></small></td>
                                         <td><small><?php echo date('d/m/Y H:i', strtotime($fw['created_at'])); ?></small></td>
                                         <td>
                                             <?php if ($fw['is_active']): ?>
-                                                <span class="badge bg-success">ATTIVO</span>
+                                                <span class="badge bg-success"><?php echo $lang['fw_active']; ?></span>
                                             <?php else: ?>
                                                 <span class="text-muted">-</span>
                                             <?php endif; ?>
@@ -225,12 +229,12 @@ try {
                                                 <input type="hidden" name="device_type" value="<?php echo $fw['device_type']; ?>">
                                                 
                                                 <?php if (!$fw['is_active']): ?>
-                                                    <button type="submit" name="action" value="set_active" class="btn btn-sm btn-outline-success" title="Rendi questa versione quella ufficiale">
-                                                        <i class="fas fa-check"></i> Attiva
+                                                    <button type="submit" name="action" value="set_active" class="btn btn-sm btn-outline-success" title="<?php echo $lang['fw_btn_activate_tooltip']; ?>">
+                                                        <i class="fas fa-check"></i> <?php echo $lang['fw_btn_activate']; ?>
                                                     </button>
                                                 <?php endif; ?>
                                                 
-                                                <button type="submit" name="action" value="delete_firmware" class="btn btn-sm btn-outline-danger" onclick="return confirm('Eliminare questa release?');">
+                                                <button type="submit" name="action" value="delete_firmware" class="btn btn-sm btn-outline-danger" onclick="return confirm('<?php echo $lang['fw_delete_confirm']; ?>');">
                                                     <i class="fas fa-trash"></i>
                                                 </button>
                                             </form>
@@ -245,6 +249,8 @@ try {
         </div>
     </div>
 </div>
+
+<?php require 'footer.php'; ?>
 
 <script>
 // Dati passati da PHP a JS

@@ -3,6 +3,9 @@ session_start();
 require 'config.php';
 require_once 'GoogleAuthenticator.php';
 
+// Includi il gestore della lingua
+require 'lang.php';
+
 if (!isset($_SESSION['user_id'])) {
     header("Location: login.php");
     exit;
@@ -58,7 +61,7 @@ $newSecret = $ga->createSecret();
 $otpAuthUrl = 'otpauth://totp/Antralux%20(' . urlencode($currentUser['email']) . ')?secret=' . $newSecret . '&issuer=Antralux';
 ?>
 <!DOCTYPE html>
-<html lang="it">
+<html lang="<?php echo $_SESSION['lang']; ?>">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">

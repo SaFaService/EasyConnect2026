@@ -19,7 +19,7 @@ void setupMasterWiFi();
 void gestisciWebEWiFi();
 
 // --- VERSIONE FIRMWARE MASTER ---
-const char* FW_VERSION = "1.0.4"; 
+const char* FW_VERSION = "1.1.0"; 
 
 // --- OGGETTI GLOBALI ---
 Led greenLed(PIN_LED_VERDE);
@@ -51,10 +51,17 @@ unsigned long timerUpdateCheck = 0;         // Timer per il controllo periodico 
 extern void scansionaSlave();
 extern void scansionaSlaveStandalone();
 extern void RS485_Master_Standalone_Loop();
+extern bool otaSlaveActive; // Definito in RS485_Master.cpp
 
 // Funzione di setup, eseguita una sola volta all'avvio della scheda.
 void setup() {
+    // Inizializzazione Seriale anticipata con delay per USB CDC (ESP32-C3)
+    // Questo è fondamentale per vedere i log all'avvio su USB nativa
     Serial.begin(115200);
+    Serial.setTxTimeoutMs(0); // Evita blocchi se il terminale non è aperto
+    delay(1500); // Attesa fisiologica per l'enumerazione USB
+    Serial.println("\n\n!!! CPU BOOT SUCCESSFUL !!!"); // Feedback immediato avvio
+
     // Inizializza la memoria non volatile (Preferences) nel namespace "easy".
     memoria.begin("easy", false);
     
@@ -90,7 +97,7 @@ void setup() {
     esp_task_wdt_init(45, true);
     esp_task_wdt_add(NULL); // Aggiunge il task corrente (loop) al watchdog
 
-    Serial.println("\n--- EASY CONNECT MASTER ---");
+    Serial.println("\n--- EASY CONNECT MASTER (Boot Complete) ---");
 
     // Se la scheda non è configurata, entra in un loop di blocco.
     while (!config.configurata) {
@@ -103,7 +110,9 @@ void setup() {
         // Fa lampeggiare il LED rosso per indicare lo stato di attesa configurazione.
         redLed.setState(LED_BLINK_FAST);
         redLed.update();
+        membraneKey.update(); // FIX: Aggiorna i LED della tastiera per feedback visivo
         Serial_Master_Menu();
+        esp_task_wdt_reset(); // Importante: resetta il watchdog anche qui
         delay(10);
     }
 
@@ -125,11 +134,6 @@ void setup() {
         // --- CONFIGURAZIONE OTA (Over-The-Air Update) ---
         // Tutta la logica OTA è stata spostata in OTA_Manager.cpp
         setupOTA();
-
-        // --- CONTROLLO AGGIORNAMENTI ALL'AVVIO ---
-        Serial.println("[OTA] Eseguo controllo aggiornamenti all'avvio...");
-        checkForFirmwareUpdates();
-        timerUpdateCheck = millis(); // Avvia il timer per il prossimo controllo
     }
 }
 
@@ -176,12 +180,6 @@ void gestisciLedMaster() {
 void loop() {
     // Reset del Watchdog Timer ad ogni ciclo per confermare che il sistema non è bloccato
     esp_task_wdt_reset();
-    // --- TEST OTA ---
-    static unsigned long tTest = 0;
-    if (millis() - tTest > 5000) {
-        tTest = millis();
-        Serial.println(">>> VERSIONE TEST OTA FUNZIONANTE (1.0.4) <<<");
-    }
     Serial_Master_Menu();
     
     if (config.modalitaMaster == 1) {
@@ -202,16 +200,20 @@ void loop() {
         RS485_Master_Loop();
 
         unsigned long ora = millis();
-        // Invio dati al server (ogni 60 secondi)
-        if (ora - timerRemoteSync >= 60000) {
-            sendDataToRemoteServer();
-            timerRemoteSync = ora;
-        }
 
-        // Controllo aggiornamenti periodico (ogni 2 minuti per reattività al pulsante web)
-        if (ora - timerUpdateCheck >= 120000) { 
-            checkForFirmwareUpdates();
-            timerUpdateCheck = ora;
+        // Sospendi le operazioni di rete se è in corso un aggiornamento slave
+        if (!otaSlaveActive) {
+            // Invio dati al server (ogni 60 secondi)
+            if (ora - timerRemoteSync >= 60000) {
+                sendDataToRemoteServer();
+                timerRemoteSync = ora;
+            }
+            // Controllo aggiornamenti periodico (ogni 2 minuti per reattività al pulsante web)
+            // Modifica: Esegue il controllo subito se è il primo avvio (timer=0) E c'è connessione.
+            if ((ora - timerUpdateCheck >= 120000) || (timerUpdateCheck == 0 && WiFi.status() == WL_CONNECTED)) { 
+                checkForFirmwareUpdates();
+                timerUpdateCheck = ora;
+            }
         }
     }
 }

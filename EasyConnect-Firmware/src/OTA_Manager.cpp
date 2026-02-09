@@ -7,6 +7,8 @@
 #include "Pins.h"             // Definizione dei Pin (per i LED)
 #include "Led.h"              // Classe gestione LED
 #include "GestioneMemoria.h"  // Per accedere alla configurazione (API Key, URL)
+#include <SPIFFS.h>           // Per salvare il firmware dello slave
+#include <esp_task_wdt.h>     // Gestione Watchdog
 
 // --- VARIABILI ESTERNE ---
 // Queste variabili sono definite nel main_master.cpp, ma ci servono qui.
@@ -19,6 +21,9 @@ extern bool debugViewApi;
 
 // Funzione definita in RS485_Master.cpp per mettere il transceiver in ascolto
 extern void modoRicezione();
+
+// Funzione definita in RS485_Master.cpp per avviare la procedura di aggiornamento slave
+extern void avviaAggiornamentoSlave(String slaveSn, String filePath);
 
 // --- FUNZIONI DI SUPPORTO INTERNE ---
 
@@ -181,6 +186,59 @@ void execHttpUpdate(String url, String md5) {
     }
 }
 
+// Funzione per scaricare il firmware dello Slave e salvarlo in SPIFFS
+bool downloadSlaveFirmware(String url) {
+    if (!SPIFFS.begin(true)) {
+        Serial.println("[OTA-SLAVE] Errore critico: Impossibile montare SPIFFS.");
+        return false;
+    }
+
+    Serial.println("[OTA-SLAVE] Avvio download firmware da: " + url);
+
+    WiFiClientSecure client;
+    client.setInsecure();
+    HTTPClient http;
+    http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+
+    if (http.begin(client, url)) {
+        int httpCode = http.GET();
+        if (httpCode == HTTP_CODE_OK) {
+            File f = SPIFFS.open("/slave_update.bin", "w");
+            if (!f) {
+                Serial.println("[OTA-SLAVE] Errore apertura file per scrittura.");
+                http.end();
+                return false;
+            }
+
+            int len = http.getSize();
+            // Stream del download per gestire file grandi
+            WiFiClient * stream = http.getStreamPtr();
+            uint8_t buff[128] = { 0 };
+
+            while (http.connected() && (len > 0 || len == -1)) {
+                size_t size = stream->available();
+                if (size) {
+                    int c = stream->readBytes(buff, ((size > sizeof(buff)) ? sizeof(buff) : size));
+                    f.write(buff, c);
+                    if (len > 0) len -= c;
+                    esp_task_wdt_reset(); // Pet the watchdog during download
+                }
+                delay(1);
+            }
+            f.close();
+            http.end();
+            Serial.println("[OTA-SLAVE] Download completato. File salvato in /slave_update.bin");
+            return true;
+        } else {
+            Serial.printf("[OTA-SLAVE] Errore HTTP Download: %d\n", httpCode);
+        }
+        http.end();
+    } else {
+        Serial.println("[OTA-SLAVE] Impossibile connettersi al server.");
+    }
+    return false;
+}
+
 void checkForFirmwareUpdates() {
     // Controlla le pre-condizioni: WiFi connesso e URL API Antralux configurato.
     if (WiFi.status() != WL_CONNECTED || String(config.apiUrl).length() < 5) {
@@ -219,20 +277,53 @@ void checkForFirmwareUpdates() {
         String response = http.getString();
         if (debugViewApi) Serial.println("[API-OTA] Risposta: " + response);
 
-        // Parsing manuale semplice per trovare "update_ready" e l'URL
-        if (response.indexOf("update_ready") != -1) {
-            int urlStart = response.indexOf("\"url\":\"");
-            if (urlStart != -1) {
-                urlStart += 7; // Lunghezza di "url":"
+        // Estrae il tipo di dispositivo target per validazione
+        String deviceType = "";
+        int typeStart = response.indexOf("\"target_device_type\":\"");
+        if (typeStart != -1) {
+            typeStart += 22;
+            int typeEnd = response.indexOf("\"", typeStart);
+            deviceType = response.substring(typeStart, typeEnd);
+        }
+
+        // Controllo se è un aggiornamento per il MASTER (la condizione ora è specifica e non causa più false-positive)
+        if (response.indexOf("\"status\":\"update_ready\"") != -1) {
+            if (deviceType == "master") {
+                int urlStart = response.indexOf("\"url\":\"");
+                if (urlStart != -1) {
+                    urlStart += 7; // Lunghezza di "url":"
+                    int urlEnd = response.indexOf("\"", urlStart);
+                    String fwUrl = response.substring(urlStart, urlEnd);
+                    fwUrl.replace("\\/", "/");
+                    execHttpUpdate(fwUrl, ""); 
+                }
+            } else {
+                Serial.println("[OTA] ERRORE CRITICO: Ricevuto comando di aggiornamento MASTER con firmware per '" + deviceType + "'. Aggiornamento annullato.");
+                reportUpdateFailure("Tipo firmware errato ricevuto: " + deviceType);
+            }
+        } 
+        // Controllo se è un aggiornamento per uno SLAVE (uso else if per mutua esclusione)
+        else if (response.indexOf("\"status\":\"slave_update_ready\"") != -1) {
+            if (deviceType == "slave_pressure") {
+                Serial.println("[API-OTA] Rilevato aggiornamento per SLAVE.");
+                
+                // Estrazione URL
+                int urlStart = response.indexOf("\"url\":\"") + 7;
                 int urlEnd = response.indexOf("\"", urlStart);
                 String fwUrl = response.substring(urlStart, urlEnd);
-                // Sicurezza: rimuove eventuali backslash di escape (\/) che JSON può inserire
                 fwUrl.replace("\\/", "/");
-                
-                // Esegui l'aggiornamento
-                // Nota: I link di Google Drive vengono gestiti, ma assicurati che siano link diretti o convertiti dal PHP
-                // Il PHP firmware.php li converte già in link di export diretti.
-                execHttpUpdate(fwUrl, ""); 
+
+                // Estrazione Seriale Slave Target
+                int snStart = response.indexOf("\"target_slave_sn\":\"") + 19;
+                int snEnd = response.indexOf("\"", snStart);
+                String targetSn = response.substring(snStart, snEnd);
+
+                if (downloadSlaveFirmware(fwUrl)) {
+                    avviaAggiornamentoSlave(targetSn, "/slave_update.bin");
+                }
+            } else {
+                Serial.println("[OTA] ERRORE CRITICO: Ricevuto comando di aggiornamento SLAVE con firmware per '" + deviceType + "'. Aggiornamento annullato.");
+                // Qui dovremmo riportare l'errore dello slave
             }
         }
     } else {

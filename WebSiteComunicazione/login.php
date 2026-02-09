@@ -2,8 +2,9 @@
 session_start();
 require 'config.php';
 
-$error = '';
-
+// Includi il gestore della lingua
+require 'lang.php';
+$error_key = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $email = $_POST['email'];
     $password = $_POST['password'];
@@ -34,16 +35,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         exit;
     } else {
-        $error = "Email o Password non validi.";
+        $error_key = 'login_error';
     }
 }
 ?>
 <!DOCTYPE html>
-<html lang="it">
+<html lang="<?php echo $_SESSION['lang']; ?>">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login - Antralux EasyConnect</title>
+    <title><?php echo $lang['login_title']; ?></title>
     <link rel="icon" type="image/x-icon" href="assets/img/Icona.ico">
     <!-- Usiamo Bootstrap 5 via CDN per uno stile moderno immediato -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -60,20 +61,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <div class="text-center">
         <!-- Logo aggiornato -->
         <img src="assets/img/AntraluxLogo.png" alt="Antralux Logo" class="logo" onerror="this.style.display='none'">
-        <h4>Accesso Sistema</h4>
+        <h4><?php echo $lang['login_header']; ?></h4>
     </div>
     
-    <?php if($error): ?>
-        <div class="alert alert-danger"><?php echo $error; ?></div>
+    <?php if($error_key): ?>
+        <div class="alert alert-danger"><?php echo $lang[$error_key]; ?></div>
     <?php endif; ?>
 
     <form method="POST">
         <div class="mb-3">
-            <label>Email</label>
+            <label><?php echo $lang['login_email_label']; ?></label>
             <input type="email" name="email" class="form-control" required placeholder="admin@antralux.com">
         </div>
         <div class="mb-3">
-            <label>Password</label>
+            <label><?php echo $lang['login_password_label']; ?></label>
             <div class="input-group">
                 <input type="password" name="password" id="password" class="form-control" required>
                 <button class="btn btn-outline-secondary" type="button" id="togglePassword">
@@ -81,9 +82,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 </button>
             </div>
         </div>
-        <button type="submit" class="btn btn-primary w-100">Accedi</button>
+        <button type="submit" class="btn btn-primary w-100"><?php echo $lang['login_button']; ?></button>
         <div class="text-center mt-3">
-            <a href="forgot_password.php" class="text-muted small">Password dimenticata?</a>
+            <a href="forgot_password.php" class="text-muted small"><?php echo $lang['login_forgot_password']; ?></a>
         </div>
     </form>
 </div>

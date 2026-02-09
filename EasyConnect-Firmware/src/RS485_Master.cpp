@@ -1,7 +1,10 @@
 #include "RS485_Manager.h"
 #include "GestioneMemoria.h"
+#include <HTTPClient.h>
 #include "Pins.h"
 #include "Led.h"
+#include <SPIFFS.h>
+#include <MD5Builder.h>
 
 // La parola chiave 'extern' indica al compilatore che queste variabili sono definite
 // in un altro file (in questo caso, in 'main_master.cpp').
@@ -15,10 +18,28 @@ extern bool qualchePerifericaTrovata;
 extern bool debugViewData;
 extern int partialFailCycles;
 extern Led greenLed;
+extern Impostazioni config; // Mi serve per la API key
 extern float currentDeltaP; // Variabile globale definita in main_master.cpp
 
 // Variabili per la modalità Standalone
 bool relayBoardDetected[5]; // Indici 1-4 usati
+
+// --- VARIABILI GESTIONE OTA SLAVE ---
+bool otaSlaveActive = false;       // Se true, il master è occupato ad aggiornare uno slave
+String otaSlaveTargetSn = "";      // Seriale dello slave da aggiornare
+int otaSlaveTargetId = -1;         // Indirizzo RS485 dello slave target
+File otaSlaveFile;                 // Handle del file firmware
+int otaSlaveState = 0;             // Macchina a stati: 0=Idle, 1=Handshake, 2=Sending, 3=Verify
+String otaSlaveMD5 = "";           // MD5 del file firmware
+
+// Variabili interne per la macchina a stati OTA
+unsigned long otaSlaveLastActionTime = 0;
+int otaSlaveRetryCount = 0;
+unsigned long otaSlaveLastProgressReport = 0; // Timer per limitare i report HTTP
+size_t otaSlaveCurrentOffset = 0;
+const int OTA_MAX_RETRIES = 5;
+const int OTA_TIMEOUT_MS = 2000;   // Timeout attesa risposta
+const int OTA_CHUNK_SIZE = 64;     // Dimensione pacchetto dati (64 byte binari -> 128 byte hex)
 
 // Imposta il pin di direzione del transceiver RS485 su LOW per metterlo in ascolto.
 void modoRicezione() { Serial1.flush(); digitalWrite(PIN_RS485_DIR, LOW); }
@@ -100,9 +121,295 @@ void scansionaSlave() {
     timerScansione = millis();
 }
 
+// Helper per convertire buffer binario in stringa Hex
+String bufferToHex(uint8_t* buff, size_t len) {
+    String output = "";
+    for (size_t i = 0; i < len; i++) {
+        if (buff[i] < 16) output += "0";
+        output += String(buff[i], HEX);
+    }
+    output.toUpperCase();
+    return output;
+}
+
+void reportSlaveProgress(String status, String message) {
+    if (WiFi.status() != WL_CONNECTED || String(config.apiUrl).length() < 5) return;
+
+    WiFiClientSecure client;
+    client.setInsecure();
+    HTTPClient http;
+
+    String reportUrl = String(config.apiUrl);
+    int lastSlash = reportUrl.lastIndexOf('/');
+    if (lastSlash != -1) {
+        reportUrl = reportUrl.substring(0, lastSlash + 1) + "api_slave_ota_report.php";
+    }
+
+    http.begin(client, reportUrl);
+    http.addHeader("Content-Type", "application/json");
+
+    message.replace("\"", "'");
+
+    String jsonPayload = "{";
+    jsonPayload += "\"api_key\":\"" + String(config.apiKey) + "\",";
+    jsonPayload += "\"slave_sn\":\"" + otaSlaveTargetSn + "\",";
+    jsonPayload += "\"status\":\"" + status + "\",";
+    jsonPayload += "\"message\":\"" + message + "\"";
+    jsonPayload += "}";
+
+    Serial.println("[RS485-OTA] >> Invio report progresso: " + status);
+
+    int httpResponseCode = http.POST(jsonPayload);
+    if (debugViewData) {
+        Serial.printf("[RS485-OTA] Risposta server report: %d\n", httpResponseCode);
+    }
+    http.end();
+}
+
+// Funzione chiamata da OTA_Manager quando il file è pronto
+void avviaAggiornamentoSlave(String slaveSn, String filePath) {
+    Serial.println("[RS485-OTA] Richiesta avvio aggiornamento per Slave: " + slaveSn);
+    
+    if (otaSlaveActive) {
+        Serial.println("[RS485-OTA] Errore: Aggiornamento già in corso.");
+        return;
+    }
+    
+    if (!SPIFFS.begin(true)) SPIFFS.begin(true);
+    
+    otaSlaveFile = SPIFFS.open(filePath, "r");
+    if (!otaSlaveFile) {
+        Serial.println("[RS485-OTA] Errore: Impossibile aprire il file firmware da SPIFFS.");
+        return;
+    }
+
+    // Cerca l'ID dello slave basandosi sul seriale
+    otaSlaveTargetId = -1;
+    for (int i = 1; i <= 30; i++) {
+        if (String(databaseSlave[i].sn) == slaveSn) {
+            otaSlaveTargetId = i;
+            break;
+        }
+    }
+
+    if (otaSlaveTargetId == -1) {
+        Serial.println("[RS485-OTA] ERRORE: Slave SN " + slaveSn + " non trovato nella lista attivi (ID sconosciuto).");
+        otaSlaveFile.close();
+        otaSlaveActive = false;
+        return;
+    }
+
+    // Calcolo MD5 del file per verifica integrità
+    Serial.println("[RS485-OTA] Calcolo MD5 del firmware...");
+    MD5Builder md5;
+    md5.begin();
+    md5.addStream(otaSlaveFile, otaSlaveFile.size());
+    md5.calculate();
+    otaSlaveMD5 = md5.toString();
+    otaSlaveMD5.toUpperCase(); // Normalizza a maiuscolo
+    Serial.println("[RS485-OTA] MD5: " + otaSlaveMD5);
+    otaSlaveFile.seek(0); // Torna all'inizio del file
+
+    otaSlaveTargetSn = slaveSn;
+    otaSlaveActive = true;
+    otaSlaveState = 1; // Imposta stato iniziale: Handshake
+    otaSlaveCurrentOffset = 0;
+    otaSlaveRetryCount = 0;
+    otaSlaveLastActionTime = 0; // Forza azione immediata
+    otaSlaveLastProgressReport = 0;
+    Serial.printf("[RS485-OTA] Avvio procedura per Slave ID %d (SN: %s). File size: %d bytes.\n", otaSlaveTargetId, slaveSn.c_str(), otaSlaveFile.size());
+    
+    // REPORT IMMEDIATO: Sblocca il popup web dallo stato "Pending"
+    reportSlaveProgress("Handshake", "Master pronto. Contatto lo slave...");
+}
+
+void gestisciAggiornamentoSlave() {
+    if (!otaSlaveActive) return;
+
+    unsigned long now = millis();
+
+    switch (otaSlaveState) {
+        case 1: // SEND HANDSHAKE
+            if (now - otaSlaveLastActionTime > 1000) {
+                Serial.printf("[RS485-OTA] >> Invio START (Size: %d) a ID %d\n", otaSlaveFile.size(), otaSlaveTargetId);
+                modoTrasmissione();
+                // Invia Dimensione e MD5
+                Serial1.printf("OTA,START,%d,%s!", otaSlaveFile.size(), otaSlaveMD5.c_str());
+                modoRicezione();
+                otaSlaveLastActionTime = now;
+                otaSlaveState = 2; // WAIT HANDSHAKE
+            }
+            break;
+
+        case 2: // WAIT HANDSHAKE RESPONSE
+            if (now - otaSlaveLastActionTime > OTA_TIMEOUT_MS) {
+                otaSlaveRetryCount++;
+                Serial.printf("[RS485-OTA] Timeout attesa READY (%d/%d)\n", otaSlaveRetryCount, OTA_MAX_RETRIES);
+                if (otaSlaveRetryCount >= OTA_MAX_RETRIES) {
+                    Serial.println("[RS485-OTA] ERRORE: Nessuna risposta allo START. Abort.");
+                    otaSlaveActive = false;
+                    reportSlaveProgress("Failed", "Lo slave non risponde al comando di avvio.");
+                    otaSlaveFile.close();
+                } else {
+                    otaSlaveState = 1; // Riprova Handshake
+                    otaSlaveLastActionTime = now;
+                }
+            }
+            if (Serial1.available()) {
+                String resp = Serial1.readStringUntil('!');
+                Serial.println("[RS485-OTA] << RX: " + resp);
+                if (resp.startsWith("OK,OTA,READY")) {
+                    Serial.println("[RS485-OTA] Slave PRONTO. Inizio invio dati...");
+                    reportSlaveProgress("Sending data", "Trasferimento in corso...");
+                    otaSlaveState = 3; // SEND CHUNK
+                    otaSlaveCurrentOffset = 0;
+                    otaSlaveRetryCount = 0;
+                    otaSlaveLastActionTime = 0;
+                }
+            }
+            break;
+
+        case 3: // SEND CHUNK
+             if (now - otaSlaveLastActionTime > 50) { // Piccolo delay per stabilità
+                if (otaSlaveCurrentOffset >= otaSlaveFile.size()) {
+                    otaSlaveState = 5; // SEND END
+                    break;
+                }
+
+                // Assicuriamoci che il file sia aperto
+                if (!otaSlaveFile) {
+                     otaSlaveFile = SPIFFS.open("/slave_update.bin", "r");
+                }
+
+                otaSlaveFile.seek(otaSlaveCurrentOffset);
+                uint8_t buff[OTA_CHUNK_SIZE];
+                size_t bytesRead = otaSlaveFile.read(buff, OTA_CHUNK_SIZE);
+                
+                // --- FIX: GESTIONE ERRORE LETTURA ---
+                if (bytesRead == 0) {
+                    Serial.printf("[RS485-OTA] Errore lettura offset %d. Riprovo apertura file...\n", otaSlaveCurrentOffset);
+                    otaSlaveFile.close();
+                    otaSlaveFile = SPIFFS.open("/slave_update.bin", "r");
+                    if (otaSlaveFile) {
+                        otaSlaveFile.seek(otaSlaveCurrentOffset);
+                        bytesRead = otaSlaveFile.read(buff, OTA_CHUNK_SIZE);
+                    }
+                    
+                    if (bytesRead == 0) {
+                        Serial.println("[RS485-OTA] Errore critico lettura file. Abort.");
+                        otaSlaveActive = false;
+                        reportSlaveProgress("Failed", "Errore lettura file locale.");
+                        otaSlaveFile.close();
+                        return;
+                    }
+                }
+                // ------------------------------------
+
+                String hexData = bufferToHex(buff, bytesRead);
+                
+                Serial.printf("[RS485-OTA] >> Invio CHUNK Offset %d (Len %d)\n", otaSlaveCurrentOffset, bytesRead);
+                modoTrasmissione();
+                Serial1.printf("OTA,DATA,%d,%s!", otaSlaveCurrentOffset, hexData.c_str());
+                modoRicezione();
+                
+                otaSlaveLastActionTime = now;
+                otaSlaveState = 4; // WAIT CHUNK ACK
+             }
+             break;
+
+        case 4: // WAIT CHUNK ACK
+            if (now - otaSlaveLastActionTime > OTA_TIMEOUT_MS) {
+                otaSlaveRetryCount++;
+                Serial.printf("[RS485-OTA] Timeout ACK Chunk %d (%d/%d)\n", otaSlaveCurrentOffset, otaSlaveRetryCount, OTA_MAX_RETRIES);
+                if (otaSlaveRetryCount >= OTA_MAX_RETRIES) {
+                    Serial.println("[RS485-OTA] ERRORE: Troppi timeout su chunk. Abort.");
+                    otaSlaveActive = false;
+                    reportSlaveProgress("Failed", "Timeout durante il trasferimento dati.");
+                    otaSlaveFile.close();
+                } else {
+                    otaSlaveState = 3; // Riprova invio stesso chunk
+                    otaSlaveLastActionTime = now; 
+                }
+            }
+            if (Serial1.available()) {
+                String resp = Serial1.readStringUntil('!');
+                if (resp.startsWith("OK,OTA,ACK")) {
+                    // Estrae l'offset confermato per sicurezza
+                    int lastComma = resp.lastIndexOf(',');
+                    int ackOffset = resp.substring(lastComma+1).toInt();
+                    
+                    if (ackOffset == otaSlaveCurrentOffset) {
+                        Serial.printf("[RS485-OTA] << ACK ricevuto per Offset %d\n", ackOffset);
+                        
+                        // --- INVIO PROGRESSO AL SERVER (Ogni 2 secondi circa) ---
+                        if (millis() - otaSlaveLastProgressReport > 2000) {
+                            int percent = (otaSlaveCurrentOffset * 100) / otaSlaveFile.size();
+                            // Inviamo lo stato "Uploading" e la percentuale come messaggio
+                            reportSlaveProgress("Uploading", String(percent));
+                            otaSlaveLastProgressReport = millis();
+                        }
+                        
+                        otaSlaveCurrentOffset += OTA_CHUNK_SIZE;
+                        otaSlaveState = 3; // Prossimo Chunk
+                        otaSlaveRetryCount = 0;
+                        otaSlaveLastActionTime = 0;
+                    }
+                }
+            }
+            break;
+
+        case 5: // SEND END
+            Serial.println("[RS485-OTA] >> Invio END");
+            modoTrasmissione();
+            Serial1.print("OTA,END!");
+            modoRicezione();
+            reportSlaveProgress("Finalizing", "Verifica integrità e scrittura...");
+            otaSlaveLastActionTime = now;
+            otaSlaveState = 6; // WAIT SUCCESS
+            otaSlaveRetryCount = 0;
+            break;
+
+        case 6: // WAIT SUCCESS
+             if (now - otaSlaveLastActionTime > 10000) { // Timeout lungo per scrittura flash slave
+                otaSlaveRetryCount++;
+                if (otaSlaveRetryCount >= 2) {
+                     Serial.println("[RS485-OTA] ERRORE: Nessuna conferma finale.");
+                     otaSlaveActive = false;
+                     reportSlaveProgress("Failed", "Lo slave non ha dato conferma finale.");
+                     otaSlaveFile.close();
+                } else {
+                    otaSlaveState = 5; // Riprova invio END
+                    otaSlaveLastActionTime = now;
+                }
+             }
+             if (Serial1.available()) {
+                String resp = Serial1.readStringUntil('!');
+                Serial.println("[RS485-OTA] << RX: " + resp);
+                if (resp.startsWith("OK,OTA,SUCCESS")) {
+                    Serial.println("[RS485-OTA] AGGIORNAMENTO SLAVE COMPLETATO CON SUCCESSO!");
+                    otaSlaveActive = false;
+                    reportSlaveProgress("Success", "Aggiornamento completato.");
+                    otaSlaveFile.close();
+                } else if (resp.startsWith("OK,OTA,FAIL")) {
+                    Serial.println("[RS485-OTA] ERRORE: Lo slave ha riportato fallimento.");
+                    otaSlaveActive = false;
+                    reportSlaveProgress("Failed", "Lo slave ha riportato un fallimento (MD5 errato o errore scrittura).");
+                    otaSlaveFile.close();
+                }
+             }
+             break;
+    }
+}
+
 // Funzione principale del gestore RS485 per il Master, da chiamare nel loop().
 void RS485_Master_Loop() {
     unsigned long ora = millis();
+
+    // Se è in corso un aggiornamento OTA Slave, sospendi il normale polling
+    if (otaSlaveActive) {
+        gestisciAggiornamentoSlave();
+        return;
+    }
 
     // Esegue una nuova scansione della rete ogni ora (3.600.000 ms).
     if (ora - timerScansione >= 3600000) {

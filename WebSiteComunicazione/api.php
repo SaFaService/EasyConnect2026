@@ -46,14 +46,15 @@ if (isset($data['delta_p'])) {
 
 // Dati Slaves
 if (isset($data['slaves']) && is_array($data['slaves'])) {
-    $slaveStmt = $pdo->prepare("INSERT INTO measurements (master_id, slave_sn, slave_grp, pressure, temperature) VALUES (?, ?, ?, ?, ?)");
+    $slaveStmt = $pdo->prepare("INSERT INTO measurements (master_id, slave_sn, slave_grp, pressure, temperature, fw_version) VALUES (?, ?, ?, ?, ?, ?)");
     foreach ($data['slaves'] as $slave) {
         $slaveStmt->execute([
             $master['id'],
             $slave['sn'],
             $slave['grp'],
             $slave['p'],
-            $slave['t']
+            $slave['t'],
+            $slave['ver'] ?? null
         ]);
     }
 }

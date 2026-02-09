@@ -26,12 +26,45 @@ if (empty($apiKey)) {
 
 try {
     // 2. Identifica il Master tramite API Key
-    $stmt = $pdo->prepare("SELECT id, update_requested FROM masters WHERE api_key = ? AND deleted_at IS NULL");
+    $stmt = $pdo->prepare("SELECT * FROM masters WHERE api_key = ? AND deleted_at IS NULL");
     $stmt->execute([$apiKey]);
     $master = $stmt->fetch();
 
     if (!$master) {
         echo json_encode(['status' => 'error', 'message' => 'Master non trovato']);
+        exit;
+    }
+
+    // --- NUOVA LOGICA: PRIORITA' AGLI SLAVE ---
+    // 3. Controlla se c'è una richiesta di aggiornamento per uno SLAVE
+    if (!empty($master['slave_update_request_sn'])) {
+        // STOP LOOP: Se l'aggiornamento risulta già avviato (InProgress o Uploading), non inviarlo di nuovo.
+        // Il master deve aver fallito o essersi riavviato. L'utente dovrà resettare dal sito.
+        if ($master['slave_ota_status'] === 'InProgress' || $master['slave_ota_status'] === 'Uploading') {
+             echo json_encode(['status' => 'no_update', 'message' => 'Aggiornamento slave già in corso o interrotto.']);
+             exit;
+        }
+
+        // Recupera l'ultimo firmware ATTIVO per 'slave_pressure'
+        $stmtFw = $pdo->prepare("SELECT version, download_url FROM firmware_releases WHERE device_type = 'slave_pressure' AND is_active = 1 ORDER BY id DESC LIMIT 1");
+        $stmtFw->execute();
+        $fw = $stmtFw->fetch();
+
+        if ($fw) {
+            // Comunica al master che deve avviare un aggiornamento per uno slave
+            // Aggiorna SUBITO lo stato a 'InProgress' per evitare che al prossimo check (es. dopo reboot) riparta da solo.
+            $pdo->prepare("UPDATE masters SET slave_ota_status = 'InProgress' WHERE id = ?")->execute([$master['id']]);
+
+            echo json_encode([
+                'status' => 'slave_update_ready',
+                'target_device_type' => 'slave_pressure',
+                'target_slave_sn' => $master['slave_update_request_sn'],
+                'new_version' => $fw['version'],
+                'url' => convertDriveLink($fw['download_url'])
+            ]);
+        } else {
+            echo json_encode(['status' => 'no_update', 'message' => 'Nessun firmware attivo trovato per lo slave.']);
+        }
         exit;
     }
 
@@ -48,6 +81,7 @@ try {
 
             echo json_encode([
                 'status' => 'update_ready',
+                'target_device_type' => 'master',
                 'new_version' => $fw['version'],
                 'url' => convertDriveLink($fw['download_url'])
             ]);

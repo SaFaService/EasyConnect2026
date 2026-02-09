@@ -20,7 +20,7 @@ Led greenLed(PIN_LED_VERDE);            // LED Verde, logica normale (HIGH = acc
 Led redLed(PIN_LED_ROSSO, true);        // LED Rosso, logica inversa (Active Low, LOW = acceso)
 
 // --- VERSIONE FIRMWARE SLAVE ---
-const char* FW_VERSION = "1.0.0";
+const char* FW_VERSION = "1.1.0";
 
 // --- VARIABILI GLOBALI DI STATO ---
 float tempSHTC3, humSHTC3, pressioneMS;

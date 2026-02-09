@@ -26,8 +26,8 @@ void Serial_Master_Menu() {
     while (Serial.available()) {
         char c = Serial.read(); // ...leggi un carattere alla volta.
         
-        // Se il carattere è un "a capo" ('\n'), significa che il comando è completo.
-        if (c == '\n') {
+        // Se il carattere è un terminatore di riga (\n o \r), processa il comando.
+        if (c == '\n' || c == '\r') {
             String cmd = inputBuffer; // Copia il buffer in una nuova stringa.
             inputBuffer = "";         // Svuota il buffer per il prossimo comando.
             cmd.trim();               // Rimuove spazi e caratteri invisibili all'inizio e alla fine.
@@ -43,6 +43,7 @@ void Serial_Master_Menu() {
                 Serial.println("READSERIAL       : Leggi Seriale");
                 Serial.println("READMODE         : Leggi Modo Master");
                 Serial.println("READSIC          : Leggi stato Sicurezza");
+                Serial.println("READVERSION      : Leggi Versione FW");
                 Serial.println("SETSERIAL x      : Imposta SN (es. SETSERIAL AABB)");
                 Serial.println("SETMODE x        : 1:Standalone, 2:Rewamping");
                 Serial.println("SETSIC ON/OFF    : Sicurezza locale (IO2)");
@@ -55,6 +56,7 @@ void Serial_Master_Menu() {
                 Serial.println("STOPDATA         : Disabilita visualizzazione dati RS485");
                 Serial.println("VIEWAPI          : Abilita log invio dati al server");
                 Serial.println("STOPAPI          : Disabilita log invio dati al server");
+                Serial.println("REBOOT           : Riavvia la scheda");
                 Serial.println("CLEARMEM         : Reset Fabbrica");
                 Serial.println("=============================\n");
             }
@@ -86,6 +88,9 @@ void Serial_Master_Menu() {
             }
             else if (cmdUpper == "READSIC") {
                 Serial.printf("Sicurezza: %s\n", config.usaSicurezzaLocale ? "ATTIVA (IO2)" : "DISABILITATA");
+            }
+            else if (cmdUpper == "READVERSION") {
+                Serial.printf("Versione FW: %s\n", FW_VERSION);
             }
             // Blocco di comandi 'SET' per configurare la scheda.
             else if (cmdUpper.startsWith("SETSERIAL ") || cmdUpper.startsWith("SETSERIAL:")) {
@@ -171,6 +176,12 @@ void Serial_Master_Menu() {
             else if (cmdUpper == "STOPAPI") {
                 debugViewApi = false;
                 Serial.println("Visualizzazione Log API: DISATTIVA");
+            }
+            // Comando per il riavvio manuale
+            else if (cmdUpper == "REBOOT") {
+                Serial.println("Riavvio in corso...");
+                delay(1000);
+                ESP.restart();
             }
             // Comando per il reset di fabbrica.
             else if (cmdUpper == "CLEARMEM") {
