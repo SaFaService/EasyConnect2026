@@ -1,0 +1,3 @@
+Aggiornamenti da fare:
+- impostare wifi da seriale
+- Visualizzazione comandi seriale durante l'inserimento

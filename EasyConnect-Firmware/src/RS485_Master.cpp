@@ -38,13 +38,19 @@ int otaSlaveRetryCount = 0;
 unsigned long otaSlaveLastProgressReport = 0; // Timer per limitare i report HTTP
 size_t otaSlaveCurrentOffset = 0;
 const int OTA_MAX_RETRIES = 5;
-const int OTA_TIMEOUT_MS = 2000;   // Timeout attesa risposta
-const int OTA_CHUNK_SIZE = 64;     // Dimensione pacchetto dati (64 byte binari -> 128 byte hex)
+int otaSlaveBaudAttempt = 0; // 0 = 115200, 1 = 9600
+const int OTA_TIMEOUT_MS = 2500;   // Timeout standard per i pacchetti dati
+const int OTA_HANDSHAKE_TIMEOUT_MS = 30000; // Aumentato a 30s. La cancellazione della flash può essere lenta.
+const int OTA_CHUNK_SIZE = 128;    // Aumentato a 128 byte binari (256 hex) per velocità
 
 // Imposta il pin di direzione del transceiver RS485 su LOW per metterlo in ascolto.
-void modoRicezione() { Serial1.flush(); digitalWrite(PIN_RS485_DIR, LOW); }
+void modoRicezione() { 
+    Serial1.flush();                 // Attende fine TX UART
+    digitalWrite(PIN_RS485_DIR, LOW); // Rilascia subito il bus per evitare collisioni di turn-around
+    delayMicroseconds(80);           // Piccolo tempo di assestamento del transceiver
+}
 // Imposta il pin di direzione del transceiver RS485 su HIGH per abilitare la trasmissione.
-void modoTrasmissione() { digitalWrite(PIN_RS485_DIR, HIGH); delayMicroseconds(50); }
+void modoTrasmissione() { digitalWrite(PIN_RS485_DIR, HIGH); delayMicroseconds(80); }
 
 // Funzione per analizzare la stringa di risposta ricevuta da uno slave.
 // Estrae i dati (temperatura, pressione, etc.) e li salva nel database.
@@ -98,6 +104,10 @@ void scansionaSlave() {
 
     // Prova a interrogare gli indirizzi da 1 a 30.
     for (int i = 1; i <= 30; i++) {
+        while (Serial1.available()) Serial1.read(); // Pulisce eventuali byte residui/sporchi
+        if (debugViewData) {
+            Serial.printf("[SCAN-TX] -> ?%d!\n", i);
+        }
         modoTrasmissione();
         Serial1.printf("?%d!", i); // Invia una richiesta all'indirizzo 'i'.
         modoRicezione();
@@ -106,6 +116,9 @@ void scansionaSlave() {
         while (millis() - startWait < 50) { // Aspetta una risposta per 50ms.
             if (Serial1.available()) {
                 String resp = Serial1.readStringUntil('!');
+                if (debugViewData) {
+                    Serial.printf("[SCAN-RX] <- %s!\n", resp.c_str());
+                }
                 if (resp.startsWith("OK")) {
                     listaPerifericheAttive[i] = true;
                     qualchePerifericaTrovata = true;
@@ -130,6 +143,15 @@ String bufferToHex(uint8_t* buff, size_t len) {
     }
     output.toUpperCase();
     return output;
+}
+
+// Calcola Checksum XOR semplice per stringa Hex
+uint8_t calculateChecksum(String &data) {
+    uint8_t crc = 0;
+    for (int i = 0; i < data.length(); i++) {
+        crc ^= data.charAt(i);
+    }
+    return crc;
 }
 
 void reportSlaveProgress(String status, String message) {
@@ -166,6 +188,27 @@ void reportSlaveProgress(String status, String message) {
     http.end();
 }
 
+// Funzione helper per terminare l'OTA e ripristinare lo stato
+void terminaOtaSlave(bool success, String message) {
+    otaSlaveActive = false;
+    if (otaSlaveFile) otaSlaveFile.close();
+    
+    if (success) {
+        reportSlaveProgress("Success", message);
+    } else {
+        reportSlaveProgress("Failed", message);
+    }
+
+    // Ripristina sempre il baud rate a 115200 per il polling normale
+    // Lo facciamo solo se abbiamo effettivamente cambiato baud rate
+    if (otaSlaveBaudAttempt != 0) {
+        Serial.println("[RS485-OTA] Ripristino baud rate a 115200.");
+        Serial1.end();
+        Serial1.begin(115200, SERIAL_8N1, PIN_RS485_RX, PIN_RS485_TX);
+        modoRicezione();
+    }
+}
+
 // Funzione chiamata da OTA_Manager quando il file è pronto
 void avviaAggiornamentoSlave(String slaveSn, String filePath) {
     Serial.println("[RS485-OTA] Richiesta avvio aggiornamento per Slave: " + slaveSn);
@@ -180,7 +223,8 @@ void avviaAggiornamentoSlave(String slaveSn, String filePath) {
     otaSlaveFile = SPIFFS.open(filePath, "r");
     if (!otaSlaveFile) {
         Serial.println("[RS485-OTA] Errore: Impossibile aprire il file firmware da SPIFFS.");
-        return;
+        reportSlaveProgress("Failed", "Errore interno: impossibile leggere file firmware.");
+        return; // Non usiamo terminaOtaSlave perché non è ancora attivo
     }
 
     // Cerca l'ID dello slave basandosi sul seriale
@@ -194,8 +238,8 @@ void avviaAggiornamentoSlave(String slaveSn, String filePath) {
 
     if (otaSlaveTargetId == -1) {
         Serial.println("[RS485-OTA] ERRORE: Slave SN " + slaveSn + " non trovato nella lista attivi (ID sconosciuto).");
+        reportSlaveProgress("Failed", "Slave non trovato o non attivo sulla rete RS485.");
         otaSlaveFile.close();
-        otaSlaveActive = false;
         return;
     }
 
@@ -211,13 +255,14 @@ void avviaAggiornamentoSlave(String slaveSn, String filePath) {
     otaSlaveFile.seek(0); // Torna all'inizio del file
 
     otaSlaveTargetSn = slaveSn;
+    otaSlaveBaudAttempt = 0; // Inizia sempre con la velocità alta (115200)
     otaSlaveActive = true;
     otaSlaveState = 1; // Imposta stato iniziale: Handshake
     otaSlaveCurrentOffset = 0;
     otaSlaveRetryCount = 0;
     otaSlaveLastActionTime = 0; // Forza azione immediata
     otaSlaveLastProgressReport = 0;
-    Serial.printf("[RS485-OTA] Avvio procedura per Slave ID %d (SN: %s). File size: %d bytes.\n", otaSlaveTargetId, slaveSn.c_str(), otaSlaveFile.size());
+    Serial.printf("[RS485-OTA] Avvio procedura per Slave ID %d (SN: %s). File size: %d bytes. MD5: %s\n", otaSlaveTargetId, slaveSn.c_str(), otaSlaveFile.size(), otaSlaveMD5.c_str());
     
     // REPORT IMMEDIATO: Sblocca il popup web dallo stato "Pending"
     reportSlaveProgress("Handshake", "Master pronto. Contatto lo slave...");
@@ -231,10 +276,10 @@ void gestisciAggiornamentoSlave() {
     switch (otaSlaveState) {
         case 1: // SEND HANDSHAKE
             if (now - otaSlaveLastActionTime > 1000) {
-                Serial.printf("[RS485-OTA] >> Invio START (Size: %d) a ID %d\n", otaSlaveFile.size(), otaSlaveTargetId);
+                Serial.printf("[RS485-OTA] >> Invio START (Size: %d) a ID %d. Attesa cancellazione flash...\n", otaSlaveFile.size(), otaSlaveTargetId);
                 modoTrasmissione();
-                // Invia Dimensione e MD5
-                Serial1.printf("OTA,START,%d,%s!", otaSlaveFile.size(), otaSlaveMD5.c_str());
+                // Invia ID target, dimensione e MD5
+                Serial1.printf("OTA,START,%d,%d,%s!", otaSlaveTargetId, otaSlaveFile.size(), otaSlaveMD5.c_str());
                 modoRicezione();
                 otaSlaveLastActionTime = now;
                 otaSlaveState = 2; // WAIT HANDSHAKE
@@ -242,35 +287,52 @@ void gestisciAggiornamentoSlave() {
             break;
 
         case 2: // WAIT HANDSHAKE RESPONSE
-            if (now - otaSlaveLastActionTime > OTA_TIMEOUT_MS) {
+            if (now - otaSlaveLastActionTime > OTA_HANDSHAKE_TIMEOUT_MS) {
                 otaSlaveRetryCount++;
-                Serial.printf("[RS485-OTA] Timeout attesa READY (%d/%d)\n", otaSlaveRetryCount, OTA_MAX_RETRIES);
+                Serial.printf("[RS485-OTA] Timeout attesa READY (%d/%d) a %d baud\n", otaSlaveRetryCount, OTA_MAX_RETRIES, (otaSlaveBaudAttempt == 0 ? 115200 : 9600));
                 if (otaSlaveRetryCount >= OTA_MAX_RETRIES) {
-                    Serial.println("[RS485-OTA] ERRORE: Nessuna risposta allo START. Abort.");
-                    otaSlaveActive = false;
-                    reportSlaveProgress("Failed", "Lo slave non risponde al comando di avvio.");
-                    otaSlaveFile.close();
+                    if (otaSlaveBaudAttempt == 0) {
+                        Serial.println("[RS485-OTA] Handshake fallito a 115200 baud. Tento fallback a 9600 baud.");
+                        otaSlaveBaudAttempt = 1;
+                        otaSlaveRetryCount = 0;
+                        otaSlaveState = 1; // Riprova Handshake
+                        
+                        Serial1.end();
+                        Serial1.begin(9600, SERIAL_8N1, PIN_RS485_RX, PIN_RS485_TX);
+                        modoRicezione();
+                        
+                        otaSlaveLastActionTime = 0; // Riprova subito
+                    } else {
+                        Serial.println("[RS485-OTA] ERRORE: Nessuna risposta allo START neanche a 9600 baud. Abort.");
+                        terminaOtaSlave(false, "Lo slave non risponde al comando di avvio (provato 115200 e 9600 baud).");
+                    }
                 } else {
                     otaSlaveState = 1; // Riprova Handshake
-                    otaSlaveLastActionTime = now;
+                    otaSlaveLastActionTime = 0; // Riprova subito
                 }
             }
             if (Serial1.available()) {
                 String resp = Serial1.readStringUntil('!');
                 Serial.println("[RS485-OTA] << RX: " + resp);
-                if (resp.startsWith("OK,OTA,READY")) {
-                    Serial.println("[RS485-OTA] Slave PRONTO. Inizio invio dati...");
+                if (resp.startsWith("OK,OTA,READY," + String(otaSlaveTargetId))) {
+                    Serial.println("[RS485-OTA] Slave PRONTO (Flash cancellata). Inizio invio dati...");
                     reportSlaveProgress("Sending data", "Trasferimento in corso...");
                     otaSlaveState = 3; // SEND CHUNK
                     otaSlaveCurrentOffset = 0;
                     otaSlaveRetryCount = 0;
                     otaSlaveLastActionTime = 0;
                 }
+                // --- GESTIONE FALLIMENTO IMMEDIATO ---
+                // Se lo slave risponde FAIL subito (es. non ha spazio), abortiamo.
+                else if (resp.startsWith("OK,OTA,FAIL," + String(otaSlaveTargetId))) {
+                    Serial.println("[RS485-OTA] ERRORE: Lo slave ha rifiutato lo START (possibile spazio insufficiente o errore flash).");
+                    terminaOtaSlave(false, "Lo slave ha rifiutato l'avvio dell'aggiornamento (spazio insufficiente o errore flash).");
+                }
             }
             break;
 
         case 3: // SEND CHUNK
-             if (now - otaSlaveLastActionTime > 50) { // Piccolo delay per stabilità
+             if (now - otaSlaveLastActionTime > 10) { // Ridotto delay per velocità (era 50)
                 if (otaSlaveCurrentOffset >= otaSlaveFile.size()) {
                     otaSlaveState = 5; // SEND END
                     break;
@@ -297,19 +359,19 @@ void gestisciAggiornamentoSlave() {
                     
                     if (bytesRead == 0) {
                         Serial.println("[RS485-OTA] Errore critico lettura file. Abort.");
-                        otaSlaveActive = false;
-                        reportSlaveProgress("Failed", "Errore lettura file locale.");
-                        otaSlaveFile.close();
-                        return;
+                        terminaOtaSlave(false, "Errore lettura file locale.");
+                        return; // Esce dalla funzione
                     }
                 }
                 // ------------------------------------
 
                 String hexData = bufferToHex(buff, bytesRead);
+                uint8_t checksum = calculateChecksum(hexData);
                 
                 Serial.printf("[RS485-OTA] >> Invio CHUNK Offset %d (Len %d)\n", otaSlaveCurrentOffset, bytesRead);
                 modoTrasmissione();
-                Serial1.printf("OTA,DATA,%d,%s!", otaSlaveCurrentOffset, hexData.c_str());
+                // Nuovo formato: OTA,DATA,ID,OFFSET,HEX,CHECKSUM!
+                Serial1.printf("OTA,DATA,%d,%d,%s,%02X!", otaSlaveTargetId, otaSlaveCurrentOffset, hexData.c_str(), checksum);
                 modoRicezione();
                 
                 otaSlaveLastActionTime = now;
@@ -322,18 +384,16 @@ void gestisciAggiornamentoSlave() {
                 otaSlaveRetryCount++;
                 Serial.printf("[RS485-OTA] Timeout ACK Chunk %d (%d/%d)\n", otaSlaveCurrentOffset, otaSlaveRetryCount, OTA_MAX_RETRIES);
                 if (otaSlaveRetryCount >= OTA_MAX_RETRIES) {
-                    Serial.println("[RS485-OTA] ERRORE: Troppi timeout su chunk. Abort.");
-                    otaSlaveActive = false;
-                    reportSlaveProgress("Failed", "Timeout durante il trasferimento dati.");
-                    otaSlaveFile.close();
+                    Serial.println("[RS485-OTA] ERRORE: Troppi timeout su chunk. Abort.");                    
+                    terminaOtaSlave(false, "Timeout durante il trasferimento dati.");
                 } else {
                     otaSlaveState = 3; // Riprova invio stesso chunk
-                    otaSlaveLastActionTime = now; 
+                    otaSlaveLastActionTime = 0; // Riprova subito
                 }
             }
             if (Serial1.available()) {
                 String resp = Serial1.readStringUntil('!');
-                if (resp.startsWith("OK,OTA,ACK")) {
+                if (resp.startsWith("OK,OTA,ACK," + String(otaSlaveTargetId) + ",")) {
                     // Estrae l'offset confermato per sicurezza
                     int lastComma = resp.lastIndexOf(',');
                     int ackOffset = resp.substring(lastComma+1).toInt();
@@ -359,9 +419,9 @@ void gestisciAggiornamentoSlave() {
             break;
 
         case 5: // SEND END
-            Serial.println("[RS485-OTA] >> Invio END");
+            Serial.println("[RS485-OTA] >> Invio END. Attesa verifica MD5 slave...");
             modoTrasmissione();
-            Serial1.print("OTA,END!");
+            Serial1.printf("OTA,END,%d!", otaSlaveTargetId);
             modoRicezione();
             reportSlaveProgress("Finalizing", "Verifica integrità e scrittura...");
             otaSlaveLastActionTime = now;
@@ -370,13 +430,11 @@ void gestisciAggiornamentoSlave() {
             break;
 
         case 6: // WAIT SUCCESS
-             if (now - otaSlaveLastActionTime > 10000) { // Timeout lungo per scrittura flash slave
+             if (now - otaSlaveLastActionTime > 15000) { // Timeout lungo per verifica finale e scrittura
                 otaSlaveRetryCount++;
                 if (otaSlaveRetryCount >= 2) {
                      Serial.println("[RS485-OTA] ERRORE: Nessuna conferma finale.");
-                     otaSlaveActive = false;
-                     reportSlaveProgress("Failed", "Lo slave non ha dato conferma finale.");
-                     otaSlaveFile.close();
+                     terminaOtaSlave(false, "Lo slave non ha dato conferma finale.");
                 } else {
                     otaSlaveState = 5; // Riprova invio END
                     otaSlaveLastActionTime = now;
@@ -385,16 +443,17 @@ void gestisciAggiornamentoSlave() {
              if (Serial1.available()) {
                 String resp = Serial1.readStringUntil('!');
                 Serial.println("[RS485-OTA] << RX: " + resp);
-                if (resp.startsWith("OK,OTA,SUCCESS")) {
-                    Serial.println("[RS485-OTA] AGGIORNAMENTO SLAVE COMPLETATO CON SUCCESSO!");
-                    otaSlaveActive = false;
-                    reportSlaveProgress("Success", "Aggiornamento completato.");
-                    otaSlaveFile.close();
-                } else if (resp.startsWith("OK,OTA,FAIL")) {
-                    Serial.println("[RS485-OTA] ERRORE: Lo slave ha riportato fallimento.");
-                    otaSlaveActive = false;
-                    reportSlaveProgress("Failed", "Lo slave ha riportato un fallimento (MD5 errato o errore scrittura).");
-                    otaSlaveFile.close();
+                if (resp.startsWith("OK,OTA,SUCCESS," + String(otaSlaveTargetId))) {
+                    Serial.println("[RS485-OTA] AGGIORNAMENTO SLAVE COMPLETATO CON SUCCESSO!");                    
+                    terminaOtaSlave(true, "Aggiornamento completato.");
+                } else if (resp.startsWith("OK,OTA,FAIL," + String(otaSlaveTargetId))) {
+                    // Gestione esplicita del FAIL
+                    Serial.println("[RS485-OTA] ERRORE: Lo slave ha riportato fallimento (MD5/Write).");
+                    terminaOtaSlave(false, "Lo slave ha riportato un fallimento (MD5 errato o errore scrittura).");
+                } else if (resp.indexOf("FAIL") != -1) {
+                    // Gestione FAIL anche se la stringa è sporca (es. OK,OTA,FAI;␕FAIL)
+                    Serial.println("[RS485-OTA] ERRORE: Rilevato FAIL in risposta corrotta.");
+                    terminaOtaSlave(false, "Risposta slave corrotta (FAIL rilevato).");
                 }
              }
              break;
@@ -429,6 +488,7 @@ void RS485_Master_Loop() {
             // ...interroga ogni slave che è risultato attivo durante la scansione.
             for (int i = 1; i <= 100; i++) {
                 if (listaPerifericheAttive[i]) {
+                    while (Serial1.available()) Serial1.read(); // Evita contaminazione tra richieste
                     modoTrasmissione(); Serial1.printf("?%d!", i); modoRicezione();
                     unsigned long st = millis();
                     // Aspetta una risposta per 100ms.
@@ -490,6 +550,10 @@ void scansionaSlaveStandalone() {
 
     // Scansiona fino a 30 per rilevare eventuali schede in eccesso
     for (int i = 1; i <= 30; i++) {
+        while (Serial1.available()) Serial1.read(); // Pulisce eventuali byte residui/sporchi
+        if (debugViewData) {
+            Serial.printf("[SCAN-TX] -> ?%d!\n", i);
+        }
         modoTrasmissione();
         Serial1.printf("?%d!", i);
         modoRicezione();
@@ -498,6 +562,9 @@ void scansionaSlaveStandalone() {
         while (millis() - startWait < 50) {
             if (Serial1.available()) {
                 String resp = Serial1.readStringUntil('!');
+                if (debugViewData) {
+                    Serial.printf("[SCAN-RX] <- %s!\n", resp.c_str());
+                }
                 // Protocollo atteso Relay: OK,RELAY,MODE,STATE,... (es. OK,RELAY,2,0!)
                 
                 if (resp.startsWith("OK")) {
@@ -578,4 +645,37 @@ void RS485_Master_Standalone_Loop() {
             if (pinLed != -1) digitalWrite(pinLed, LOW);
         }
     }
+}
+
+// Report progresso OTA con seriale slave esplicito (utile prima di avviare la state machine OTA)
+void reportSlaveProgressFor(String slaveSn, String status, String message) {
+    if (WiFi.status() != WL_CONNECTED || String(config.apiUrl).length() < 5) return;
+
+    WiFiClientSecure client;
+    client.setInsecure();
+    HTTPClient http;
+
+    String reportUrl = String(config.apiUrl);
+    int lastSlash = reportUrl.lastIndexOf('/');
+    if (lastSlash != -1) {
+        reportUrl = reportUrl.substring(0, lastSlash + 1) + "api_slave_ota_report.php";
+    }
+
+    http.begin(client, reportUrl);
+    http.addHeader("Content-Type", "application/json");
+
+    message.replace("\"", "'");
+
+    String jsonPayload = "{";
+    jsonPayload += "\"api_key\":\"" + String(config.apiKey) + "\",";
+    jsonPayload += "\"slave_sn\":\"" + slaveSn + "\",";
+    jsonPayload += "\"status\":\"" + status + "\",";
+    jsonPayload += "\"message\":\"" + message + "\"";
+    jsonPayload += "}";
+
+    if (debugViewData) {
+        Serial.println("[RS485-OTA] >> Report(" + slaveSn + "): " + status + " - " + message);
+    }
+    http.POST(jsonPayload);
+    http.end();
 }

@@ -32,14 +32,6 @@ void MembraneKeyboard::begin() {
 }
 
 void MembraneKeyboard::update() {
-    // Aggiornamento ciclico dei LED (gestione lampeggi)
-    _ledWifi.update();
-    _ledSens1.update();
-    _ledSens2.update();
-    _ledAux1.update();
-    _ledSafety.update();
-    _ledAux2.update();
-
     // --- LOGICA PIN 1: WIFI ---
     if (WiFi.status() == WL_CONNECTED) {
         _ledWifi.setState(LED_SOLID); // Wifi Connesso
@@ -142,4 +134,12 @@ void MembraneKeyboard::update() {
     // Pin 1 (BAL4), Pin 5 (ExpLifeTime): Futura Utilizzazione (Spenti)
     _ledAux1.setState(LED_OFF);
     _ledAux2.setState(LED_OFF);
+
+    // Aggiornamento ciclico dei LED (gestione lampeggi)
+    _ledWifi.update();
+    _ledSens1.update();
+    _ledSens2.update();
+    _ledAux1.update();
+    _ledSafety.update();
+    _ledAux2.update();
 }

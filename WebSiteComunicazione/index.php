@@ -373,18 +373,35 @@ $latestFwSlaveP = $stmtFwS->fetchColumn();
 let pollInterval;
 let currentMasterId;
 let targetVersion;
+let updateType = ''; // 'master' o 'slave'
+let currentSlaveSn = '';
+
+function resetUpdateModalUi(title, text) {
+    document.getElementById('updateStatusTitle').innerText = title;
+    document.getElementById('updateStatusText').innerText = text;
+    document.getElementById('updateProgressBar').style.width = "10%";
+    document.getElementById('updateProgressBar').className = "progress-bar progress-bar-striped progress-bar-animated";
+    document.getElementById('updateErrorMsg').classList.add('d-none');
+    document.getElementById('updateErrorMsg').innerText = '';
+    document.getElementById('iconStep1').className = "fas fa-hourglass-start fa-2x text-primary";
+    document.getElementById('iconStep2').className = "fas fa-cloud-download-alt fa-2x text-muted";
+    document.getElementById('iconStep3').className = "fas fa-check-circle fa-2x text-muted";
+    document.getElementById('btnCloseModal').className = "btn btn-secondary disabled";
+}
 
 function startUpdate(masterId, version) {
-    if(!confirm("Avviare l'aggiornamento firmware alla versione " + version + "?\nIl dispositivo si riavvierà.")) return;
+    if(!confirm("Avviare l'aggiornamento firmware alla versione " + version + "?\nIl dispositivo si riavviera'.")) return;
 
+    clearInterval(pollInterval);
     currentMasterId = masterId;
     targetVersion = version;
-    
-    // Mostra Modal
+    updateType = 'master';
+    currentSlaveSn = '';
+
     const modal = new bootstrap.Modal(document.getElementById('updateModal'));
+    resetUpdateModalUi("Richiesta aggiornamento Master", "Invio comando al dispositivo...");
     modal.show();
 
-    // Invia comando
     fetch('api_command.php', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -393,125 +410,139 @@ function startUpdate(masterId, version) {
     .then(res => res.json())
     .then(data => {
         if(data.status === 'ok') {
-            document.getElementById('updateProgressBar').style.width = "10%";
-            pollInterval = setInterval(checkStatus, 2000); // Controlla ogni 2 secondi
+            pollInterval = setInterval(checkStatus, 2000);
         } else {
             showError("Errore invio comando: " + data.message);
         }
-    });
+    })
+    .catch(() => showError("Errore di rete durante invio comando."));
 }
 
 function startSlaveUpdate(masterId, slaveSn, version) {
-    if(!confirm("Avviare l'aggiornamento per lo SLAVE " + slaveSn + " alla versione " + version + "?\nL'operazione verrà gestita dal Master associato.")) return;
+    if(!confirm("Avviare l'aggiornamento per lo SLAVE " + slaveSn + " alla versione " + version + "?\nL'operazione verra' gestita dal Master associato.")) return;
 
+    clearInterval(pollInterval);
     currentMasterId = masterId;
-    targetVersion = version; // Anche se è la versione dello slave, la usiamo per il check
+    targetVersion = version;
+    updateType = 'slave';
+    currentSlaveSn = slaveSn;
 
-    // Mostra Modal (usiamo lo stesso del master)
     const modal = new bootstrap.Modal(document.getElementById('updateModal'));
+    resetUpdateModalUi("Aggiornamento Slave " + slaveSn, "Invio comando al master...");
     modal.show();
 
-    // Invia comando specifico per lo slave
     fetch('api_command.php', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({ action: 'request_slave_update', master_id: masterId, slave_sn: slaveSn })
-    }).then(() => {
-        pollInterval = setInterval(checkStatus, 3000); // Avvia il polling
-    });
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.status === 'ok') {
+            pollInterval = setInterval(checkStatus, 3000);
+        } else {
+            showError("Errore invio comando slave: " + (data.message || "Errore sconosciuto"));
+        }
+    })
+    .catch(() => showError("Errore di rete durante invio comando slave."));
 }
 
 function checkStatus() {
     fetch('api_check_status.php?master_id=' + currentMasterId)
     .then(res => res.json())
     .then(data => {
-        const status = data.ota_status;
-        const ver = data.fw_version;
+        if (updateType === 'slave') {
+            const slaveStatus = data.slave_ota_status;
+            const slaveMsg = data.slave_ota_message || '';
+            const slaveSnForTitle = currentSlaveSn || data.slave_update_request_sn || 'N/D';
 
-        // Priorità allo stato dello slave se presente
-        const slaveStatus = data.slave_ota_status;
-        const targetSlaveSn = data.slave_update_request_sn;
-
-        // Se c'è una richiesta di aggiornamento slave attiva, gestiscila con priorità
-        if (targetSlaveSn) {
-            document.getElementById('updateStatusTitle').innerText = "Aggiornamento Slave " + targetSlaveSn;
+            document.getElementById('updateStatusTitle').innerText = "Aggiornamento Slave " + slaveSnForTitle;
             let progress = 10;
             let statusText = "Richiesta inviata...";
 
             if (slaveStatus === 'Pending') {
                 progress = 25;
                 statusText = "In attesa che il Master riceva il comando...";
-            } else if (slaveStatus === 'Handshake') {
+                document.getElementById('iconStep1').className = "fas fa-hourglass-start fa-2x text-primary";
+            } else if (slaveStatus === 'InProgress') {
+                progress = 30;
+                statusText = "Richiesta presa in carico dal Master...";
+            } else if (slaveStatus === 'Downloading') {
+                progress = 35;
+                statusText = slaveMsg || "Download firmware sulla Master in corso...";
+                document.getElementById('iconStep2').className = "fas fa-cloud-download-alt fa-2x text-primary";
+            } else if (slaveStatus === 'Downloaded') {
                 progress = 40;
+                statusText = slaveMsg || "Download completato. Avvio trasferimento RS485...";
+                document.getElementById('iconStep2').className = "fas fa-cloud-download-alt fa-2x text-primary";
+            } else if (slaveStatus === 'Handshake') {
+                progress = 45;
                 statusText = "Il Master sta contattando lo Slave...";
                 document.getElementById('iconStep2').className = "fas fa-cloud-download-alt fa-2x text-primary";
             } else if (slaveStatus === 'Sending data') {
-                progress = 60;
+                progress = 50;
                 statusText = "Trasferimento del firmware in corso...";
                 document.getElementById('iconStep2').className = "fas fa-cloud-download-alt fa-2x text-primary";
             } else if (slaveStatus === 'Uploading') {
-                // Il messaggio contiene la percentuale (es. "45")
-                let pct = parseInt(data.slave_ota_message);
+                let pct = parseInt(slaveMsg);
                 if (isNaN(pct)) pct = 50;
-                progress = pct;
+                progress = 50 + (pct / 2);
                 statusText = "Trasferimento dati: " + pct + "%";
                 document.getElementById('iconStep2').className = "fas fa-cloud-download-alt fa-2x text-primary";
             } else if (slaveStatus === 'Finalizing') {
-                progress = 85;
+                progress = 95;
                 statusText = "Finalizzazione e riavvio dello Slave...";
             } else if (slaveStatus === 'Success') {
-                // La gestione del successo la facciamo fuori, qui solo il progresso
-            } else if (slaveStatus === 'Failed') {
-                // Se fallisce, mostriamo l'errore e interrompiamo il polling
                 clearInterval(pollInterval);
-                showError("Aggiornamento Slave Fallito: " + data.slave_ota_message);
+                document.getElementById('updateStatusTitle').innerText = "Aggiornamento Slave Completato!";
+                document.getElementById('updateStatusText').innerText = slaveMsg || ("Lo slave " + slaveSnForTitle + " e' stato aggiornato.");
+                document.getElementById('updateProgressBar').style.width = "100%";
+                document.getElementById('updateProgressBar').className = "progress-bar bg-success";
+                document.getElementById('iconStep2').className = "fas fa-cloud-download-alt fa-2x text-success";
+                document.getElementById('iconStep3').className = "fas fa-check-circle fa-2x text-success";
+                document.getElementById('btnCloseModal').classList.remove('disabled');
+                document.getElementById('btnCloseModal').className = "btn btn-success";
                 return;
+            } else if (slaveStatus === 'Failed') {
+                showError("Aggiornamento Slave Fallito: " + slaveMsg);
+                return;
+            } else if (!slaveStatus) {
+                statusText = "In attesa dei primi aggiornamenti di stato...";
             }
             document.getElementById('updateStatusText').innerText = statusText;
             document.getElementById('updateProgressBar').style.width = progress + "%";
-        } 
-        // Altrimenti, gestisci l'aggiornamento del Master
-        else if (status === 'Pending') {
-            document.getElementById('updateStatusTitle').innerText = "In Attesa del Dispositivo";
-            document.getElementById('updateStatusText').innerText = "Il dispositivo riceverà il comando al prossimo controllo (max 2 min)...";
-            document.getElementById('updateProgressBar').style.width = "30%";
-        } else if (status === 'InProgress') {
-            document.getElementById('updateStatusTitle').innerText = "Aggiornamento in Corso";
-            document.getElementById('updateStatusText').innerText = "Il dispositivo sta scaricando e installando il firmware...";
-            document.getElementById('updateProgressBar').style.width = "70%";
-            document.getElementById('iconStep2').className = "fas fa-cloud-download-alt fa-2x text-primary";
-        }
 
-        // Controllo Successo Master (se non c'è una richiesta slave attiva)
-        if (!targetSlaveSn && ver === targetVersion) {
-            clearInterval(pollInterval);
-            document.getElementById('updateStatusTitle').innerText = "Aggiornamento Completato!";
-            document.getElementById('updateStatusText').innerText = "Il dispositivo è ora aggiornato alla v" + ver;
-            document.getElementById('updateProgressBar').style.width = "100%";
-            document.getElementById('updateProgressBar').className = "progress-bar bg-success";
-            document.getElementById('iconStep2').className = "fas fa-cloud-download-alt fa-2x text-success";
-            document.getElementById('iconStep3').className = "fas fa-check-circle fa-2x text-success";
-            document.getElementById('btnCloseModal').classList.remove('disabled');
-            document.getElementById('btnCloseModal').className = "btn btn-success";
-        }
+        } else if (updateType === 'master') {
+            const masterStatus = data.ota_status;
+            const masterMsg = data.ota_message;
+            const masterVer = data.fw_version;
 
-        // Controllo Successo Slave
-        if (targetSlaveSn && slaveStatus === 'Success') {
-            clearInterval(pollInterval);
-            document.getElementById('updateStatusTitle').innerText = "Aggiornamento Slave Completato!";
-            document.getElementById('updateStatusText').innerText = "Lo slave " + targetSlaveSn + " è stato aggiornato.";
-            document.getElementById('updateProgressBar').style.width = "100%";
-            document.getElementById('updateProgressBar').className = "progress-bar bg-success";
-            document.getElementById('iconStep2').className = "fas fa-cloud-download-alt fa-2x text-success";
-            document.getElementById('iconStep3').className = "fas fa-check-circle fa-2x text-success";
-            document.getElementById('btnCloseModal').classList.remove('disabled');
-            document.getElementById('btnCloseModal').className = "btn btn-success";
+            if (masterStatus === 'Pending') {
+                document.getElementById('updateStatusTitle').innerText = "In Attesa del Dispositivo";
+                document.getElementById('updateStatusText').innerText = "Il dispositivo ricevera' il comando al prossimo controllo (max 2 min)...";
+                document.getElementById('updateProgressBar').style.width = "30%";
+            } else if (masterStatus === 'InProgress') {
+                document.getElementById('updateStatusTitle').innerText = "Aggiornamento in Corso";
+                document.getElementById('updateStatusText').innerText = "Il dispositivo sta scaricando e installando il firmware...";
+                document.getElementById('updateProgressBar').style.width = "70%";
+                document.getElementById('iconStep2').className = "fas fa-cloud-download-alt fa-2x text-primary";
+            } else if (masterVer === targetVersion) {
+                clearInterval(pollInterval);
+                document.getElementById('updateStatusTitle').innerText = "Aggiornamento Completato!";
+                document.getElementById('updateStatusText').innerText = "Il dispositivo e' ora aggiornato alla v" + masterVer;
+                document.getElementById('updateProgressBar').style.width = "100%";
+                document.getElementById('updateProgressBar').className = "progress-bar bg-success";
+                document.getElementById('iconStep2').className = "fas fa-cloud-download-alt fa-2x text-success";
+                document.getElementById('iconStep3').className = "fas fa-check-circle fa-2x text-success";
+                document.getElementById('btnCloseModal').classList.remove('disabled');
+                document.getElementById('btnCloseModal').className = "btn btn-success";
+            } else if (masterStatus === 'Failed') {
+                showError("Aggiornamento Fallito: " + (masterMsg || "Errore non specificato."));
+            }
         }
-
-        // Controllo Fallimento Master
-        if (!targetSlaveSn && status === 'Failed') {
-            showError("Aggiornamento Fallito: " + (data.ota_message || data.slave_ota_message));
-        }
+    })
+    .catch(() => {
+        showError("Errore di comunicazione durante il controllo stato.");
     });
 }
 

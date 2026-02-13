@@ -24,6 +24,7 @@ extern void modoRicezione();
 
 // Funzione definita in RS485_Master.cpp per avviare la procedura di aggiornamento slave
 extern void avviaAggiornamentoSlave(String slaveSn, String filePath);
+extern void reportSlaveProgressFor(String slaveSn, String status, String message);
 
 // --- FUNZIONI DI SUPPORTO INTERNE ---
 
@@ -50,6 +51,30 @@ void updateProgressCallback(int cur, int total) {
         // Passa al prossimo LED (loop circolare 0->1->2->3->0...)
         ledIndex = (ledIndex + 1) % numLeds;
     }
+}
+
+// Funzione per convertire un link di Google Drive in un link per il download diretto.
+// Gestisce formati come "/d/FILE_ID/" e "?id=FILE_ID".
+String convertGDriveUrl(String url) {
+    int id_start = url.indexOf("id=");
+    if (id_start != -1) {
+        id_start += 3; // Salta "id="
+        int id_end = url.indexOf('&', id_start);
+        String file_id = (id_end != -1) ? url.substring(id_start, id_end) : url.substring(id_start);
+        return "https://drive.google.com/uc?export=download&id=" + file_id;
+    }
+    
+    id_start = url.indexOf("/d/");
+    if (id_start != -1) {
+        id_start += 3; // Salta "/d/"
+        int id_end = url.indexOf('/', id_start);
+        if (id_end != -1) {
+            String file_id = url.substring(id_start, id_end);
+            return "https://drive.google.com/uc?export=download&id=" + file_id;
+        }
+    }
+
+    return url; // Ritorna l'URL originale se non trova un formato noto
 }
 
 // Funzione per riportare al server il fallimento di un aggiornamento
@@ -187,25 +212,32 @@ void execHttpUpdate(String url, String md5) {
 }
 
 // Funzione per scaricare il firmware dello Slave e salvarlo in SPIFFS
-bool downloadSlaveFirmware(String url) {
+bool downloadSlaveFirmware(String url, String outputFilename) {
     if (!SPIFFS.begin(true)) {
         Serial.println("[OTA-SLAVE] Errore critico: Impossibile montare SPIFFS.");
         return false;
     }
 
-    Serial.println("[OTA-SLAVE] Avvio download firmware da: " + url);
+    // Converte l'URL di Google Drive in un link diretto, se necessario
+    String directUrl = convertGDriveUrl(url);
+
+    Serial.println("[OTA-SLAVE] Avvio download firmware da: " + directUrl);
 
     WiFiClientSecure client;
     client.setInsecure();
     HTTPClient http;
     http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+    // Imposta un timeout per la connessione e la risposta per evitare blocchi indefiniti
+    http.setTimeout(20000); // 20 secondi
 
-    if (http.begin(client, url)) {
+    esp_task_wdt_reset(); // Resetta il watchdog prima di iniziare la connessione
+    if (http.begin(client, directUrl)) {
+        esp_task_wdt_reset(); // Resetta dopo il begin, prima del GET che può essere bloccante
         int httpCode = http.GET();
         if (httpCode == HTTP_CODE_OK) {
-            File f = SPIFFS.open("/slave_update.bin", "w");
+            File f = SPIFFS.open(outputFilename, "w");
             if (!f) {
-                Serial.println("[OTA-SLAVE] Errore apertura file per scrittura.");
+                Serial.println("[OTA-SLAVE] Errore apertura file " + outputFilename + " per scrittura.");
                 http.end();
                 return false;
             }
@@ -220,14 +252,14 @@ bool downloadSlaveFirmware(String url) {
                 if (size) {
                     int c = stream->readBytes(buff, ((size > sizeof(buff)) ? sizeof(buff) : size));
                     f.write(buff, c);
-                    if (len > 0) len -= c;
-                    esp_task_wdt_reset(); // Pet the watchdog during download
+                    if (len > 0) { len -= c; }
+                    esp_task_wdt_reset(); // "Accarezza" il watchdog durante il download
                 }
                 delay(1);
             }
             f.close();
             http.end();
-            Serial.println("[OTA-SLAVE] Download completato. File salvato in /slave_update.bin");
+            Serial.println("[OTA-SLAVE] Download completato. File salvato in " + outputFilename);
             return true;
         } else {
             Serial.printf("[OTA-SLAVE] Errore HTTP Download: %d\n", httpCode);
@@ -318,8 +350,13 @@ void checkForFirmwareUpdates() {
                 int snEnd = response.indexOf("\"", snStart);
                 String targetSn = response.substring(snStart, snEnd);
 
+                reportSlaveProgressFor(targetSn, "Pending", "Richiesta OTA ricevuta dalla piattaforma.");
+                reportSlaveProgressFor(targetSn, "Downloading", "Download firmware in corso sulla master...");
                 if (downloadSlaveFirmware(fwUrl)) {
+                    reportSlaveProgressFor(targetSn, "Downloaded", "Firmware scaricato. Avvio trasferimento RS485...");
                     avviaAggiornamentoSlave(targetSn, "/slave_update.bin");
+                } else {
+                    reportSlaveProgressFor(targetSn, "Failed", "Download firmware fallito sulla master.");
                 }
             } else {
                 Serial.println("[OTA] ERRORE CRITICO: Ricevuto comando di aggiornamento SLAVE con firmware per '" + deviceType + "'. Aggiornamento annullato.");

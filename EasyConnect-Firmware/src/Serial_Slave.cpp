@@ -1,6 +1,7 @@
 #include "Serial_Manager.h"
 #include "GestioneMemoria.h"
 #include <Preferences.h>
+#include <Update.h> // Per il test OTA
 
 // La parola chiave 'extern' indica al compilatore che queste variabili sono definite
 // in un altro file (in questo caso, in 'main_slave.cpp').
@@ -46,6 +47,7 @@ void Serial_Slave_Menu() {
                 Serial.println("VIEWDATA      : Abilita visualizzazione dati");
                 Serial.println("STOPDATA      : Disabilita visualizzazione dati");
                 Serial.println("CLEARMEM      : Reset totale della memoria");
+                Serial.println("TESTOTA       : Esegue un test minimo di Update.begin()");
                 Serial.println("===========================================\n");
             } 
             else if (cmdUpper == "INFO") {
@@ -103,6 +105,18 @@ void Serial_Slave_Menu() {
             else if (cmdUpper == "CLEARMEM") {
                 memoria.clear(); Serial.println("MEMORIA RESETTATA. Riavvio...");
                 delay(1000); ESP.restart();
+            }
+            // Comando di test per isolare il problema di Update.begin()
+            else if (cmdUpper == "TESTOTA") {
+                Serial.println("[TEST] Avvio test di Update.begin()...");
+                size_t testSize = 450000; // Una dimensione realistica
+                Serial.printf("[TEST] Tentativo di avviare l'aggiornamento con una dimensione di %u bytes.\n", testSize);
+                if (!Update.begin(testSize)) {
+                    Serial.printf("[TEST] RISULTATO: FALLITO. Errore: %s\n", Update.errorString());
+                } else {
+                    Serial.println("[TEST] RISULTATO: SUCCESSO! Update.begin() ha funzionato.");
+                    Update.abort(); // Annulliamo subito l'aggiornamento, era solo un test.
+                }
             }
         } else { if (c != '\r') inputBuffer += c; } // Se non è un "a capo", aggiungi il carattere al buffer. Ignora '\r'.
     }

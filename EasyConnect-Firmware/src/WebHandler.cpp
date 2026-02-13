@@ -26,6 +26,20 @@ extern void setupCalibration();
 unsigned long lastWifiCheck = 0;
 bool apEnabled = true;
 int wifiRetryCount = 0; // Contatore tentativi riconnessione WiFi
+bool wifiForceOff = false; // Modalita' laboratorio: WiFi/AP forzati OFF
+bool mdnsStarted = false;
+
+static void ensureMdnsService() {
+    if (!mdnsStarted) {
+        if (MDNS.begin("antraluxrewamping")) {
+            MDNS.addService("http", "tcp", 80);
+            mdnsStarted = true;
+            Serial.println("[WIFI] mDNS attivo: http://antraluxrewamping.local");
+        } else {
+            Serial.println("[WIFI] Errore avvio mDNS.");
+        }
+    }
+}
 
 // Oggetti Globali
 WebServer server(80);
@@ -456,9 +470,7 @@ void setupMasterWiFi() {
     Serial.println("[WIFI] Access Point Aperto: AntraluxRewamping");
 
     // Avvio mDNS
-    if (MDNS.begin("antraluxrewamping")) {
-        Serial.println("[WIFI] mDNS avviato: http://antraluxrewamping.local");
-    }
+    ensureMdnsService();
 
     // Gestione Favicon per evitare errori nel log
     server.on("/favicon.ico", []() { server.send(204); });
@@ -488,7 +500,67 @@ void setupMasterWiFi() {
     server.begin();
 }
 
+void forceWifiOffForLab() {
+    wifiForceOff = true;
+    wifiRetryCount = 0;
+    statoInternet = 0;
+
+    WiFi.disconnect(true, true);
+    WiFi.softAPdisconnect(true);
+    WiFi.mode(WIFI_OFF);
+    if (mdnsStarted) {
+        MDNS.end();
+        mdnsStarted = false;
+    }
+
+    apEnabled = false;
+    Serial.println("[WIFI] Modalita' LAB: WiFi e AP forzati OFF.");
+}
+
+void forceWifiOnForLab() {
+    wifiForceOff = false;
+    wifiRetryCount = 0;
+    statoInternet = 0;
+    lastWifiCheck = 0; // forza ciclo gestione immediato
+
+    memoria.begin("easy", true);
+    String ssid = memoria.getString("ssid", "");
+    String pass = memoria.getString("pass", "");
+    bool staticIp = memoria.getBool("static_ip", false);
+    String ipStr = memoria.isKey("ip") ? memoria.getString("ip") : "";
+    String subStr = memoria.isKey("sub") ? memoria.getString("sub") : "";
+    String gwStr = memoria.isKey("gw") ? memoria.getString("gw") : "";
+    memoria.end();
+
+    WiFi.mode(WIFI_STA);
+    if (staticIp && ipStr.length() > 0) {
+        IPAddress ip, sub, gw;
+        if (ip.fromString(ipStr) && sub.fromString(subStr) && gw.fromString(gwStr)) {
+            WiFi.config(ip, gw, sub);
+            Serial.println("[WIFI] Configurazione IP statico applicata.");
+        }
+    }
+
+    if (ssid.length() > 0) {
+        WiFi.begin(ssid.c_str(), pass.c_str());
+        Serial.printf("[WIFI] Riattivazione WiFi verso SSID: %s\n", ssid.c_str());
+    } else {
+        Serial.println("[WIFI] Nessun SSID salvato: avvio solo AP locale.");
+    }
+
+    WiFi.softAP("AntraluxRewamping", NULL);
+    dnsServer.start(53, "*", WiFi.softAPIP());
+    apEnabled = true;
+    ensureMdnsService();
+    Serial.println("[WIFI] AP locale attivo.");
+}
+
 void gestisciWebEWiFi() {
+    if (wifiForceOff) {
+        statoInternet = 0;
+        return;
+    }
+
     dnsServer.processNextRequest();
     server.handleClient();
 
@@ -504,6 +576,7 @@ void gestisciWebEWiFi() {
         if (WiFi.status() == WL_CONNECTED) {
             statoInternet = 2; // Connesso
             wifiRetryCount = 0; // Resetta il contatore se la connessione ha successo
+            ensureMdnsService();
 
             // Se connesso, AP è attivo e NON deve essere sempre attivo -> Spegni AP
             if (!apAlwaysOn && apEnabled) {
@@ -524,7 +597,13 @@ void gestisciWebEWiFi() {
             if (!apAlwaysOn) {
                 // Se non sta già tentando di riconnettersi, avvia il processo
                 if (WiFi.getMode() != WIFI_STA) {
-                    WiFi.begin(config.wifiSSID, config.wifiPASS);
+                    memoria.begin("easy", true);
+                    String ssid = memoria.getString("ssid", "");
+                    String pass = memoria.getString("pass", "");
+                    memoria.end();
+                    if (ssid.length() > 0) {
+                        WiFi.begin(ssid.c_str(), pass.c_str());
+                    }
                 }
                 
                 wifiRetryCount++; // Incrementa il contatore dei tentativi

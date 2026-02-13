@@ -38,7 +38,7 @@ unsigned long timerScansione = 0;           // Timer per la scansione oraria del
 unsigned long timerStampa = 0;              // Timer per il polling (interrogazione) periodico degli slave.
 bool qualchePerifericaTrovata = false;      // Flag per sapere se almeno uno slave è stato trovato.
 bool debugViewData = false;                 // Flag per abilitare/disabilitare i log di debug RS485.
-bool debugViewApi = true;                  // Flag per abilitare/disabilitare i log di debug per l'invio dati al server.
+bool debugViewApi = false;                 // Flag per abilitare/disabilitare i log di debug per l'invio dati al server.
 bool scansioneInCorso = false;              // Flag che indica se è in corso una scansione RS485.
 int statoInternet = 0;                      // Stato della connessione a Internet (non usato attivamente al momento).
 float currentDeltaP = 0.0;                  // Valore corrente del Delta P calcolato.
@@ -52,13 +52,16 @@ extern void scansionaSlave();
 extern void scansionaSlaveStandalone();
 extern void RS485_Master_Standalone_Loop();
 extern bool otaSlaveActive; // Definito in RS485_Master.cpp
+bool manualOtaActive = false; // NUOVO: Flag per la modalità OTA manuale da seriale
 
 // Funzione di setup, eseguita una sola volta all'avvio della scheda.
 void setup() {
     // Inizializzazione Seriale anticipata con delay per USB CDC (ESP32-C3)
     // Questo è fondamentale per vedere i log all'avvio su USB nativa
     Serial.begin(115200);
-    Serial.setTxTimeoutMs(0); // Evita blocchi se il terminale non è aperto
+    #if defined(ARDUINO_USB_CDC_ON_BOOT) && (ARDUINO_USB_CDC_ON_BOOT == 1)
+    Serial.setTxTimeoutMs(0); // Evita blocchi se il terminale non è aperto (solo USB CDC)
+    #endif
     delay(1500); // Attesa fisiologica per l'enumerazione USB
     Serial.println("\n\n!!! CPU BOOT SUCCESSFUL !!!"); // Feedback immediato avvio
 
@@ -75,7 +78,7 @@ void setup() {
     String k = memoria.isKey("apiKey") ? memoria.getString("apiKey") : "";
     k.toCharArray(config.apiKey, 65);
     String u = memoria.isKey("api_url") ? memoria.getString("api_url") : "";
-    u.toCharArray(config.apiUrl, 250);
+    u.toCharArray(config.apiUrl, 128);
     String cu = memoria.isKey("custApiUrl") ? memoria.getString("custApiUrl") : "";
     cu.toCharArray(config.customerApiUrl, 128);
     String ck = memoria.isKey("custApiKey") ? memoria.getString("custApiKey") : "";
@@ -117,7 +120,9 @@ void setup() {
     }
 
     // Inizializza la comunicazione seriale per la RS485.
-    Serial1.begin(9600, SERIAL_8N1, PIN_RS485_RX, PIN_RS485_TX);
+    Serial1.setRxBufferSize(2048); // Aumenta buffer ricezione per pacchetti OTA grandi
+    Serial1.begin(115200, SERIAL_8N1, PIN_RS485_RX, PIN_RS485_TX);
+    Serial1.setTimeout(30); // Evita blocchi lunghi su frame incompleti/rumorosi
     pinMode(PIN_RS485_DIR, OUTPUT);
     modoRicezione();
 
@@ -187,33 +192,35 @@ void loop() {
         RS485_Master_Standalone_Loop();
         // In questa modalità i LED della tastiera sono gestiti direttamente dal loop RS485
     } else {
-        // --- LOOP MODALITA' REWAMPING ---
-        handleOTA(); // Gestione richieste OTA locali (WiFi)
+        // --- LOOP MODALITA' REWAMPING (Default) ---
+        handleOTA();        // Gestione OTA locale (da IDE)
         gestisciWebEWiFi();
+
+        // La logica di rete (polling, invio dati, check update) viene sospesa se l'OTA manuale è attivo
+        if (!manualOtaActive) {
+            RS485_Master_Loop(); // Contiene sia il polling che la macchina a stati dell'OTA automatico
+
+            unsigned long ora = millis();
+            // Sospendi le operazioni cloud se l'OTA automatico per lo slave è in corso
+            if (!otaSlaveActive) {
+                // Invio dati al server (ogni 60 secondi)
+                if (ora - timerRemoteSync >= 60000) {
+                    sendDataToRemoteServer();
+                    timerRemoteSync = ora;
+                }
+                // Controllo aggiornamenti periodico (ogni 2 minuti per reattività al pulsante web)
+                if ((ora - timerUpdateCheck >= 120000) || (timerUpdateCheck == 0 && WiFi.status() == WL_CONNECTED)) { 
+                    checkForFirmwareUpdates();
+                    timerUpdateCheck = ora;
+                }
+            }
+        }
+        
+        // Logica LED e calibrazione sempre attive
         greenLed.update();
         redLed.update();
         gestisciLedMaster();
         membraneKey.update(); // Aggiorna logica LED tastiera
-
         calibrationLoop(); // Gestione campionamento calibrazione
-        
-        RS485_Master_Loop();
-
-        unsigned long ora = millis();
-
-        // Sospendi le operazioni di rete se è in corso un aggiornamento slave
-        if (!otaSlaveActive) {
-            // Invio dati al server (ogni 60 secondi)
-            if (ora - timerRemoteSync >= 60000) {
-                sendDataToRemoteServer();
-                timerRemoteSync = ora;
-            }
-            // Controllo aggiornamenti periodico (ogni 2 minuti per reattività al pulsante web)
-            // Modifica: Esegue il controllo subito se è il primo avvio (timer=0) E c'è connessione.
-            if ((ora - timerUpdateCheck >= 120000) || (timerUpdateCheck == 0 && WiFi.status() == WL_CONNECTED)) { 
-                checkForFirmwareUpdates();
-                timerUpdateCheck = ora;
-            }
-        }
     }
 }

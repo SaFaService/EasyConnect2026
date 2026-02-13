@@ -20,7 +20,7 @@ Led greenLed(PIN_LED_VERDE);            // LED Verde, logica normale (HIGH = acc
 Led redLed(PIN_LED_ROSSO, true);        // LED Rosso, logica inversa (Active Low, LOW = acceso)
 
 // --- VERSIONE FIRMWARE SLAVE ---
-const char* FW_VERSION = "1.1.0";
+const char* FW_VERSION = "1.1.1";
 
 // --- VARIABILI GLOBALI DI STATO ---
 float tempSHTC3, humSHTC3, pressioneMS;
@@ -82,7 +82,9 @@ void setup() {
     redLed.setState(LED_OFF);
 
     // Inizializza la comunicazione seriale per la RS485.
-    Serial1.begin(9600, SERIAL_8N1, PIN_RS485_RX, PIN_RS485_TX);
+    Serial1.setRxBufferSize(2048); // Aumenta buffer ricezione
+    Serial1.begin(115200, SERIAL_8N1, PIN_RS485_RX, PIN_RS485_TX);
+    Serial1.setTimeout(30); // Evita blocchi lunghi su frame incompleti/rumorosi
     pinMode(PIN_RS485_DIR, OUTPUT);
     pinMode(PIN_SICUREZZA, INPUT_PULLUP);
     modoRicezione();

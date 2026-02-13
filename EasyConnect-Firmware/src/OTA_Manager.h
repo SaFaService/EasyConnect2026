@@ -25,4 +25,7 @@ void execHttpUpdate(String url, String md5 = "");
 // Se ne trova uno, avvia automaticamente execHttpUpdate.
 void checkForFirmwareUpdates();
 
+// Scarica il firmware dello slave da un URL e lo salva in SPIFFS.
+bool downloadSlaveFirmware(String url, String outputFilename = "/slave_update.bin");
+
 #endif

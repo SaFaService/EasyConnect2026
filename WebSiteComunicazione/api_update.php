@@ -38,11 +38,13 @@ try {
     // --- NUOVA LOGICA: PRIORITA' AGLI SLAVE ---
     // 3. Controlla se c'è una richiesta di aggiornamento per uno SLAVE
     if (!empty($master['slave_update_request_sn'])) {
-        // STOP LOOP: Se l'aggiornamento risulta già avviato (InProgress o Uploading), non inviarlo di nuovo.
-        // Il master deve aver fallito o essersi riavviato. L'utente dovrà resettare dal sito.
-        if ($master['slave_ota_status'] === 'InProgress' || $master['slave_ota_status'] === 'Uploading') {
-             echo json_encode(['status' => 'no_update', 'message' => 'Aggiornamento slave già in corso o interrotto.']);
-             exit;
+        // STOP LOOP: se è in uno stato intermedio, non reinviare il comando.
+        // Evita ri-trigger durante una procedura già partita.
+        // 'Pending' NON va considerato busy: e' proprio lo stato che deve generare il primo comando slave_update_ready.
+        $busySlaveStates = ['InProgress', 'Downloading', 'Downloaded', 'Handshake', 'Sending data', 'Uploading', 'Finalizing'];
+        if (in_array($master['slave_ota_status'], $busySlaveStates, true)) {
+            echo json_encode(['status' => 'no_update', 'message' => 'Aggiornamento slave già in corso. Stato: ' . $master['slave_ota_status']]);
+            exit;
         }
 
         // Recupera l'ultimo firmware ATTIVO per 'slave_pressure'
