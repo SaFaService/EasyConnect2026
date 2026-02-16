@@ -21,6 +21,176 @@ $isMaintainer = ($_SESSION['user_role'] === 'maintainer');
 $isClient = ($_SESSION['user_role'] === 'client');
 $currentUserId = $_SESSION['user_id'];
 
+/**
+ * Verifica se una tabella esiste nello schema corrente.
+ */
+function ecSettingsTableExists(PDO $pdo, string $tableName): bool {
+    $stmt = $pdo->prepare("
+        SELECT 1
+        FROM information_schema.tables
+        WHERE table_schema = DATABASE()
+          AND table_name = ?
+        LIMIT 1
+    ");
+    $stmt->execute([$tableName]);
+    return (bool)$stmt->fetchColumn();
+}
+
+/**
+ * Verifica se una colonna esiste in una tabella.
+ */
+function ecSettingsColumnExists(PDO $pdo, string $tableName, string $columnName): bool {
+    $stmt = $pdo->prepare("
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = DATABASE()
+          AND table_name = ?
+          AND column_name = ?
+        LIMIT 1
+    ");
+    $stmt->execute([$tableName, $columnName]);
+    return (bool)$stmt->fetchColumn();
+}
+
+/**
+ * Ritorna le motivazioni disponibili per dismissione/annullamento.
+ */
+function ecSettingsLifecycleReasons(PDO $pdo, bool $onlyActive = true): array {
+    $fallback = [
+        ['id' => 0, 'reason_code' => 'field_replaced', 'label_it' => 'Sostituzione in campo', 'label_en' => 'Field replacement', 'applies_to_status' => 'retired', 'sort_order' => 40, 'is_active' => 1],
+        ['id' => 0, 'reason_code' => 'damaged', 'label_it' => 'Dismesso per guasto', 'label_en' => 'Dismissed due to fault', 'applies_to_status' => 'retired', 'sort_order' => 50, 'is_active' => 1],
+        ['id' => 0, 'reason_code' => 'plant_dismission', 'label_it' => 'Impianto dismesso', 'label_en' => 'Plant decommissioned', 'applies_to_status' => 'retired', 'sort_order' => 60, 'is_active' => 1],
+        ['id' => 0, 'reason_code' => 'master_replaced', 'label_it' => 'Sostituito da altro seriale', 'label_en' => 'Replaced by another serial', 'applies_to_status' => 'retired', 'sort_order' => 70, 'is_active' => 1],
+        ['id' => 0, 'reason_code' => 'wrong_product_type', 'label_it' => 'Tipo prodotto errato', 'label_en' => 'Wrong product type', 'applies_to_status' => 'voided', 'sort_order' => 10, 'is_active' => 1],
+        ['id' => 0, 'reason_code' => 'wrong_flashing', 'label_it' => 'Programmazione errata', 'label_en' => 'Wrong flashing', 'applies_to_status' => 'voided', 'sort_order' => 20, 'is_active' => 1],
+    ];
+
+    if (!ecSettingsTableExists($pdo, 'serial_status_reasons')) {
+        return $fallback;
+    }
+
+    try {
+        $sql = "
+            SELECT id, reason_code, label_it, label_en, applies_to_status, sort_order, is_active
+            FROM serial_status_reasons
+        ";
+        if ($onlyActive) {
+            $sql .= " WHERE is_active = 1 ";
+        }
+        $sql .= " ORDER BY is_active DESC, sort_order ASC, reason_code ASC";
+        $rows = $pdo->query($sql)->fetchAll();
+        return !empty($rows) ? $rows : $fallback;
+    } catch (Throwable $e) {
+        return $fallback;
+    }
+}
+
+/**
+ * Disattiva un seriale impostandolo a retired.
+ * Se la tabella device_serials non esiste, la funzione non genera errore bloccante.
+ */
+function ecSettingsRetireSerial(
+    PDO $pdo,
+    string $serial,
+    string $reasonCode,
+    string $reasonDetails,
+    int $actorUserId,
+    ?string $replacedBySerial = null,
+    ?int $masterId = null
+): array {
+    if ($serial === '') {
+        return ['updated' => false, 'reason' => 'empty'];
+    }
+    if (!ecSettingsTableExists($pdo, 'device_serials')) {
+        return ['updated' => false, 'reason' => 'device_serials_missing'];
+    }
+
+    $stmt = $pdo->prepare("SELECT * FROM device_serials WHERE serial_number = ? FOR UPDATE");
+    $stmt->execute([$serial]);
+    $row = $stmt->fetch();
+    if (!$row) {
+        return ['updated' => false, 'reason' => 'not_found'];
+    }
+
+    $cols = [
+        'status_reason_code' => ecSettingsColumnExists($pdo, 'device_serials', 'status_reason_code'),
+        'status_notes' => ecSettingsColumnExists($pdo, 'device_serials', 'status_notes'),
+        'replaced_by_serial' => ecSettingsColumnExists($pdo, 'device_serials', 'replaced_by_serial'),
+        'status_changed_at' => ecSettingsColumnExists($pdo, 'device_serials', 'status_changed_at'),
+        'status_changed_by_user_id' => ecSettingsColumnExists($pdo, 'device_serials', 'status_changed_by_user_id'),
+        'deactivated_at' => ecSettingsColumnExists($pdo, 'device_serials', 'deactivated_at'),
+    ];
+
+    $setParts = ["status = 'retired'"];
+    $params = [];
+    if ($cols['status_reason_code']) {
+        $setParts[] = "status_reason_code = ?";
+        $params[] = $reasonCode;
+    }
+    if ($cols['status_notes']) {
+        $setParts[] = "status_notes = ?";
+        $params[] = $reasonDetails !== '' ? $reasonDetails : 'Dismissione da gestione impianti';
+    }
+    if ($cols['replaced_by_serial']) {
+        $setParts[] = "replaced_by_serial = ?";
+        $params[] = $replacedBySerial;
+    }
+    if ($cols['status_changed_at']) {
+        $setParts[] = "status_changed_at = NOW()";
+    }
+    if ($cols['status_changed_by_user_id']) {
+        $setParts[] = "status_changed_by_user_id = ?";
+        $params[] = $actorUserId;
+    }
+    if ($cols['deactivated_at']) {
+        $setParts[] = "deactivated_at = COALESCE(deactivated_at, NOW())";
+    }
+    $params[] = $row['id'];
+
+    $sql = "UPDATE device_serials SET " . implode(', ', $setParts) . " WHERE id = ?";
+    $upd = $pdo->prepare($sql);
+    $upd->execute($params);
+
+    if (ecSettingsTableExists($pdo, 'serial_lifecycle_events')) {
+        try {
+            $insEvent = $pdo->prepare("
+                INSERT INTO serial_lifecycle_events (
+                    serial_number,
+                    from_status,
+                    to_status,
+                    reason_code,
+                    reason_details,
+                    replaced_by_serial,
+                    actor_user_id,
+                    master_id
+                ) VALUES (?, ?, 'retired', ?, ?, ?, ?, ?)
+            ");
+            $insEvent->execute([
+                $serial,
+                $row['status'] ?? null,
+                $reasonCode,
+                $reasonDetails !== '' ? $reasonDetails : null,
+                $replacedBySerial,
+                $actorUserId,
+                $masterId
+            ]);
+        } catch (Throwable $e) {
+            // Log evento non bloccante.
+        }
+    }
+
+    return ['updated' => true, 'reason' => 'ok'];
+}
+
+$allLifecycleReasons = ecSettingsLifecycleReasons($pdo, false);
+$retiredReasons = array_values(array_filter($allLifecycleReasons, function ($r) {
+    $applies = (string)($r['applies_to_status'] ?? 'any');
+    return $applies === 'retired' || $applies === 'any';
+}));
+if (empty($retiredReasons)) {
+    $retiredReasons = $allLifecycleReasons;
+}
+
 // Gestione delle richieste POST (quando un modulo viene inviato)
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
@@ -90,24 +260,125 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $message = "Impianto aggiornato!";
         $message_type = 'success';
     }
-
-    // Azione: Eliminare un master
+    // Azione: Eliminare un master (con opzione dismissione seriali)
     if ($action === 'delete_master') {
-        $id = $_POST['master_id'];
-        
-        // Admin può cancellare (logicamente) qualsiasi impianto
-        if ($isAdmin) {
-            $stmt = $pdo->prepare("UPDATE masters SET deleted_at = NOW() WHERE id = ?");
-            $stmt->execute([$id]);
-        } else {
-            // Costruttori e Clienti possono cancellare solo i propri
-            $stmt = $pdo->prepare("UPDATE masters SET deleted_at = NOW() WHERE id = ? AND (creator_id = ? OR owner_id = ?)");
-            $stmt->execute([$id, $currentUserId, $currentUserId]);
+        $id = (int)($_POST['master_id'] ?? 0);
+        $retireMode = (string)($_POST['retire_mode'] ?? 'none'); // none|master_only|all_devices
+        $retireReason = trim((string)($_POST['retire_reason_code'] ?? ''));
+        $retireNotes = trim((string)($_POST['retire_reason_details'] ?? ''));
+        if (!in_array($retireMode, ['none', 'master_only', 'all_devices'], true)) {
+            $retireMode = 'none';
         }
-        $message = "Impianto rimosso dalla dashboard.";
-        $message_type = 'warning';
+        if ($retireMode !== 'none' && $retireReason === '') {
+            $message = "Per dismettere le schede devi selezionare una motivazione.";
+            $message_type = 'danger';
+        } else {
+            try {
+                $pdo->beginTransaction();
+                if ($isAdmin) {
+                    $stmtMaster = $pdo->prepare("SELECT * FROM masters WHERE id = ? FOR UPDATE");
+                    $stmtMaster->execute([$id]);
+                } else {
+                    $stmtMaster = $pdo->prepare("
+                        SELECT *
+                        FROM masters
+                        WHERE id = ?
+                          AND (creator_id = ? OR owner_id = ? OR maintainer_id = ?)
+                        FOR UPDATE
+                    ");
+                    $stmtMaster->execute([$id, $currentUserId, $currentUserId, $currentUserId]);
+                }
+                $masterRow = $stmtMaster->fetch();
+                if (!$masterRow) {
+                    $pdo->rollBack();
+                    $message = "Impianto non trovato o permessi insufficienti.";
+                    $message_type = 'danger';
+                } else {
+                    $stmtDelete = $pdo->prepare("UPDATE masters SET deleted_at = NOW() WHERE id = ?");
+                    $stmtDelete->execute([$id]);
+                    $retiredOk = 0;
+                    $retiredNotFound = 0;
+                    $retiredSkipped = 0;
+                    if ($retireMode !== 'none') {
+                        $serialsToRetire = [];
+                        $masterSerial = trim((string)($masterRow['serial_number'] ?? ''));
+                        if ($masterSerial !== '') {
+                            $serialsToRetire[] = $masterSerial;
+                        }
+                        if ($retireMode === 'all_devices') {
+                            $stmtSlaves = $pdo->prepare("
+                                SELECT DISTINCT slave_sn
+                                FROM measurements
+                                WHERE master_id = ?
+                                  AND slave_sn IS NOT NULL
+                                  AND slave_sn <> ''
+                                  AND slave_sn <> '0'
+                            ");
+                            $stmtSlaves->execute([$id]);
+                            foreach ($stmtSlaves->fetchAll() as $sr) {
+                                $sn = trim((string)($sr['slave_sn'] ?? ''));
+                                if ($sn !== '') {
+                                    $serialsToRetire[] = $sn;
+                                }
+                            }
+                        }
+                        $serialsToRetire = array_values(array_unique($serialsToRetire));
+                        foreach ($serialsToRetire as $sn) {
+                            $ret = ecSettingsRetireSerial(
+                                $pdo,
+                                $sn,
+                                $retireReason,
+                                $retireNotes !== '' ? $retireNotes : 'Dismissione da eliminazione impianto',
+                                (int)$currentUserId,
+                                null,
+                                (int)$id
+                            );
+                            if (($ret['updated'] ?? false) === true) {
+                                $retiredOk++;
+                            } else {
+                                $reason = (string)($ret['reason'] ?? '');
+                                if ($reason === 'not_found') {
+                                    $retiredNotFound++;
+                                } else {
+                                    $retiredSkipped++;
+                                }
+                            }
+                        }
+                    }
+                    try {
+                        $auditDetail = "Delete plant by user {$currentUserId} | retire_mode={$retireMode}";
+                        if ($retireMode !== 'none') {
+                            $auditDetail .= " | retired_ok={$retiredOk} | not_found={$retiredNotFound} | skipped={$retiredSkipped} | reason={$retireReason}";
+                        }
+                        $pdo->prepare("INSERT INTO audit_logs (master_id, action, details) VALUES (?, 'PLANT_DELETE', ?)")
+                            ->execute([$id, $auditDetail]);
+                    } catch (Throwable $e) {
+                        // audit non bloccante
+                    }
+                    $pdo->commit();
+                    if ($retireMode === 'none') {
+                        $message = "Impianto rimosso dalla dashboard.";
+                    } else {
+                        $message = "Impianto rimosso. Dismissione seriali completata: {$retiredOk} aggiornati";
+                        if ($retiredNotFound > 0) {
+                            $message .= ", {$retiredNotFound} non presenti in device_serials";
+                        }
+                        if ($retiredSkipped > 0) {
+                            $message .= ", {$retiredSkipped} non aggiornati";
+                        }
+                        $message .= ".";
+                    }
+                    $message_type = 'warning';
+                }
+            } catch (Throwable $e) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                $message = "Errore durante eliminazione impianto: " . $e->getMessage();
+                $message_type = 'danger';
+            }
+        }
     }
-
     // Azione: Assegnare un impianto
     if ($action === 'assign_master') {
         $master_id = $_POST['master_id'];
@@ -136,14 +407,112 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // Azione: Eliminazione definitiva (solo Admin)
     if ($action === 'hard_delete_master' && $isAdmin) {
         $id = $_POST['master_id'];
-        // La foreign key con ON DELETE CASCADE si occuperà di eliminare i record collegati
-        // in 'measurements' e 'maintainer_requests'.
+        // La foreign key con ON DELETE CASCADE si occupera di eliminare i record collegati.
         $stmt = $pdo->prepare("DELETE FROM masters WHERE id = ?");
         $stmt->execute([$id]);
         $message = "Impianto eliminato definitivamente dal sistema.";
         $message_type = 'danger';
     }
 
+    // Azione: Aggiungi motivazione lifecycle (solo Admin)
+    if ($action === 'add_status_reason' && $isAdmin) {
+        $reasonCode = strtolower(trim((string)($_POST['reason_code'] ?? '')));
+        $labelIt = trim((string)($_POST['label_it'] ?? ''));
+        $labelEn = trim((string)($_POST['label_en'] ?? ''));
+        $appliesTo = trim((string)($_POST['applies_to_status'] ?? 'retired'));
+        $sortOrder = (int)($_POST['sort_order'] ?? 100);
+        if (!preg_match('/^[a-z0-9_]{3,64}$/', $reasonCode)) {
+            $message = "reason_code non valido. Usa solo lettere minuscole, numeri e underscore.";
+            $message_type = 'danger';
+        } elseif ($labelIt === '' || $labelEn === '') {
+            $message = "Compila sia etichetta IT che EN.";
+            $message_type = 'danger';
+        } elseif (!in_array($appliesTo, ['any', 'active', 'retired', 'voided'], true)) {
+            $message = "Stato target motivazione non valido.";
+            $message_type = 'danger';
+        } elseif (!ecSettingsTableExists($pdo, 'serial_status_reasons')) {
+            $message = "Tabella serial_status_reasons non presente: esegui la migration Step 2.6.";
+            $message_type = 'danger';
+        } else {
+            try {
+                $stmt = $pdo->prepare("
+                    INSERT INTO serial_status_reasons (
+                        reason_code,
+                        label_it,
+                        label_en,
+                        applies_to_status,
+                        sort_order,
+                        is_active
+                    ) VALUES (?, ?, ?, ?, ?, 1)
+                    ON DUPLICATE KEY UPDATE
+                        label_it = VALUES(label_it),
+                        label_en = VALUES(label_en),
+                        applies_to_status = VALUES(applies_to_status),
+                        sort_order = VALUES(sort_order),
+                        is_active = 1
+                ");
+                $stmt->execute([$reasonCode, $labelIt, $labelEn, $appliesTo, $sortOrder]);
+                $message = "Motivazione salvata correttamente.";
+                $message_type = 'success';
+            } catch (Throwable $e) {
+                $message = "Errore salvataggio motivazione: " . $e->getMessage();
+                $message_type = 'danger';
+            }
+        }
+    }
+    // Azione: Disattiva motivazione lifecycle (solo Admin)
+    if ($action === 'deactivate_status_reason' && $isAdmin) {
+        $reasonId = (int)($_POST['reason_id'] ?? 0);
+        if ($reasonId <= 0) {
+            $message = "ID motivazione non valido.";
+            $message_type = 'danger';
+        } elseif (!ecSettingsTableExists($pdo, 'serial_status_reasons')) {
+            $message = "Tabella serial_status_reasons non presente.";
+            $message_type = 'danger';
+        } else {
+            try {
+                $stmt = $pdo->prepare("UPDATE serial_status_reasons SET is_active = 0 WHERE id = ?");
+                $stmt->execute([$reasonId]);
+                $message = "Motivazione disattivata.";
+                $message_type = 'warning';
+            } catch (Throwable $e) {
+                $message = "Errore disattivazione motivazione: " . $e->getMessage();
+                $message_type = 'danger';
+            }
+        }
+    }
+    // Azione: Riattiva motivazione lifecycle (solo Admin)
+    if ($action === 'reactivate_status_reason' && $isAdmin) {
+        $reasonId = (int)($_POST['reason_id'] ?? 0);
+        if ($reasonId <= 0) {
+            $message = "ID motivazione non valido.";
+            $message_type = 'danger';
+        } elseif (!ecSettingsTableExists($pdo, 'serial_status_reasons')) {
+            $message = "Tabella serial_status_reasons non presente.";
+            $message_type = 'danger';
+        } else {
+            try {
+                $stmt = $pdo->prepare("UPDATE serial_status_reasons SET is_active = 1 WHERE id = ?");
+                $stmt->execute([$reasonId]);
+                $message = "Motivazione riattivata.";
+                $message_type = 'success';
+            } catch (Throwable $e) {
+                $message = "Errore riattivazione motivazione: " . $e->getMessage();
+                $message_type = 'danger';
+            }
+        }
+    }
+
+}
+
+// Ricarica motivazioni dopo eventuali modifiche POST.
+$allLifecycleReasons = ecSettingsLifecycleReasons($pdo, false);
+$retiredReasons = array_values(array_filter($allLifecycleReasons, function ($r) {
+    $applies = (string)($r['applies_to_status'] ?? 'any');
+    return $applies === 'retired' || $applies === 'any';
+}));
+if (empty($retiredReasons)) {
+    $retiredReasons = $allLifecycleReasons;
 }
 
 // Recupera dati utente
@@ -167,10 +536,14 @@ if ($isAdmin) {
                    LEFT JOIN users c ON m.creator_id = c.id
                    LEFT JOIN users o ON m.owner_id = o.id
                    LEFT JOIN users mn ON m.maintainer_id = mn.id
-                   WHERE (m.creator_id = :userId OR m.owner_id = :userId OR m.maintainer_id = :userId) AND m.deleted_at IS NULL 
+                   WHERE (m.creator_id = :userIdCreator OR m.owner_id = :userIdOwner OR m.maintainer_id = :userIdMaintainer) AND m.deleted_at IS NULL 
                    ORDER BY m.nickname ASC";
     $stmtM = $pdo->prepare($sqlMasters);
-    $stmtM->execute(['userId' => $currentUserId]);
+    $stmtM->execute([
+        'userIdCreator' => $currentUserId,
+        'userIdOwner' => $currentUserId,
+        'userIdMaintainer' => $currentUserId,
+    ]);
 }
 $masters = $stmtM->fetchAll();
 ?>
@@ -236,6 +609,11 @@ $masters = $stmtM->fetchAll();
                     $bgStyle = $isDeleted ? "background-color: #ffe6e6;" : "";
                     // Determina se l'utente corrente può modificare/assegnare questo impianto
                     $canManage = $isAdmin || ($isBuilder && $master['creator_id'] == $currentUserId);
+                    // Eliminazione impianto consentita ad admin/creator/owner/maintainer.
+                    $canDeletePlant = $isAdmin
+                        || ((int)$master['creator_id'] === (int)$currentUserId)
+                        || ((int)$master['owner_id'] === (int)$currentUserId)
+                        || ((int)$master['maintainer_id'] === (int)$currentUserId);
                 ?>
                 <form method="POST" class="border rounded p-3 mb-3" style="<?php echo $bgStyle; ?>">
                     <input type="hidden" name="master_id" value="<?php echo $master['id']; ?>">
@@ -302,8 +680,16 @@ $masters = $stmtM->fetchAll();
                             <button type="submit" name="action" value="assign_master" class="btn btn-success btn-sm"><?php echo $lang['settings_save_assign']; ?></button>
                         <?php endif; ?>
 
-                        <?php if(!$isDeleted && ($isAdmin || $isBuilder || $isClient)): ?>
-                            <button type="submit" name="action" value="delete_master" class="btn btn-danger btn-sm" onclick="return confirm('<?php echo $lang['settings_delete_confirm']; ?>');"><?php echo $lang['settings_btn_delete']; ?></button>
+                        <?php if(!$isDeleted && $canDeletePlant): ?>
+                            <button type="button"
+                                    class="btn btn-danger btn-sm"
+                                    onclick="openDeletePlantModal(
+                                        <?php echo (int)$master['id']; ?>,
+                                        '<?php echo htmlspecialchars((string)$master['nickname'], ENT_QUOTES); ?>',
+                                        '<?php echo htmlspecialchars((string)$master['serial_number'], ENT_QUOTES); ?>'
+                                    )">
+                                <?php echo $lang['settings_btn_delete']; ?>
+                            </button>
                         <?php endif; ?>
 
                         <?php if($isDeleted && $isAdmin): ?>
@@ -315,18 +701,212 @@ $masters = $stmtM->fetchAll();
             <?php endforeach; ?>
         </div>
     </div>
+
+    <?php if ($isAdmin): ?>
+    <div class="card shadow-sm mt-4">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <h5 class="mb-0"><i class="fas fa-list-check"></i> Gestione motivazioni dismissione/annullamento</h5>
+            <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#statusReasonPanel" aria-expanded="false" aria-controls="statusReasonPanel">
+                <i class="fas fa-chevron-down"></i>
+            </button>
+        </div>
+        <div id="statusReasonPanel" class="collapse">
+            <div class="card-body">
+                <div class="alert alert-warning py-2">
+                    Se modifichi questa lista, i nuovi valori saranno disponibili nella dashboard e nella gestione seriali.
+                </div>
+                <form method="POST" class="row g-2 align-items-end mb-4">
+                    <input type="hidden" name="action" value="add_status_reason">
+                    <div class="col-md-2">
+                        <label class="form-label">Code</label>
+                        <input type="text" name="reason_code" class="form-control" required placeholder="es. plant_dismission">
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Label IT</label>
+                        <input type="text" name="label_it" class="form-control" required>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Label EN</label>
+                        <input type="text" name="label_en" class="form-control" required>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label">Stato</label>
+                        <select name="applies_to_status" class="form-select" required>
+                            <option value="retired">retired</option>
+                            <option value="voided">voided</option>
+                            <option value="any">any</option>
+                            <option value="active">active</option>
+                        </select>
+                    </div>
+                    <div class="col-md-1">
+                        <label class="form-label">Ordine</label>
+                        <input type="number" name="sort_order" class="form-control" value="100" min="1" max="9999" required>
+                    </div>
+                    <div class="col-md-1 d-grid">
+                        <button type="submit" class="btn btn-primary"><i class="fas fa-plus"></i></button>
+                    </div>
+                </form>
+
+                <div class="table-responsive">
+                    <table class="table table-sm table-striped align-middle">
+                        <thead class="table-light">
+                            <tr>
+                                <th>ID</th>
+                                <th>Code</th>
+                                <th>IT</th>
+                                <th>EN</th>
+                                <th>Status</th>
+                                <th>Order</th>
+                                <th>State</th>
+                                <th>Azioni</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($allLifecycleReasons as $r): ?>
+                                <?php $isActive = (int)($r['is_active'] ?? 0) === 1; ?>
+                                <tr>
+                                    <td><?php echo (int)($r['id'] ?? 0); ?></td>
+                                    <td><code><?php echo htmlspecialchars((string)$r['reason_code']); ?></code></td>
+                                    <td><?php echo htmlspecialchars((string)$r['label_it']); ?></td>
+                                    <td><?php echo htmlspecialchars((string)$r['label_en']); ?></td>
+                                    <td><?php echo htmlspecialchars((string)$r['applies_to_status']); ?></td>
+                                    <td><?php echo (int)($r['sort_order'] ?? 100); ?></td>
+                                    <td>
+                                        <?php if ($isActive): ?>
+                                            <span class="badge bg-success">active</span>
+                                        <?php else: ?>
+                                            <span class="badge bg-secondary">inactive</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td>
+                                        <?php if (!empty($r['id'])): ?>
+                                            <?php if ($isActive): ?>
+                                                <form method="POST" class="d-inline">
+                                                    <input type="hidden" name="action" value="deactivate_status_reason">
+                                                    <input type="hidden" name="reason_id" value="<?php echo (int)$r['id']; ?>">
+                                                    <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Disattivare questa motivazione?');">
+                                                        <i class="fas fa-trash"></i>
+                                                    </button>
+                                                </form>
+                                            <?php else: ?>
+                                                <form method="POST" class="d-inline">
+                                                    <input type="hidden" name="action" value="reactivate_status_reason">
+                                                    <input type="hidden" name="reason_id" value="<?php echo (int)$r['id']; ?>">
+                                                    <button type="submit" class="btn btn-sm btn-outline-success">
+                                                        <i class="fas fa-rotate-left"></i>
+                                                    </button>
+                                                </form>
+                                            <?php endif; ?>
+                                        <?php else: ?>
+                                            <span class="text-muted small">fallback</span>
+                                        <?php endif; ?>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+    <?php endif; ?>
+</div>
+
+<!-- MODAL ELIMINAZIONE IMPIANTO -->
+<div class="modal fade" id="deletePlantModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog">
+    <form method="POST" class="modal-content">
+      <input type="hidden" name="action" value="delete_master">
+      <input type="hidden" name="master_id" id="deletePlantMasterId" value="">
+      <div class="modal-header bg-danger text-white">
+        <h5 class="modal-title"><i class="fas fa-triangle-exclamation"></i> Eliminazione impianto</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <p class="mb-1"><strong id="deletePlantName">Impianto</strong></p>
+        <p class="text-muted small">Master seriale: <code id="deletePlantSerial">-</code></p>
+
+        <div class="alert alert-warning py-2">
+          Operazione sensibile: verifica attentamente prima di confermare.
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label">Dismissione seriali durante eliminazione</label>
+          <select name="retire_mode" id="deleteRetireMode" class="form-select">
+            <option value="none">Nessuna dismissione automatica</option>
+            <option value="master_only">Dismetti solo la master</option>
+            <option value="all_devices">Dismetti master + tutte le periferiche rilevate</option>
+          </select>
+        </div>
+
+        <div id="retireReasonWrap" class="d-none">
+          <div class="mb-3">
+            <label class="form-label">Motivazione</label>
+            <select name="retire_reason_code" id="deleteRetireReason" class="form-select">
+              <option value="">Seleziona motivazione...</option>
+              <?php foreach ($retiredReasons as $rr): ?>
+                <option value="<?php echo htmlspecialchars((string)$rr['reason_code']); ?>">
+                  <?php echo htmlspecialchars((string)$rr['reason_code'] . ' - ' . (($_SESSION['lang'] === 'it') ? (string)$rr['label_it'] : (string)$rr['label_en'])); ?>
+                </option>
+              <?php endforeach; ?>
+            </select>
+          </div>
+          <div class="mb-2">
+            <label class="form-label">Dettagli (opzionale)</label>
+            <input type="text" class="form-control" name="retire_reason_details" placeholder="Nota intervento / ticket">
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annulla</button>
+        <button type="submit" class="btn btn-danger">Conferma eliminazione</button>
+      </div>
+    </form>
+  </div>
 </div>
 
 <?php require 'footer.php'; ?>
 
 <script>
+let deletePlantModal;
+
 function copyToClipboard(elementId) {
     var copyText = document.getElementById(elementId);
     copyText.select();
     document.execCommand("copy");
     alert("<?php echo $lang['settings_copy_alert']; ?>");
 }
+
+function openDeletePlantModal(masterId, nickname, serialNumber) {
+    document.getElementById('deletePlantMasterId').value = String(masterId || '');
+    document.getElementById('deletePlantName').textContent = nickname || 'Impianto';
+    document.getElementById('deletePlantSerial').textContent = serialNumber || '-';
+    document.getElementById('deleteRetireMode').value = 'none';
+    document.getElementById('deleteRetireReason').value = '';
+    document.getElementById('retireReasonWrap').classList.add('d-none');
+    deletePlantModal.show();
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+    deletePlantModal = new bootstrap.Modal(document.getElementById('deletePlantModal'));
+    const retireModeEl = document.getElementById('deleteRetireMode');
+    const reasonWrapEl = document.getElementById('retireReasonWrap');
+    const reasonEl = document.getElementById('deleteRetireReason');
+    if (retireModeEl && reasonWrapEl && reasonEl) {
+        retireModeEl.addEventListener('change', function () {
+            const needReason = this.value !== 'none';
+            reasonWrapEl.classList.toggle('d-none', !needReason);
+            reasonEl.required = needReason;
+            if (!needReason) {
+                reasonEl.value = '';
+            }
+        });
+    }
+});
 </script>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
+
+
+

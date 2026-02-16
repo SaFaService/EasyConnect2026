@@ -1,3 +1,15 @@
 Aggiornamenti da fare:
-- impostare wifi da seriale
-- Visualizzazione comandi seriale durante l'inserimento
+x impostare wifi da seriale
+x Visualizzazione comandi seriale durante l'inserimento
+
+x le utenze diverse da administrator danno errore http 500
+- verificare le eliminazioni delle schede e degli impianti per provarne il funzionamento nei vari ruoli
+- creazione scheda seriale visualizzabile solo da admin che faccia vedere la scheda Seriale:
+-- se la scheda è connessa deve far visualizzare i dati ricevuti
+-- se la scheda è disconnessa deve far visualizzare i dati inseriti e permettere eventualmente di inserirli
+-- cliccando sul seriale degli ultimi seriali e Audit seriali, si deve aprire la scheda seriale
+
+Test utenze:
+- utente cliente
+- utenter costruttore
+- utente manutentore

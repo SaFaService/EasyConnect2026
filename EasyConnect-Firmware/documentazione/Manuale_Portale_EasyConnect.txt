@@ -1,0 +1,168 @@
+﻿MANUALE OPERATIVO PORTALE EASYCONNECT
+Versione documento: 2026-02-15
+
+============================================================
+1) SCOPO
+============================================================
+Questo documento descrive:
+- pagina per pagina cosa fa il portale WebSiteComunicazione
+- quali ruoli esistono
+- quali operazioni puo fare ogni ruolo
+- in quale sequenza operativa usare le funzioni principali
+
+============================================================
+2) RUOLI E PERMESSI
+============================================================
+Ruolo: admin
+- Accesso completo a tutte le pagine.
+- Gestione utenti (crea/elimina utenti).
+- Gestione firmware (registrazione/attivazione release).
+- Gestione seriali (riserva, verifica, registrazione manuale, assegnazione seriale, dismissione/annullamento).
+- Gestione impianti completa (creazione, assegnazioni, cancellazione/ripristino).
+
+Ruolo: builder (costruttore)
+- Accesso dashboard, rubrica, gestione impianti, gestione firmware.
+- Non puo gestire utenti globali.
+- Puo gestire solo impianti di cui e creatore.
+- Puo usare la funzione di dismissione/annullamento seriale dalla pagina seriali.
+
+Ruolo: maintainer (manutentore)
+- Accesso dashboard e rubrica.
+- Non crea impianti.
+- Opera su impianti a lui assegnati (monitoraggio, storico, interventi).
+- Puo usare la funzione di dismissione/annullamento seriale dalla pagina seriali.
+
+Ruolo: client (proprietario)
+- Accesso dashboard e gestione impianti limitata ai propri impianti.
+- Non accede a gestione utenti/firmware/seriali.
+
+============================================================
+3) PAGINE PRINCIPALI
+============================================================
+3.1 login.php
+- Login utente.
+- Se credenziali valide apre sessione e imposta ruolo.
+
+3.2 index.php (Dashboard)
+- Lista impianti visibili in base al ruolo.
+- Stato online/offline, seriale, versione firmware, RSSI.
+- Dettaglio periferiche lette dal master.
+- Pulsanti aggiornamento firmware master/slave quando disponibili.
+
+3.3 contacts.php (Rubrica)
+- Gestione contatti operativi.
+- Serve per assegnare piu facilmente owner/manutentori agli impianti.
+
+3.4 settings.php (Gestione Impianti)
+- Crea nuovo impianto (secondo ruolo).
+- Modifica nickname, indirizzo, retention log.
+- Assegna owner e maintainer.
+- Elimina (soft delete), ripristina, elimina definitivamente (admin).
+
+3.5 users.php (solo admin)
+- Creazione e gestione utenti del sistema.
+- Assegnazione ruolo utente.
+
+3.6 firmware.php (admin + builder)
+- Registra release firmware (master/slave).
+- Definisce release attiva per device type.
+- Le release attive sono usate dal meccanismo OTA.
+
+3.7 serials.php (admin/builder/maintainer)
+- Console operativa serial-centric semplificata.
+- Operazioni:
+  1) Riserva seriale automatico.
+  2) Verifica seriale.
+  3) Registrazione manuale seriale (casi eccezionali).
+  4) Assegna seriale a una master esistente (tipo 01/02).
+  5) Dismissione/annullamento seriale con conferma operatore e motivazione codificata.
+- Riquadri "Ultimi seriali" e "Audit seriali" auto-refresh (7 secondi).
+- Pulsanti "?" per guida rapida contestuale.
+- Nota permessi: builder e maintainer hanno modalita limitata (verifica + lifecycle), admin ha tutte le operazioni.
+
+3.8 profile.php
+- Profilo utente e impostazioni personali.
+
+3.9 privacy.php / contacts_form.php / forgot_password.php
+- Pagine servizio (privacy, contatti, recupero password).
+
+============================================================
+4) API BACKEND PRINCIPALI
+============================================================
+4.1 api.php
+- Riceve telemetria dal master (con API key).
+- Aggiorna stato master e salva misure.
+
+4.2 api_update.php
+- Endpoint check aggiornamenti OTA.
+- Restituisce comandi update master o slave in base allo stato.
+
+4.3 api_ota_report.php / api_slave_ota_report.php
+- Ricezione esiti OTA lato master/slave.
+
+4.4 api_serial.php
+- API serial-centric (admin):
+  - reserve_next_serial
+  - check_serial
+  - register_manual_serial
+  - assign_serial_to_master
+  - list_status_reasons
+  - set_serial_status
+
+4.5 api_serial_overview.php
+- API per refresh tabelle seriali/audit nella pagina serials.php.
+
+============================================================
+5) SEQUENZE OPERATIVE CONSIGLIATE
+============================================================
+5.1 Installazione nuovo impianto (admin/builder)
+1. Creare impianto in settings.php.
+2. Verificare arrivo dati in dashboard.
+3. Assegnare owner/manutentore.
+4. Verificare firmware attivo e stato OTA.
+
+5.2 Provisioning seriale master (admin)
+1. Aprire serials.php.
+2. Riservare seriale automatico tipo 01 o 02.
+3. Assegnare seriale alla master target.
+4. Verificare su dashboard che seriale sia coerente.
+
+5.3 Provisioning seriale periferica (admin)
+1. Riservare seriale col tipo corretto (03/04/05...).
+2. Programmare firmware periferica con seriale.
+3. Verificare con check_serial disponibilita/stato.
+4. Quando la periferica entra in servizio, passare a stato active via integrazione app/API (roadmap).
+
+5.4 Inserimento manuale seriale (solo eccezioni)
+1. Usare "Registrazione manuale seriale" in serials.php.
+2. Annotare motivazione nel campo note.
+3. Controllare presenza evento in audit seriali.
+
+5.5 Dismissione/annullamento seriale (admin/builder/maintainer)
+1. Aprire riquadro lifecycle in serials.php.
+2. Inserire seriale, target status (retired/voided), motivazione da combobox.
+3. Opzionale: valorizzare replaced_by_serial.
+4. Confermare e verificare aggiornamento su "Ultimi seriali" + audit.
+
+5.6 Aggiornamento OTA da portale
+1. Registrare/attivare firmware in firmware.php.
+2. Dalla dashboard richiedere update sul target.
+3. Attendere avanzamento stato OTA.
+4. Verificare versione finale aggiornata.
+
+============================================================
+6) NOTE OPERATIVE IMPORTANTI
+============================================================
+- La gestione seriali e una funzione critica: mantenere operazioni core (riserva/manuale/assegnazione) riservate ad admin.
+- Evitare inserimenti manuali se non strettamente necessari.
+- Usare sempre il tracciamento audit per operazioni sensibili.
+- Non cancellare seriali: usare stati terminali (retired/voided).
+- Prima di aggiornamenti massivi OTA, testare su impianto pilota.
+
+============================================================
+7) EVOLUZIONI CONSIGLIATE
+============================================================
+- Wizard "Nuovi impianti rilevati" per onboarding guidato automatico.
+- Vista icone tipo periferica/modalita direttamente in dashboard.
+- Storico configurazione impianto con versioning completo.
+- Guida utente finale con screenshot e workflow per ruolo.

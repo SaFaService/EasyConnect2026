@@ -1,0 +1,262 @@
+﻿LOGICA SERIALI EASYCONNECT
+Versione: 2026-02-15
+
+============================================================
+1) OBIETTIVO
+============================================================
+Questo documento spiega la logica serial-centric del sistema EasyConnect:
+- formato seriale
+- regole di univocita e sequenza
+- significato del campo Stato
+- transizioni di stato
+- uso operativo dei comandi portale
+- casi limite e troubleshooting
+
+============================================================
+2) FORMATO SERIALE UFFICIALE
+============================================================
+Formato: YYYYMMTTNNNN
+
+- YYYYMM = anno e mese (esempio 202602)
+- TT     = tipo prodotto
+- NNNN   = progressivo mensile
+
+Tipi prodotto (TT):
+- 01 = Centralina Display
+- 02 = Centralina Standalone/Rewamping
+- 03 = Scheda Relay
+- 04 = Scheda Pressione
+- 05 = Scheda Motore
+
+Esempio:
+- 202602040012
+  - 202602 = Febbraio 2026
+  - 04 = scheda pressione
+  - 0012 = dodicesimo seriale del mese (globale)
+
+============================================================
+3) REGOLA CHIAVE: PROGRESSIVO MENSILE GLOBALE
+============================================================
+Regola attiva:
+- NNNN e unico nel mese a prescindere da TT.
+
+Conseguenza:
+- Se esiste 202602030002, NON e valido creare 202602040002.
+- Nel mese 202602, il progressivo 0002 puo esistere una sola volta.
+
+Motivazione:
+- Evita collisioni tra prodotti diversi.
+- Mantiene un ordine temporale unico delle assegnazioni seriali mensili.
+
+============================================================
+4) GENERAZIONE AUTOMATICA (RIQUADRO 1)
+============================================================
+Comando: reserve_next_serial
+
+Comportamento:
+1. Calcola YYYYMM corrente.
+2. Cerca max NNNN gia presente nel mese.
+3. Genera NNNN successivo (max + 1).
+4. Costruisce seriale: YYYYMM + TT + NNNN.
+5. Inserisce record con stato = reserved.
+
+Concorrenza:
+- Usa lock DB mensile (GET_LOCK) per evitare doppie assegnazioni simultanee.
+
+============================================================
+5) VERIFICA SERIALE (RIQUADRO 2)
+============================================================
+Comando: check_serial
+
+Restituisce uno di questi casi:
+A) exact_exists
+- Il seriale esatto esiste gia.
+- assignable = false
+
+B) monthly_seq_used
+- Il seriale non esiste, ma NNNN nello stesso YYYYMM e gia usato da altro TT.
+- assignable = false
+- conflict_serial = seriale che blocca
+
+C) non_sequential_next
+- Il seriale non esiste, ma non e il prossimo progressivo valido del mese.
+- assignable = false
+- expected_next_seq = prossimo NNNN valido
+- expected_next_serial_for_type = seriale atteso per il TT indicato
+
+D) available
+- Il seriale non esiste e il progressivo mensile non e occupato.
+- assignable = true
+
+Nota:
+- Il placeholder pagina ora mostra solo formato ufficiale YYYYMMTTNNNN.
+
+============================================================
+6) INSERIMENTO MANUALE (RIQUADRO 3)
+============================================================
+Comando: register_manual_serial
+
+Uso:
+- Solo casi eccezionali (correzioni o allineamenti).
+
+Regole applicate:
+1. Se seriale in formato YYYYMMTTNNNN, TT deve combaciare col tipo selezionato.
+2. NNNN nel mese deve essere unico globalmente.
+3. NNNN deve essere sequenziale stretto:
+   - si puo inserire solo il prossimo progressivo del mese.
+   - esempio: se max mese = 0003, valido solo 0004.
+   - 0005 viene rifiutato (niente buchi).
+
+Stato inserito:
+- provisioned
+
+============================================================
+7) COLLEGAMENTO MASTER (RIQUADRO 4)
+============================================================
+Comando: assign_serial_to_master
+
+Uso:
+- Collega un seriale gia presente a un impianto master esistente nel portale.
+
+Tipi seriale consentiti:
+- 01 (Centralina Display)
+- 02 (Centralina Standalone/Rewamping)
+
+Effetti:
+1. Verifica seriale e master target.
+2. Se il master aveva un seriale precedente collegato, lo scollega.
+3. Imposta seriale nuovo come attivo sul master.
+4. Aggiorna masters.serial_number.
+5. Scrive audit.
+
+Stati:
+- seriale nuovo -> active
+- seriale vecchio (se collegato allo stesso master) -> retired
+
+============================================================
+7.1 LIFECYCLE MANUALE (RIQUADRO 5)
+============================================================
+Comando: set_serial_status
+
+Uso:
+- Gestire annullamenti e dismissioni in modo tracciato.
+- Richiede conferma esplicita operatore prima dell'applicazione.
+
+Stati gestiti:
+- voided  = seriale annullato (es. flash/prodotto errato).
+- retired = seriale dismesso/sostituito.
+
+Campi principali:
+- reason_code       (obbligatorio, da lista codificata)
+- reason_details    (opzionale)
+- replaced_by_serial (opzionale)
+
+Regola fondamentale:
+- I seriali NON si cancellano dal DB: si portano a stato terminale.
+
+============================================================
+8) CAMPO STATO (RIQUADRO "ULTIMI SERIALI")
+============================================================
+Il campo Stato mostra la fase del ciclo di vita del seriale.
+
+Valori principali attualmente usati:
+- reserved
+  Significato: seriale riservato automaticamente, non ancora legato a master.
+
+- provisioned
+  Significato: seriale inserito manualmente (caso eccezionale), pronto per uso.
+
+- active
+  Significato: seriale attualmente assegnato a una master/impianto.
+
+- retired
+  Significato: seriale dismesso dal collegamento master (sostituito da altro seriale).
+
+- voided
+  Significato: seriale annullato per errore operativo (non riutilizzabile).
+
+Quando cambia Stato:
+- reserve_next_serial -> reserved
+- register_manual_serial -> provisioned
+- assign_serial_to_master (seriale target) -> active
+- assign_serial_to_master (seriale vecchio del master) -> retired
+- set_serial_status -> retired / voided (con reason_code e audit)
+
+Passaggio reserved/provisioned -> active:
+- Oggi implementato in modo diretto quando si usa assign_serial_to_master (master 01/02).
+- Per periferiche 03/04/05 va previsto il passaggio ad active via App Python/API di onboarding (roadmap).
+
+============================================================
+9) LOCK E SICUREZZA DATI
+============================================================
+Per prevenire conflitti:
+- lock mensile su generazione/inserimento seriale
+- transazioni DB su operazioni critiche
+- controlli di coerenza lato API
+- audit su tutte le azioni sensibili
+
+Audit table:
+- serial_audit_logs
+Azioni tracciate (esempi):
+- SERIAL_RESERVE
+- SERIAL_REGISTER_MANUAL
+- SERIAL_ASSIGN_MASTER
+- SERIAL_STATUS_CHANGE
+
+============================================================
+10) LINEE GUIDA OPERATIVE
+============================================================
+Raccomandato:
+1. Usare sempre Riserva automatica per nuove produzioni.
+2. Usare Inserimento manuale solo in eccezioni documentate.
+3. Usare Verifica seriale prima di qualsiasi azione manuale.
+4. Collegare seriale master solo dopo conferma anagrafica impianto.
+5. Monitorare Audit seriali per tracciare tutte le modifiche.
+
+============================================================
+11) QUERY UTILI DI CONTROLLO
+============================================================
+Ultimi seriali:
+SELECT serial_number, product_type_code, status, assigned_master_id, created_at
+FROM device_serials
+ORDER BY id DESC
+LIMIT 30;
+
+Controllo conflitti su mese/progressivo:
+SELECT LEFT(serial_number,6) AS yyyymm, RIGHT(serial_number,4) AS seq4, COUNT(*) cnt
+FROM device_serials
+WHERE serial_scheme = 'v2_yyyymmttnnnn'
+GROUP BY LEFT(serial_number,6), RIGHT(serial_number,4)
+HAVING COUNT(*) > 1;
+
+Audit seriali:
+SELECT created_at, action, serial_number, master_id, details
+FROM serial_audit_logs
+ORDER BY id DESC
+LIMIT 50;
+
+============================================================
+12) SCENARI OPERATIVI CRITICI (APP PYTHON / API)
+============================================================
+Scenario A - flash errato in provisioning locale:
+1. Seriale errato scritto su scheda (es. tipo prodotto non coerente).
+2. Creazione nuovo seriale corretto.
+3. vecchio seriale -> voided con reason_code = wrong_product_type (opz. replaced_by_serial).
+4. nuovo seriale segue normale flusso (reserved/provisioned -> active).
+
+Scenario B - sostituzione scheda in campo:
+1. Seriale vecchio non piu presente/operativo.
+2. Nuovo seriale rilevato e attivato.
+3. Seriale vecchio -> retired con reason_code = field_replaced e replaced_by_serial valorizzato.
+4. Storico mantiene periodo \"dal/al\" senza cancellazioni fisiche.
+
+Scenario C - dismissione impianto:
+1. Operatore seleziona motivazione codificata (es. plant_dismission).
+2. Master e periferiche vengono portate a retired (o voided se errore pre-attivazione).
+3. Report mantiene tracciabilita completa.
+
+============================================================
+13) NOTE SU SERIALI LEGACY
+============================================================
+Il sistema puo ancora contenere seriali storici non conformi al formato nuovo.
+Per le nuove assegnazioni usare sempre e solo YYYYMMTTNNNN.

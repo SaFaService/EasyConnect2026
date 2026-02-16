@@ -56,6 +56,16 @@ $stmtUser = $pdo->prepare("SELECT * FROM users WHERE id = ?");
 $stmtUser->execute([$currentUserId]);
 $currentUser = $stmtUser->fetch();
 
+// Mappa ruolo utente in etichetta leggibile (lingua corrente).
+$roleCode = (string)($currentUser['role'] ?? '');
+$roleLabelMap = [
+    'admin' => $lang['users_role_admin'] ?? 'Administrator',
+    'builder' => $lang['users_role_builder'] ?? 'Builder',
+    'maintainer' => $lang['users_role_maintainer'] ?? 'Maintainer',
+    'client' => $lang['users_role_client'] ?? 'Client',
+];
+$roleLabel = $roleLabelMap[$roleCode] ?? $roleCode;
+
 $ga = new GoogleAuthenticator();
 $newSecret = $ga->createSecret();
 $otpAuthUrl = 'otpauth://totp/Antralux%20(' . urlencode($currentUser['email']) . ')?secret=' . $newSecret . '&issuer=Antralux';
@@ -90,6 +100,7 @@ $otpAuthUrl = 'otpauth://totp/Antralux%20(' . urlencode($currentUser['email']) .
                     <form method="POST">
                         <input type="hidden" name="action" value="update_profile">
                         <div class="mb-3"><label>Email</label><input type="text" class="form-control" value="<?php echo htmlspecialchars($currentUser['email']); ?>" readonly></div>
+                        <div class="mb-3"><label><?php echo htmlspecialchars($lang['users_role'] ?? 'Role'); ?></label><input type="text" class="form-control" value="<?php echo htmlspecialchars($roleLabel); ?>" readonly></div>
                         <div class="mb-3"><label>Telefono</label><input type="text" name="phone" class="form-control" value="<?php echo htmlspecialchars($currentUser['phone']); ?>"></div>
                         <div class="mb-3"><label>WhatsApp</label><input type="text" name="whatsapp" class="form-control" value="<?php echo htmlspecialchars($currentUser['whatsapp']); ?>" placeholder="Numero o username"></div>
                         <div class="mb-3"><label>Telegram</label><input type="text" name="telegram" class="form-control" value="<?php echo htmlspecialchars($currentUser['telegram']); ?>" placeholder="@username"></div>

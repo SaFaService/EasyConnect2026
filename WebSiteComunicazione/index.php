@@ -38,11 +38,15 @@ if ($isAdmin) {
     $sql = "SELECT m.*, o.email as owner_email, mn.email as maintainer_email FROM masters m 
             LEFT JOIN users o ON m.owner_id = o.id
             LEFT JOIN users mn ON m.maintainer_id = mn.id
-            WHERE (m.creator_id = :userId OR m.owner_id = :userId OR m.maintainer_id = :userId) 
+            WHERE (m.creator_id = :userIdCreator OR m.owner_id = :userIdOwner OR m.maintainer_id = :userIdMaintainer) 
             AND m.deleted_at IS NULL 
             ORDER BY m.created_at DESC";
     $stmt = $pdo->prepare($sql);
-    $stmt->execute(['userId' => $currentUserId]);
+    $stmt->execute([
+        'userIdCreator' => $currentUserId,
+        'userIdOwner' => $currentUserId,
+        'userIdMaintainer' => $currentUserId,
+    ]);
 }
 $masters = $stmt->fetchAll();
 
@@ -55,6 +59,29 @@ $latestFw = $stmtFw->fetchColumn();
 $stmtFwS = $pdo->prepare("SELECT version FROM firmware_releases WHERE device_type = 'slave_pressure' AND is_active = 1 ORDER BY id DESC LIMIT 1");
 $stmtFwS->execute();
 $latestFwSlaveP = $stmtFwS->fetchColumn();
+
+// Motivazioni disponibili per dismissione da dashboard.
+$retireReasons = [
+    ['reason_code' => 'field_replaced', 'label_it' => 'Sostituzione in campo', 'label_en' => 'Field replacement', 'applies_to_status' => 'retired'],
+    ['reason_code' => 'damaged', 'label_it' => 'Dismesso per guasto', 'label_en' => 'Dismissed due to fault', 'applies_to_status' => 'retired'],
+    ['reason_code' => 'plant_dismission', 'label_it' => 'Impianto dismesso', 'label_en' => 'Plant decommissioned', 'applies_to_status' => 'retired'],
+    ['reason_code' => 'master_replaced', 'label_it' => 'Sostituito da altro seriale', 'label_en' => 'Replaced by another serial', 'applies_to_status' => 'retired'],
+];
+try {
+    $stmtReasons = $pdo->query("
+        SELECT reason_code, label_it, label_en, applies_to_status
+        FROM serial_status_reasons
+        WHERE is_active = 1
+          AND (applies_to_status = 'retired' OR applies_to_status = 'any')
+        ORDER BY sort_order ASC, reason_code ASC
+    ");
+    $rowsReasons = $stmtReasons->fetchAll();
+    if (!empty($rowsReasons)) {
+        $retireReasons = $rowsReasons;
+    }
+} catch (Throwable $e) {
+    // fallback statico
+}
 ?>
 <!DOCTYPE html>
 <html lang="<?php echo $_SESSION['lang']; ?>">
@@ -72,6 +99,9 @@ $latestFwSlaveP = $stmtFwS->fetchColumn();
         .online { background-color: #28a745; }
         .offline { background-color: #dc3545; }
         .slave-details { background-color: #f8f9fa; font-size: 0.9rem; }
+        .serial-mismatch-wrap { border: 1px dashed #dc3545; border-radius: 8px; padding: 6px; background: #fff6f6; }
+        .serial-mismatch-row { line-height: 1.3; }
+        .serial-mismatch-actions .btn { min-width: 30px; }
     </style>
 </head>
 <body class="d-flex flex-column min-vh-100 bg-light">
@@ -172,10 +202,34 @@ $latestFwSlaveP = $stmtFwS->fetchColumn();
                         </td>
                         <td class="align-middle">
                             <?php if ($serialMismatch): ?>
-                                <div class="text-danger fw-bold" title="Rilevato seriale differente: <?php echo htmlspecialchars($detectedSerial); ?>">
-                                    <i class="fas fa-exclamation-triangle"></i> <?php echo htmlspecialchars($m['serial_number']); ?>
+                                <div class="serial-mismatch-wrap">
+                                    <div class="serial-mismatch-row text-danger fw-bold">
+                                        <i class="fas fa-circle"></i> DB: <?php echo htmlspecialchars($m['serial_number']); ?>
+                                    </div>
+                                    <div class="serial-mismatch-row text-success fw-bold">
+                                        <i class="fas fa-circle"></i> LIVE: <?php echo htmlspecialchars($detectedSerial); ?>
+                                    </div>
+                                    <div class="serial-mismatch-actions btn-group btn-group-sm mt-1" role="group">
+                                        <button class="btn btn-outline-primary"
+                                                title="Allinea seriale master"
+                                                onclick="replaceSerial(
+                                                    <?php echo (int)$m['id']; ?>,
+                                                    '<?php echo htmlspecialchars((string)$m['serial_number'], ENT_QUOTES); ?>',
+                                                    '<?php echo htmlspecialchars((string)$detectedSerial, ENT_QUOTES); ?>'
+                                                )">
+                                            <i class="fas fa-right-left"></i>
+                                        </button>
+                                        <button class="btn btn-outline-danger"
+                                                title="Dismetti seriale master precedente"
+                                                onclick="openRetireMasterModal(
+                                                    <?php echo (int)$m['id']; ?>,
+                                                    '<?php echo htmlspecialchars((string)$m['serial_number'], ENT_QUOTES); ?>',
+                                                    '<?php echo htmlspecialchars((string)$detectedSerial, ENT_QUOTES); ?>'
+                                                )">
+                                            <i class="fas fa-trash"></i>
+                                        </button>
+                                    </div>
                                 </div>
-                                <button class="btn btn-xs btn-danger mt-1" onclick="replaceSerial(<?php echo $m['id']; ?>, '<?php echo $detectedSerial; ?>')">Sostituisci</button>
                             <?php else: ?>
                                 <?php echo htmlspecialchars($m['serial_number']); ?>
                             <?php endif; ?>
@@ -260,6 +314,14 @@ $latestFwSlaveP = $stmtFwS->fetchColumn();
                                                         <i class="fas fa-history" title="<?php echo $lang['slave_history_tooltip']; ?>"></i>
                                                     </button>
                                                     <a href="download_csv.php?master_id=<?php echo $m['id']; ?>&slave_sn=<?php echo $slave['slave_sn']; ?>" class="btn btn-xs btn-outline-success" title="<?php echo $lang['slave_download_csv_tooltip']; ?>"><i class="fas fa-download"></i></a>
+                                                    <button class="btn btn-xs btn-outline-danger"
+                                                            title="Dismetti periferica"
+                                                            onclick="openRetireSlaveModal(
+                                                                <?php echo (int)$m['id']; ?>,
+                                                                '<?php echo htmlspecialchars((string)$slave['slave_sn'], ENT_QUOTES); ?>'
+                                                            )">
+                                                        <i class="fas fa-trash"></i>
+                                                    </button>
                                                     <button class="btn btn-xs <?php echo $slaveBtnClass; ?>" title="<?php echo sprintf($lang['slave_update_tooltip'], $latestFwSlaveP); ?>" onclick="startSlaveUpdate(<?php echo $m['id']; ?>, '<?php echo $slave['slave_sn']; ?>', '<?php echo $latestFwSlaveP; ?>')" <?php if(!$slaveUpdAvail) echo 'disabled'; ?>><i class="fas fa-sync"></i></button>
                                                 </td>
                                             </tr>
@@ -353,22 +415,58 @@ $latestFwSlaveP = $stmtFwS->fetchColumn();
         <h5 class="modal-title"><i class="fas fa-exchange-alt"></i> Sostituzione Master</h5>
       </div>
       <div class="modal-body">
-        <p>È stato rilevato un nuovo seriale per questo impianto:</p>
-        <h3 class="text-center text-primary" id="newSerialDisplay"></h3>
-        <p class="text-muted small">Confermando, il vecchio seriale verrà sovrascritto e l'impianto sarà associato alla nuova scheda.</p>
+        <p>E' stato rilevato un nuovo seriale per questo impianto:</p>
+        <div class="border rounded p-2 mb-3">
+            <div class="text-danger fw-bold">DB: <span id="oldSerialDisplay">-</span></div>
+            <div class="text-success fw-bold">LIVE: <span id="newSerialDisplay">-</span></div>
+        </div>
+        <p class="text-muted small">Confermando, il vecchio seriale verra' dismesso e l'impianto sara' associato alla nuova scheda.</p>
         <div class="mb-3">
-            <label for="serialPin" class="form-label">PIN di Sicurezza</label>
-            <input type="password" class="form-control" id="serialPin" placeholder="Inserisci PIN">
+            <label for="replaceReasonCode" class="form-label">Motivazione dismissione vecchia master</label>
+            <select class="form-select" id="replaceReasonCode"></select>
+        </div>
+        <div class="mb-0">
+            <label for="replaceReasonDetails" class="form-label">Dettagli (opzionale)</label>
+            <input type="text" class="form-control" id="replaceReasonDetails" placeholder="Nota tecnica / ticket">
         </div>
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annulla</button>
-        <button type="button" class="btn btn-danger" onclick="confirmSerialChange()">Conferma Sostituzione</button>
+        <button type="button" class="btn btn-danger" onclick="confirmSerialChange()">Conferma sostituzione</button>
       </div>
     </div>
   </div>
 </div>
-
+<!-- MODAL DISMISSIONE SERIALI -->
+<div class="modal fade" id="retireSerialModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header bg-danger text-white">
+        <h5 class="modal-title"><i class="fas fa-trash"></i> Dismissione seriale</h5>
+      </div>
+      <div class="modal-body">
+        <div class="small text-muted">Target:</div>
+        <div class="fw-bold mb-2" id="retireTargetLabel">-</div>
+        <div class="mb-3">
+            <label for="retireReasonCode" class="form-label">Motivazione</label>
+            <select class="form-select" id="retireReasonCode"></select>
+        </div>
+        <div class="mb-0">
+            <label for="retireReasonDetails" class="form-label">Dettagli (opzionale)</label>
+            <input type="text" class="form-control" id="retireReasonDetails" placeholder="Nota tecnica / ticket">
+        </div>
+        <div class="mb-0 mt-3">
+            <label for="retireReplacedBySerial" class="form-label">Replaced by (opzionale)</label>
+            <input type="text" class="form-control" id="retireReplacedBySerial" placeholder="Es. 202602050004">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Annulla</button>
+        <button type="button" class="btn btn-danger" onclick="confirmRetireSerial()">Conferma dismissione</button>
+      </div>
+    </div>
+  </div>
+</div>
 <script>
 let pollInterval;
 let currentMasterId;
@@ -556,41 +654,154 @@ function showError(msg) {
 }
 
 // --- GESTIONE CAMBIO SERIALE ---
-let pendingSerialChange = { id: 0, newSerial: '' };
+const RETIRE_REASONS = <?php echo json_encode($retireReasons, JSON_UNESCAPED_UNICODE); ?>;
+let serialModalInstance;
+let retireModalInstance;
+let pendingSerialChange = { id: 0, oldSerial: '', newSerial: '' };
+let pendingRetire = { type: '', masterId: 0, serial: '', replacedBy: '' };
 
-function replaceSerial(masterId, newSerial) {
-    pendingSerialChange = { id: masterId, newSerial: newSerial };
-    document.getElementById('newSerialDisplay').innerText = newSerial;
-    document.getElementById('serialPin').value = '';
-    new bootstrap.Modal(document.getElementById('serialModal')).show();
+function reasonLabel(item) {
+    const lang = document.documentElement.lang || 'it';
+    if (lang === 'it' && item.label_it) return item.label_it;
+    if (lang !== 'it' && item.label_en) return item.label_en;
+    return item.reason_code || '';
+}
+
+function fillReasonSelect(selectEl, defaultCode) {
+    if (!selectEl) return;
+    selectEl.innerHTML = '';
+    RETIRE_REASONS.forEach((r) => {
+        const opt = document.createElement('option');
+        opt.value = r.reason_code;
+        opt.textContent = `${r.reason_code} - ${reasonLabel(r)}`;
+        selectEl.appendChild(opt);
+    });
+    if (defaultCode) {
+        selectEl.value = defaultCode;
+    }
+    if (!selectEl.value && selectEl.options.length > 0) {
+        selectEl.selectedIndex = 0;
+    }
+}
+
+function replaceSerial(masterId, oldSerial, newSerial) {
+    pendingSerialChange = { id: masterId, oldSerial: oldSerial || '', newSerial: newSerial || '' };
+    document.getElementById('oldSerialDisplay').innerText = pendingSerialChange.oldSerial || '-';
+    document.getElementById('newSerialDisplay').innerText = pendingSerialChange.newSerial || '-';
+    document.getElementById('replaceReasonDetails').value = '';
+    fillReasonSelect(document.getElementById('replaceReasonCode'), 'master_replaced');
+    serialModalInstance.show();
+}
+
+function openRetireSlaveModal(masterId, slaveSn) {
+    pendingRetire = { type: 'slave', masterId: masterId, serial: slaveSn || '', replacedBy: '' };
+    document.getElementById('retireTargetLabel').innerText = `Slave ${pendingRetire.serial}`;
+    document.getElementById('retireReasonDetails').value = '';
+    document.getElementById('retireReplacedBySerial').value = '';
+    fillReasonSelect(document.getElementById('retireReasonCode'), 'field_replaced');
+    retireModalInstance.show();
+}
+
+function openRetireMasterModal(masterId, oldSerial, detectedSerial) {
+    pendingRetire = { type: 'master', masterId: masterId, serial: oldSerial || '', replacedBy: detectedSerial || '' };
+    document.getElementById('retireTargetLabel').innerText = `Master ${pendingRetire.serial}`;
+    document.getElementById('retireReasonDetails').value = '';
+    document.getElementById('retireReplacedBySerial').value = pendingRetire.replacedBy || '';
+    fillReasonSelect(document.getElementById('retireReasonCode'), 'damaged');
+    retireModalInstance.show();
 }
 
 function confirmSerialChange() {
-    const pin = document.getElementById('serialPin').value;
-    if(!pin) { alert("Inserire il PIN"); return; }
+    const reasonCode = (document.getElementById('replaceReasonCode').value || '').trim();
+    const reasonDetails = (document.getElementById('replaceReasonDetails').value || '').trim();
+    if (!pendingSerialChange.id || !pendingSerialChange.newSerial) {
+        alert('Dati sostituzione non validi.');
+        return;
+    }
+    if (!reasonCode) {
+        alert('Seleziona una motivazione.');
+        return;
+    }
 
     fetch('api_command.php', {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ 
-            action: 'update_serial', 
-            master_id: pendingSerialChange.id, 
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            action: 'update_serial',
+            master_id: pendingSerialChange.id,
+            old_serial: pendingSerialChange.oldSerial,
             new_serial: pendingSerialChange.newSerial,
-            pin: pin 
+            reason_code: reasonCode,
+            reason_details: reasonDetails
         })
     })
     .then(res => res.json())
     .then(data => {
-        if(data.status === 'ok') {
-            alert("Seriale aggiornato con successo!");
+        if (data.status === 'ok') {
+            alert('Seriale master aggiornato con successo.');
             location.reload();
         } else {
-            alert("Errore: " + data.message);
+            alert('Errore: ' + (data.message || 'Errore sconosciuto'));
         }
-    });
+    })
+    .catch(() => alert('Errore di rete durante sostituzione seriale.'));
 }
+
+function confirmRetireSerial() {
+    const reasonCode = (document.getElementById('retireReasonCode').value || '').trim();
+    const reasonDetails = (document.getElementById('retireReasonDetails').value || '').trim();
+    const replacedBySerial = (document.getElementById('retireReplacedBySerial').value || '').trim();
+    if (!pendingRetire.masterId || !pendingRetire.serial) {
+        alert('Dati dismissione non validi.');
+        return;
+    }
+    if (!reasonCode) {
+        alert('Seleziona una motivazione.');
+        return;
+    }
+
+    const payload = {
+        master_id: pendingRetire.masterId,
+        reason_code: reasonCode,
+        reason_details: reasonDetails,
+        replaced_by_serial: replacedBySerial
+    };
+
+    if (pendingRetire.type === 'slave') {
+        payload.action = 'retire_slave_serial';
+        payload.slave_sn = pendingRetire.serial;
+    } else {
+        payload.action = 'retire_master_serial';
+        payload.serial_number = pendingRetire.serial;
+        if (!payload.replaced_by_serial) {
+            payload.replaced_by_serial = pendingRetire.replacedBy || '';
+        }
+    }
+
+    fetch('api_command.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.status === 'ok') {
+            alert('Dismissione completata.');
+            location.reload();
+        } else {
+            alert('Errore: ' + (data.message || 'Errore sconosciuto'));
+        }
+    })
+    .catch(() => alert('Errore di rete durante dismissione.'));
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+    serialModalInstance = new bootstrap.Modal(document.getElementById('serialModal'));
+    retireModalInstance = new bootstrap.Modal(document.getElementById('retireSerialModal'));
+});
 </script>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
+

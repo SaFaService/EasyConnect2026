@@ -18,6 +18,9 @@
         <?php if ($_SESSION['user_role'] === 'admin' || $_SESSION['user_role'] === 'builder'): ?>
             <a href="firmware.php" class="btn btn-outline-light me-2"><i class="fas fa-cloud-upload-alt"></i> <?php echo $lang['navbar_firmware_management']; ?></a>
         <?php endif; ?>
+        <?php if ($_SESSION['user_role'] === 'admin' || $_SESSION['user_role'] === 'builder' || $_SESSION['user_role'] === 'maintainer'): ?>
+            <a href="serials.php" class="btn btn-outline-light me-2"><i class="fas fa-barcode"></i> <?php echo $lang['navbar_serial_management']; ?></a>
+        <?php endif; ?>
         
         <div class="dropdown">
             <a href="#" class="btn btn-outline-light ms-2 dropdown-toggle" role="button" id="dropdownLang" data-bs-toggle="dropdown" aria-expanded="false" title="<?php echo $lang['navbar_language']; ?>">
