@@ -1,11 +1,12 @@
 <?php
 session_start();
 require 'config.php';
+require_once 'auth_common.php';
 
 // Includi il gestore della lingua
 require 'lang.php';
 
-// Protezione: se l'utente non è loggato, lo rimanda alla pagina di login.
+// Protezione: se l'utente non Ã¨ loggato, lo rimanda alla pagina di login.
 if (!isset($_SESSION['user_id'])) {
     header("Location: login.php");
     exit;
@@ -14,12 +15,16 @@ if (!isset($_SESSION['user_id'])) {
 $message = '';
 $message_type = '';
 
-// Definiamo i ruoli per una lettura più chiara del codice
+// Definiamo i ruoli per una lettura piÃ¹ chiara del codice
 $isAdmin = ($_SESSION['user_role'] === 'admin');
 $isBuilder = ($_SESSION['user_role'] === 'builder');
 $isMaintainer = ($_SESSION['user_role'] === 'maintainer');
 $isClient = ($_SESSION['user_role'] === 'client');
 $currentUserId = $_SESSION['user_id'];
+$currentUserAccessLevel = ecAuthCurrentUserAccessLevel($pdo, (int)$currentUserId);
+$currentUserPermissions = ecAuthCurrentUserPermissions($pdo, (int)$currentUserId);
+$canCreatePlants = !empty($currentUserPermissions['plant_create']);
+$canSerialLifecycle = !empty($currentUserPermissions['serial_lifecycle']);
 
 /**
  * Verifica se una tabella esiste nello schema corrente.
@@ -182,6 +187,100 @@ function ecSettingsRetireSerial(
     return ['updated' => true, 'reason' => 'ok'];
 }
 
+function ecSettingsBoolFromInput($value): int {
+    if (is_bool($value)) {
+        return $value ? 1 : 0;
+    }
+    if (is_numeric($value)) {
+        return ((int)$value) === 1 ? 1 : 0;
+    }
+    $normalized = strtolower(trim((string)$value));
+    return in_array($normalized, ['1', 'true', 'on', 'yes', 'si'], true) ? 1 : 0;
+}
+
+function ecSettingsNormalizePlantKind($value): string {
+    $normalized = strtolower(trim((string)$value));
+    return in_array($normalized, ['display', 'standalone', 'rewamping'], true) ? $normalized : '';
+}
+
+function ecSettingsSerialType(string $serial): string {
+    if (preg_match('/^[0-9]{6}(01|02|03|04|05)[0-9]{4}$/', $serial, $m)) {
+        return (string)$m[1];
+    }
+    return '';
+}
+
+function ecSettingsPlantKindLabel(string $kind): string {
+    switch ($kind) {
+        case 'display':
+            return 'Display';
+        case 'standalone':
+            return 'Standalone';
+        case 'rewamping':
+            return 'Rewamping';
+        default:
+            return '-';
+    }
+}
+
+function ecSettingsResolvedPlantKind(array $master, bool $hasMasterPlantKindColumn): string {
+    $kind = $hasMasterPlantKindColumn ? ecSettingsNormalizePlantKind($master['plant_kind'] ?? '') : '';
+    if ($kind !== '') {
+        return $kind;
+    }
+
+    $serialType = ecSettingsSerialType((string)($master['serial_number'] ?? ''));
+    if ($serialType === '01') {
+        return 'display';
+    }
+    return '';
+}
+
+function ecSettingsFetchUserAddress(PDO $pdo, ?int $userId, bool $hasUsersAddressColumn): string {
+    if (!$hasUsersAddressColumn || $userId === null || $userId <= 0) {
+        return '';
+    }
+    $stmt = $pdo->prepare("SELECT address FROM users WHERE id = ? LIMIT 1");
+    $stmt->execute([$userId]);
+    return trim((string)($stmt->fetchColumn() ?: ''));
+}
+
+function ecSettingsResolvedPlantAddress(PDO $pdo, ?int $ownerUserId, ?int $maintainerUserId, ?int $builderUserId, bool $hasUsersAddressColumn): string {
+    $candidateIds = [$ownerUserId, $maintainerUserId, $builderUserId];
+    foreach ($candidateIds as $candidateId) {
+        $address = ecSettingsFetchUserAddress($pdo, $candidateId, $hasUsersAddressColumn);
+        if ($address !== '') {
+            return $address;
+        }
+    }
+    return '';
+}
+
+function ecSettingsUserCanReceiveAssignments(PDO $pdo, ?int $userId, bool $hasUsersPortalAccessLevelColumn): bool {
+    if ($userId === null || $userId <= 0) {
+        return true;
+    }
+    if (!$hasUsersPortalAccessLevelColumn) {
+        return true;
+    }
+    $stmt = $pdo->prepare("SELECT portal_access_level FROM users WHERE id = ? LIMIT 1");
+    $stmt->execute([$userId]);
+    return ecAuthCanReceiveNewAssignments((string)($stmt->fetchColumn() ?: 'active'));
+}
+
+function ecSettingsUserOptionLabel(array $row, bool $hasUsersPortalAccessLevelColumn): string {
+    $name = trim((string)($row['name'] ?? ''));
+    $email = trim((string)($row['email'] ?? ''));
+    $base = $name !== '' ? ($name . ($email !== '' ? ' - ' . $email : '')) : $email;
+    if ($base === '') {
+        $base = 'Utente #' . (int)($row['id'] ?? 0);
+    }
+    if ($hasUsersPortalAccessLevelColumn) {
+        $base .= ' [' . ecAuthPortalAccessLabel((string)($row['portal_access_level'] ?? 'active')) . ']';
+    }
+    return $base;
+}
+
 $allLifecycleReasons = ecSettingsLifecycleReasons($pdo, false);
 $retiredReasons = array_values(array_filter($allLifecycleReasons, function ($r) {
     $applies = (string)($r['applies_to_status'] ?? 'any');
@@ -191,39 +290,114 @@ if (empty($retiredReasons)) {
     $retiredReasons = $allLifecycleReasons;
 }
 
+// Colonna opzionale per assegnazione costruttore su tabella masters.
+$hasMasterBuilderColumn = ecSettingsColumnExists($pdo, 'masters', 'builder_id');
+$hasMasterPermanentOfflineColumn = ecSettingsColumnExists($pdo, 'masters', 'permanently_offline');
+$hasMasterPlantKindColumn = ecSettingsColumnExists($pdo, 'masters', 'plant_kind');
+$hasMasterNotesColumn = ecSettingsColumnExists($pdo, 'masters', 'notes');
+$hasMasterDeliveryDateColumn = ecSettingsColumnExists($pdo, 'masters', 'delivery_date');
+$hasUsersAddressColumn = ecSettingsColumnExists($pdo, 'users', 'address');
+$hasUsersPortalAccessLevelColumn = ecSettingsColumnExists($pdo, 'users', 'portal_access_level');
+
 // Gestione delle richieste POST (quando un modulo viene inviato)
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $action = $_POST['action'] ?? '';
+    try {
+        $action = $_POST['action'] ?? '';
 
     // Azione: Aggiungere un nuovo master
     if ($action === 'add_master') {
-        $serial = $_POST['serial_number'];
-        $nickname = $_POST['nickname'];
-        $address = $_POST['address'];
+        $serial = trim((string)($_POST['serial_number'] ?? ''));
+        $nickname = trim((string)($_POST['nickname'] ?? ''));
+        $address = trim((string)($_POST['address'] ?? ''));
+        $ownerIdInput = isset($_POST['owner_id']) && $_POST['owner_id'] !== '' ? (int)$_POST['owner_id'] : null;
+        $maintainerIdInput = isset($_POST['maintainer_id']) && $_POST['maintainer_id'] !== '' ? (int)$_POST['maintainer_id'] : null;
+        $builderIdInput = isset($_POST['builder_id']) && $_POST['builder_id'] !== '' ? (int)$_POST['builder_id'] : null;
+        $notes = trim((string)($_POST['notes'] ?? ''));
+        $deliveryDate = trim((string)($_POST['delivery_date'] ?? ''));
+        $permanentlyOffline = ecSettingsBoolFromInput($_POST['permanently_offline'] ?? 0);
+        $plantKind = ecSettingsNormalizePlantKind($_POST['plant_kind'] ?? '');
+        $serialType = ecSettingsSerialType($serial);
 
         if (!empty($serial) && !empty($nickname)) {
-            // I manutentori non possono creare impianti
-            if ($isMaintainer) {
-                $message = "I manutentori non possono creare nuovi impianti.";
+            if (!$canCreatePlants) {
+                $message = "La tua utenza non e abilitata alla creazione impianti.";
+                $message_type = 'danger';
+            } elseif (!$isAdmin && !ecAuthCanReceiveNewAssignments($currentUserAccessLevel)) {
+                $message = "La tua utenza non puo creare nuovi impianti.";
+                $message_type = 'danger';
+            } elseif ($plantKind !== '' && $serialType === '01' && $plantKind !== 'display') {
+                $message = "Per un seriale master di tipo 01 il tipo impianto deve essere Display.";
+                $message_type = 'danger';
+            } elseif ($plantKind !== '' && $serialType === '02' && !in_array($plantKind, ['standalone', 'rewamping'], true)) {
+                $message = "Per un seriale master di tipo 02 il tipo impianto deve essere Standalone o Rewamping.";
                 $message_type = 'danger';
             } else {
-                // Controllo unicità nickname per l'utente che sta creando (ignorando i cancellati)
-                $check = $pdo->prepare("SELECT id FROM masters WHERE creator_id = ? AND nickname = ? AND deleted_at IS NULL");
-                $check->execute([$currentUserId, $nickname]);
-            
-                if ($check->rowCount() > 0) {
-                    $message = "Hai già un impianto attivo con questo nome.";
+                // Verifica seriale master gia associato ad altro impianto attivo.
+                $checkSerial = $pdo->prepare("SELECT id FROM masters WHERE serial_number = ? AND deleted_at IS NULL LIMIT 1");
+                $checkSerial->execute([$serial]);
+                if ($checkSerial->fetch()) {
+                    $message = "L'impianto non si puo creare perche la scheda master e gia associata ad un altro impianto.";
                     $message_type = 'danger';
                 } else {
                     $api_key = bin2hex(random_bytes(32));
-                    
-                    // Se è un cliente a creare, è sia creatore che proprietario
-                    $owner_id = $isClient ? $currentUserId : null;
 
-                    $stmt = $pdo->prepare("INSERT INTO masters (creator_id, owner_id, serial_number, api_key, nickname, address) VALUES (?, ?, ?, ?, ?, ?)");
-                    $stmt->execute([$currentUserId, $owner_id, $serial, $api_key, $nickname, $address]);
-                    $message = "Nuovo impianto '{$nickname}' aggiunto con successo!";
-                    $message_type = 'success';
+                    // Se e un cliente a creare, e sia creatore che proprietario
+                    $owner_id = $isClient ? $currentUserId : $ownerIdInput;
+                    $builder_id = $builderIdInput !== null ? $builderIdInput : (($isBuilder && $hasMasterBuilderColumn) ? $currentUserId : null);
+                    $maintainer_id = $maintainerIdInput;
+                    if ($address === '') {
+                        $address = ecSettingsResolvedPlantAddress($pdo, $owner_id, $maintainer_id, $builder_id, $hasUsersAddressColumn);
+                    }
+
+                    try {
+                        $insertCols = ['creator_id', 'owner_id', 'serial_number', 'api_key', 'nickname', 'address'];
+                        $insertVals = ['?', '?', '?', '?', '?', '?'];
+                        $insertParams = [$currentUserId, $owner_id, $serial, $api_key, $nickname, $address];
+
+                        $insertCols[] = 'maintainer_id';
+                        $insertVals[] = '?';
+                        $insertParams[] = $maintainer_id;
+                        if ($hasMasterBuilderColumn) {
+                            $insertCols[] = 'builder_id';
+                            $insertVals[] = '?';
+                            $insertParams[] = $builder_id;
+                        }
+                        if ($hasMasterPermanentOfflineColumn) {
+                            $insertCols[] = 'permanently_offline';
+                            $insertVals[] = '?';
+                            $insertParams[] = $permanentlyOffline;
+                        }
+                        if ($hasMasterPlantKindColumn) {
+                            $insertCols[] = 'plant_kind';
+                            $insertVals[] = '?';
+                            $insertParams[] = $plantKind !== '' ? $plantKind : null;
+                        }
+                        if ($hasMasterNotesColumn) {
+                            $insertCols[] = 'notes';
+                            $insertVals[] = '?';
+                            $insertParams[] = $notes !== '' ? $notes : null;
+                        }
+                        if ($hasMasterDeliveryDateColumn) {
+                            $insertCols[] = 'delivery_date';
+                            $insertVals[] = '?';
+                            $insertParams[] = $deliveryDate !== '' ? $deliveryDate : null;
+                        }
+
+                        $stmt = $pdo->prepare("
+                            INSERT INTO masters (" . implode(', ', $insertCols) . ")
+                            VALUES (" . implode(', ', $insertVals) . ")
+                        ");
+                        $stmt->execute($insertParams);
+                        $message = "Nuovo impianto '{$nickname}' aggiunto con successo!";
+                        $message_type = 'success';
+                    } catch (PDOException $e) {
+                        if ((int)($e->errorInfo[1] ?? 0) === 1062) {
+                            $message = "L'impianto non si puo creare perche la scheda master e gia associata ad un altro impianto.";
+                        } else {
+                            $message = "Errore durante la creazione impianto: " . $e->getMessage();
+                        }
+                        $message_type = 'danger';
+                    }
                 }
             }
         } else {
@@ -234,31 +408,87 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     // Azione: Aggiornare un master esistente
     if ($action === 'update_master') {
-        $id = $_POST['master_id'];
-        $nickname = $_POST['nickname'];
-        $address = $_POST['address'];
+        $id = (int)($_POST['master_id'] ?? 0);
+        $nickname = trim((string)($_POST['nickname'] ?? ''));
+        $address = trim((string)($_POST['address'] ?? ''));
+        $notes = trim((string)($_POST['notes'] ?? ''));
+        $deliveryDate = trim((string)($_POST['delivery_date'] ?? ''));
         $log_days = $_POST['log_retention_days'];
+        $permanentlyOffline = ecSettingsBoolFromInput($_POST['permanently_offline'] ?? 0);
+        $plantKind = ecSettingsNormalizePlantKind($_POST['plant_kind'] ?? '');
 
-        // Solo Admin e Costruttore (del proprio impianto) possono modificare questi dati
-        $sql = "UPDATE masters SET nickname = ?, address = ?, log_retention_days = ? WHERE id = ?";
-        if (!$isAdmin) {
-            $sql .= " AND creator_id = ?"; // Il costruttore può modificare solo i suoi
-        }
-
-        $stmt = $pdo->prepare($sql);
-        
-        if ($isAdmin) {
-            $stmt->execute([$nickname, $address, $log_days, $id]);
+        $stmtPlantType = $pdo->prepare("SELECT serial_number FROM masters WHERE id = ? LIMIT 1");
+        $stmtPlantType->execute([$id]);
+        $plantSerialForValidation = (string)($stmtPlantType->fetchColumn() ?: '');
+        $serialType = ecSettingsSerialType($plantSerialForValidation);
+        if ($plantKind !== '' && $serialType === '01' && $plantKind !== 'display') {
+            $message = "Per un seriale master di tipo 01 il tipo impianto deve essere Display.";
+            $message_type = 'danger';
+        } elseif ($plantKind !== '' && $serialType === '02' && !in_array($plantKind, ['standalone', 'rewamping'], true)) {
+            $message = "Per un seriale master di tipo 02 il tipo impianto deve essere Standalone o Rewamping.";
+            $message_type = 'danger';
         } else {
-            // Per il costruttore, ci assicuriamo che stia modificando un suo impianto
-            $checkOwner = $pdo->prepare("SELECT id FROM masters WHERE id = ? AND creator_id = ?");
-            $checkOwner->execute([$id, $currentUserId]);
-            if($checkOwner->fetch()){
-                $stmt->execute([$nickname, $address, $log_days, $id, $currentUserId]);
+            if ($address === '') {
+                $stmtCurrentAssignments = $pdo->prepare("SELECT owner_id, maintainer_id" . ($hasMasterBuilderColumn ? ", builder_id" : "") . " FROM masters WHERE id = ? LIMIT 1");
+                $stmtCurrentAssignments->execute([$id]);
+                $currentAssignments = $stmtCurrentAssignments->fetch();
+                if ($currentAssignments) {
+                    $address = ecSettingsResolvedPlantAddress(
+                        $pdo,
+                        isset($currentAssignments['owner_id']) ? (int)$currentAssignments['owner_id'] : null,
+                        isset($currentAssignments['maintainer_id']) ? (int)$currentAssignments['maintainer_id'] : null,
+                        $hasMasterBuilderColumn && isset($currentAssignments['builder_id']) ? (int)$currentAssignments['builder_id'] : null,
+                        $hasUsersAddressColumn
+                    );
+                }
             }
+
+            // Solo Admin e Costruttore (del proprio impianto) possono modificare questi dati
+            $setParts = [
+                "nickname = ?",
+                "address = ?",
+                "log_retention_days = ?",
+            ];
+            $paramsUpdate = [$nickname, $address, $log_days];
+            if ($hasMasterPermanentOfflineColumn) {
+                $setParts[] = "permanently_offline = ?";
+                $paramsUpdate[] = $permanentlyOffline;
+            }
+            if ($hasMasterPlantKindColumn) {
+                $setParts[] = "plant_kind = ?";
+                $paramsUpdate[] = $plantKind !== '' ? $plantKind : null;
+            }
+            if ($hasMasterNotesColumn) {
+                $setParts[] = "notes = ?";
+                $paramsUpdate[] = $notes !== '' ? $notes : null;
+            }
+            if ($hasMasterDeliveryDateColumn) {
+                $setParts[] = "delivery_date = ?";
+                $paramsUpdate[] = $deliveryDate !== '' ? $deliveryDate : null;
+            }
+
+            $sql = "UPDATE masters SET " . implode(', ', $setParts) . " WHERE id = ?";
+            $paramsUpdate[] = $id;
+            if (!$isAdmin) {
+                $sql .= " AND creator_id = ?"; // Il costruttore puÃ² modificare solo i suoi
+            }
+
+            $stmt = $pdo->prepare($sql);
+            
+            if ($isAdmin) {
+                $stmt->execute($paramsUpdate);
+            } else {
+                // Per il costruttore, ci assicuriamo che stia modificando un suo impianto
+                $checkOwner = $pdo->prepare("SELECT id FROM masters WHERE id = ? AND creator_id = ?");
+                $checkOwner->execute([$id, $currentUserId]);
+                if($checkOwner->fetch()){
+                    $paramsUpdate[] = $currentUserId;
+                    $stmt->execute($paramsUpdate);
+                }
+            }
+            $message = "Impianto aggiornato!";
+            $message_type = 'success';
         }
-        $message = "Impianto aggiornato!";
-        $message_type = 'success';
     }
     // Azione: Eliminare un master (con opzione dismissione seriali)
     if ($action === 'delete_master') {
@@ -269,7 +499,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!in_array($retireMode, ['none', 'master_only', 'all_devices'], true)) {
             $retireMode = 'none';
         }
-        if ($retireMode !== 'none' && $retireReason === '') {
+        if ($retireMode !== 'none' && !$canSerialLifecycle) {
+            $message = "Non hai i permessi per dismettere/annullare seriali.";
+            $message_type = 'danger';
+        } elseif ($retireMode !== 'none' && $retireReason === '') {
             $message = "Per dismettere le schede devi selezionare una motivazione.";
             $message_type = 'danger';
         } else {
@@ -381,15 +614,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     // Azione: Assegnare un impianto
     if ($action === 'assign_master') {
-        $master_id = $_POST['master_id'];
+        $master_id = (int)($_POST['master_id'] ?? 0);
         $owner_id = $_POST['owner_id'] ?: null; // Se vuoto, imposta a NULL
         $maintainer_id = $_POST['maintainer_id'] ?: null;
+        $builder_id = ($hasMasterBuilderColumn && isset($_POST['builder_id']) && $_POST['builder_id'] !== '') ? $_POST['builder_id'] : null;
+        $currentAddress = '';
+        $stmtCurrentMaster = $pdo->prepare("SELECT address FROM masters WHERE id = ? LIMIT 1");
+        $stmtCurrentMaster->execute([$master_id]);
+        $currentAddress = trim((string)($stmtCurrentMaster->fetchColumn() ?: ''));
+        $resolvedAddress = $currentAddress !== ''
+            ? $currentAddress
+            : ecSettingsResolvedPlantAddress(
+                $pdo,
+                $owner_id !== null ? (int)$owner_id : null,
+                $maintainer_id !== null ? (int)$maintainer_id : null,
+                $builder_id !== null ? (int)$builder_id : null,
+                $hasUsersAddressColumn
+            );
 
         // Solo Admin e Costruttore (del proprio impianto) possono assegnare
-        $sql = "UPDATE masters SET owner_id = ?, maintainer_id = ? WHERE id = ?";
+        $sql = "UPDATE masters SET owner_id = ?, maintainer_id = ?, address = ?";
+        $params = [$owner_id, $maintainer_id, $resolvedAddress];
+        if ($hasMasterBuilderColumn) {
+            $sql .= ", builder_id = ?";
+            $params[] = $builder_id;
+        }
+        $sql .= " WHERE id = ?";
+        $params[] = $master_id;
         if (!$isAdmin) $sql .= " AND creator_id = ?";
+        if (!$isAdmin) $params[] = $currentUserId;
         $stmt = $pdo->prepare($sql);
-        $params = $isAdmin ? [$owner_id, $maintainer_id, $master_id] : [$owner_id, $maintainer_id, $master_id, $currentUserId];
         $stmt->execute($params);
         $message = "Assegnazioni impianto aggiornate.";
         $message_type = 'success';
@@ -481,8 +735,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
     }
-    // Azione: Riattiva motivazione lifecycle (solo Admin)
-    if ($action === 'reactivate_status_reason' && $isAdmin) {
+        // Azione: Riattiva motivazione lifecycle (solo Admin)
+        if ($action === 'reactivate_status_reason' && $isAdmin) {
         $reasonId = (int)($_POST['reason_id'] ?? 0);
         if ($reasonId <= 0) {
             $message = "ID motivazione non valido.";
@@ -501,6 +755,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $message_type = 'danger';
             }
         }
+        }
+    } catch (Throwable $e) {
+        $message = "Errore operazione impianti: " . $e->getMessage();
+        $message_type = 'danger';
     }
 
 }
@@ -516,36 +774,219 @@ if (empty($retiredReasons)) {
 }
 
 // Recupera dati utente
-$stmtUser = $pdo->prepare("SELECT * FROM users WHERE id = ?");
-$stmtUser->execute([$currentUserId]);
-$currentUser = $stmtUser->fetch();
+$currentUser = null;
+try {
+    $stmtUser = $pdo->prepare("SELECT * FROM users WHERE id = ?");
+    $stmtUser->execute([$currentUserId]);
+    $currentUser = $stmtUser->fetch();
+} catch (Throwable $e) {
+    // Fallback minimale: evita HTTP500 anche con schema parziale.
+    $currentUser = [
+        'id' => $currentUserId,
+        'role' => $_SESSION['user_role'] ?? '',
+        'email' => $_SESSION['user_email'] ?? '',
+    ];
+}
 
 // Recupera lista Impianti in base al ruolo
 $sqlMasters = "";
-if ($isAdmin) {
-    // Admin vede tutto
-    $sqlMasters = "SELECT m.*, c.email as creator_email, o.email as owner_email, mn.email as maintainer_email FROM masters m 
-                   LEFT JOIN users c ON m.creator_id = c.id
-                   LEFT JOIN users o ON m.owner_id = o.id
-                   LEFT JOIN users mn ON m.maintainer_id = mn.id
-                   ORDER BY m.deleted_at ASC, m.nickname ASC";
-    $stmtM = $pdo->query($sqlMasters);
-} else {
-    // Altri utenti vedono solo gli impianti a cui sono associati (come creatori, proprietari o manutentori)
-    $sqlMasters = "SELECT m.*, c.email as creator_email, o.email as owner_email, mn.email as maintainer_email FROM masters m 
-                   LEFT JOIN users c ON m.creator_id = c.id
-                   LEFT JOIN users o ON m.owner_id = o.id
-                   LEFT JOIN users mn ON m.maintainer_id = mn.id
-                   WHERE (m.creator_id = :userIdCreator OR m.owner_id = :userIdOwner OR m.maintainer_id = :userIdMaintainer) AND m.deleted_at IS NULL 
-                   ORDER BY m.nickname ASC";
-    $stmtM = $pdo->prepare($sqlMasters);
-    $stmtM->execute([
-        'userIdCreator' => $currentUserId,
-        'userIdOwner' => $currentUserId,
-        'userIdMaintainer' => $currentUserId,
-    ]);
+$builderSelect = $hasMasterBuilderColumn ? ", b.email as builder_email" : ", NULL as builder_email";
+$builderJoin = $hasMasterBuilderColumn ? " LEFT JOIN users b ON m.builder_id = b.id " : "";
+$masters = [];
+try {
+    if ($isAdmin) {
+        // Admin vede tutto
+        $sqlMasters = "SELECT m.*, c.email as creator_email, o.email as owner_email, mn.email as maintainer_email {$builderSelect} FROM masters m 
+                       LEFT JOIN users c ON m.creator_id = c.id
+                       LEFT JOIN users o ON m.owner_id = o.id
+                       LEFT JOIN users mn ON m.maintainer_id = mn.id
+                       {$builderJoin}
+                       ORDER BY m.deleted_at ASC, m.nickname ASC";
+        $stmtM = $pdo->query($sqlMasters);
+    } else {
+        // Altri utenti vedono solo gli impianti a cui sono associati.
+        $sqlMasters = "SELECT m.*, c.email as creator_email, o.email as owner_email, mn.email as maintainer_email {$builderSelect} FROM masters m 
+                       LEFT JOIN users c ON m.creator_id = c.id
+                       LEFT JOIN users o ON m.owner_id = o.id
+                       LEFT JOIN users mn ON m.maintainer_id = mn.id
+                       {$builderJoin}
+                       WHERE (m.creator_id = :userIdCreator OR m.owner_id = :userIdOwner OR m.maintainer_id = :userIdMaintainer" . ($hasMasterBuilderColumn ? " OR m.builder_id = :userIdBuilder" : "") . ") AND m.deleted_at IS NULL 
+                       ORDER BY m.nickname ASC";
+        $stmtM = $pdo->prepare($sqlMasters);
+        $paramsM = [
+            'userIdCreator' => $currentUserId,
+            'userIdOwner' => $currentUserId,
+            'userIdMaintainer' => $currentUserId,
+        ];
+        if ($hasMasterBuilderColumn) {
+            $paramsM['userIdBuilder'] = $currentUserId;
+        }
+        $stmtM->execute($paramsM);
+    }
+    $masters = $stmtM->fetchAll();
+} catch (Throwable $e) {
+    // Fallback robusto per evitare HTTP500 con schemi parziali o query non compatibili.
+    try {
+        if ($isAdmin) {
+            $stmtM = $pdo->query("SELECT * FROM masters ORDER BY deleted_at ASC, nickname ASC");
+        } else {
+            $sqlFb = "SELECT * FROM masters WHERE (creator_id = :u1 OR owner_id = :u2 OR maintainer_id = :u3" . ($hasMasterBuilderColumn ? " OR builder_id = :u4" : "") . ") AND deleted_at IS NULL ORDER BY nickname ASC";
+            $stmtM = $pdo->prepare($sqlFb);
+            $paramsFb = ['u1' => $currentUserId, 'u2' => $currentUserId, 'u3' => $currentUserId];
+            if ($hasMasterBuilderColumn) {
+                $paramsFb['u4'] = $currentUserId;
+            }
+            $stmtM->execute($paramsFb);
+        }
+        $masters = $stmtM->fetchAll();
+        $message = "Caricamento impianti in modalità compatibile (schema DB parziale rilevato).";
+        $message_type = 'warning';
+    } catch (Throwable $e2) {
+        $masters = [];
+        $message = "Errore caricamento impianti: " . $e2->getMessage();
+        $message_type = 'danger';
+    }
 }
-$masters = $stmtM->fetchAll();
+
+// Seriali master disponibili per creazione impianto (combobox filtrabile).
+// Regola:
+// - Admin: vede tutti i seriali master (type 01/02) non dismessi/annullati.
+// - Altri ruoli: vede solo seriali collegati alla propria utenza.
+$availableMasterSerials = [];
+try {
+    if (ecSettingsTableExists($pdo, 'device_serials')) {
+        $hasProductType = ecSettingsColumnExists($pdo, 'device_serials', 'product_type_code');
+        $hasStatus = ecSettingsColumnExists($pdo, 'device_serials', 'status');
+        $hasOwnerUser = ecSettingsColumnExists($pdo, 'device_serials', 'owner_user_id');
+        $hasAssignedUser = ecSettingsColumnExists($pdo, 'device_serials', 'assigned_user_id');
+        $hasAssignedMaster = ecSettingsColumnExists($pdo, 'device_serials', 'assigned_master_id');
+
+        $sqlSerials = "
+            SELECT DISTINCT
+                ds.serial_number,
+                " . ($hasProductType ? "ds.product_type_code" : "'' AS product_type_code") . ",
+                " . ($hasStatus ? "ds.status" : "'' AS status") . "
+            FROM device_serials ds
+        ";
+        if ($hasAssignedMaster) {
+            $sqlSerials .= " LEFT JOIN masters m ON m.id = ds.assigned_master_id ";
+        }
+        $sqlSerials .= " WHERE ds.serial_number IS NOT NULL AND ds.serial_number <> '' ";
+        if ($hasProductType) {
+            $sqlSerials .= " AND ds.product_type_code IN ('01','02') ";
+        }
+        if ($hasStatus) {
+            $sqlSerials .= " AND ds.status NOT IN ('retired','voided') ";
+        }
+
+        $paramsSerials = [];
+        if (!$isAdmin) {
+            $visibility = [];
+            if ($hasOwnerUser) {
+                $visibility[] = "ds.owner_user_id = :uidOwner";
+                $paramsSerials['uidOwner'] = $currentUserId;
+            }
+            if ($hasAssignedUser) {
+                $visibility[] = "ds.assigned_user_id = :uidAssigned";
+                $paramsSerials['uidAssigned'] = $currentUserId;
+            }
+            if ($hasAssignedMaster) {
+                $visibility[] = "(m.creator_id = :uidCreator OR m.owner_id = :uidPlantOwner OR m.maintainer_id = :uidMaintainer" . ($hasMasterBuilderColumn ? " OR m.builder_id = :uidBuilder" : "") . ")";
+                $paramsSerials['uidCreator'] = $currentUserId;
+                $paramsSerials['uidPlantOwner'] = $currentUserId;
+                $paramsSerials['uidMaintainer'] = $currentUserId;
+                if ($hasMasterBuilderColumn) {
+                    $paramsSerials['uidBuilder'] = $currentUserId;
+                }
+            }
+
+            if (!empty($visibility)) {
+                $sqlSerials .= " AND (" . implode(' OR ', $visibility) . ") ";
+            } else {
+                $sqlSerials .= " AND 1 = 0 ";
+            }
+        }
+
+        $sqlSerials .= " ORDER BY ds.serial_number DESC ";
+        $stmtSerials = $pdo->prepare($sqlSerials);
+        $stmtSerials->execute($paramsSerials);
+        $availableMasterSerials = $stmtSerials->fetchAll();
+    }
+
+    // Fallback: se device_serials non disponibile/usabile, usa seriali dalla tabella masters.
+    if (empty($availableMasterSerials)) {
+        if ($isAdmin) {
+            $stmtFallback = $pdo->query("
+                SELECT DISTINCT serial_number, '' AS product_type_code, '' AS status
+                FROM masters
+                WHERE serial_number IS NOT NULL AND serial_number <> ''
+                ORDER BY serial_number DESC
+            ");
+            $availableMasterSerials = $stmtFallback->fetchAll();
+        } else {
+            $stmtFallback = $pdo->prepare("
+                SELECT DISTINCT serial_number, '' AS product_type_code, '' AS status
+                FROM masters
+                WHERE serial_number IS NOT NULL
+                  AND serial_number <> ''
+                  AND deleted_at IS NULL
+                  AND (
+                      creator_id = :uidCreator
+                      OR owner_id = :uidOwner
+                      OR maintainer_id = :uidMaintainer
+                      " . ($hasMasterBuilderColumn ? " OR builder_id = :uidBuilder " : "") . "
+                  )
+                ORDER BY serial_number DESC
+            ");
+            $paramsFallback = [
+                'uidCreator' => $currentUserId,
+                'uidOwner' => $currentUserId,
+                'uidMaintainer' => $currentUserId,
+            ];
+            if ($hasMasterBuilderColumn) {
+                $paramsFallback['uidBuilder'] = $currentUserId;
+            }
+            $stmtFallback->execute($paramsFallback);
+            $availableMasterSerials = $stmtFallback->fetchAll();
+        }
+    }
+} catch (Throwable $e) {
+    $availableMasterSerials = [];
+}
+
+$assignOwnerOptions = [];
+$assignMaintainerOptions = [];
+$assignBuilderOptions = [];
+try {
+    $contacts_stmt = $pdo->prepare("
+        SELECT u.id, c.name, u.email, " . ($hasUsersAddressColumn ? "u.address" : "NULL") . " AS address,
+               " . ($hasUsersPortalAccessLevelColumn ? "u.portal_access_level" : "'active'") . " AS portal_access_level
+        FROM contacts c
+        JOIN users u ON c.linked_user_id = u.id
+        WHERE c.managed_by_user_id = ?
+        ORDER BY c.name
+    ");
+    $contacts_stmt->execute([$currentUserId]);
+    $assignOwnerOptions = $contacts_stmt->fetchAll();
+} catch (Throwable $e) {
+    $assignOwnerOptions = [];
+}
+try {
+    $maintainerSql = "SELECT id, email, " . ($hasUsersAddressColumn ? "address" : "NULL") . " AS address, " . ($hasUsersPortalAccessLevelColumn ? "portal_access_level" : "'active'") . " AS portal_access_level FROM users WHERE role = 'maintainer'";
+    $maintainerSql .= " ORDER BY email ASC";
+    $assignMaintainerOptions = $pdo->query($maintainerSql)->fetchAll();
+} catch (Throwable $e) {
+    $assignMaintainerOptions = [];
+}
+if ($hasMasterBuilderColumn) {
+    try {
+        $builderSql = "SELECT id, email, " . ($hasUsersAddressColumn ? "address" : "NULL") . " AS address, " . ($hasUsersPortalAccessLevelColumn ? "portal_access_level" : "'active'") . " AS portal_access_level FROM users WHERE role = 'builder'";
+        $builderSql .= " ORDER BY email ASC";
+        $assignBuilderOptions = $pdo->query($builderSql)->fetchAll();
+    } catch (Throwable $e) {
+        $assignBuilderOptions = [];
+    }
+}
 ?>
 <!DOCTYPE html>
 <html lang="<?php echo $_SESSION['lang']; ?>">
@@ -557,6 +998,17 @@ $masters = $stmtM->fetchAll();
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/lipis/flag-icons@6/css/flag-icons.min.css"/>
+    <style>
+        .existing-plant-hidden { display: none !important; }
+        .existing-plant-filter-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+        .existing-plant-filter-grid .full { grid-column: 1 / -1; }
+        @media (max-width: 992px) {
+            .existing-plant-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        }
+        @media (max-width: 768px) {
+            .existing-plant-filter-grid { grid-template-columns: repeat(1, minmax(0, 1fr)); }
+        }
+    </style>
 </head>
 <body class="d-flex flex-column min-vh-100 bg-light">
 
@@ -569,7 +1021,7 @@ $masters = $stmtM->fetchAll();
     <?php endif; ?>
 
     <!-- Card per Aggiungere un Nuovo Impianto -->
-    <?php if ($isAdmin || $isBuilder || $isClient): // Solo questi ruoli possono creare impianti ?>
+    <?php if ($canCreatePlants): ?>
     <div class="card shadow-sm mb-4">
         <div class="card-header">
             <h5 class="mb-0"><i class="fas fa-plus-circle"></i> <?php echo $lang['settings_add_new']; ?></h5>
@@ -584,13 +1036,128 @@ $masters = $stmtM->fetchAll();
                     </div>
                     <div class="col-md-4 mb-3">
                         <label class="form-label"><?php echo $lang['settings_serial']; ?></label>
-                        <input type="text" name="serial_number" class="form-control" placeholder="Es. 2023110001" required>
+                        <input type="text"
+                               name="serial_number"
+                               class="form-control"
+                               list="masterSerialList"
+                               id="newPlantSerial"
+                               placeholder="Es. 202602020001"
+                               autocomplete="off"
+                               required>
+                        <div class="form-text">
+                            <?php if ($isAdmin): ?>
+                                Elenco completo seriali Master (01/02). Digita per filtrare (es. 2026...).
+                            <?php else: ?>
+                                Elenco seriali Master assegnati alla tua utenza. Digita per filtrare.
+                            <?php endif; ?>
+                        </div>
+                        <datalist id="masterSerialList">
+                            <?php foreach ($availableMasterSerials as $ser): ?>
+                                <?php
+                                    $sn = (string)($ser['serial_number'] ?? '');
+                                    if ($sn === '') continue;
+                                    $type = trim((string)($ser['product_type_code'] ?? ''));
+                                    $st = trim((string)($ser['status'] ?? ''));
+                                    $labelParts = [];
+                                    if ($type !== '') $labelParts[] = 'T' . $type;
+                                    if ($st !== '') $labelParts[] = $st;
+                                    $lbl = implode(' | ', $labelParts);
+                                ?>
+                                <option value="<?php echo htmlspecialchars($sn); ?>"<?php if ($lbl !== ''): ?> label="<?php echo htmlspecialchars($lbl); ?>"<?php endif; ?>></option>
+                            <?php endforeach; ?>
+                        </datalist>
                     </div>
                     <div class="col-md-4 mb-3">
                         <label class="form-label"><?php echo $lang['settings_address']; ?></label>
-                        <input type="text" name="address" class="form-control" placeholder="Via, Città, CAP">
+                        <input type="text"
+                               name="address"
+                               id="newPlantAddress"
+                               class="form-control"
+                               list="addressSuggestions"
+                               placeholder="Via, CittÃ , CAP"
+                               autocomplete="off">
+                        <div class="form-text">Suggerimenti automatici indirizzo (opzionali): puoi sempre inserire un testo libero.</div>
+                        <datalist id="addressSuggestions"></datalist>
+                    </div>
+                    <?php if ($isAdmin || $isBuilder): ?>
+                    <div class="col-md-4 mb-3">
+                        <label class="form-label"><?php echo $lang['settings_assign_owner']; ?></label>
+                        <select name="owner_id" id="newPlantOwnerId" class="form-select">
+                            <option value=""><?php echo $lang['settings_none']; ?></option>
+                            <?php foreach ($assignOwnerOptions as $ownerOption): ?>
+                                <option value="<?php echo (int)$ownerOption['id']; ?>" data-address="<?php echo htmlspecialchars((string)($ownerOption['address'] ?? '')); ?>">
+                                    <?php echo htmlspecialchars(ecSettingsUserOptionLabel($ownerOption, $hasUsersPortalAccessLevelColumn)); ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                        <div class="form-text">Se l'indirizzo e vuoto, verra usato l'indirizzo dell'utente selezionato.</div>
+                    </div>
+                    <?php endif; ?>
+                </div>
+                <div class="row">
+                    <div class="col-md-4 mb-3">
+                        <label class="form-label">Tipo impianto</label>
+                        <select name="plant_kind" id="newPlantKind" class="form-select">
+                            <option value="">Non specificato</option>
+                            <option value="display">Display</option>
+                            <option value="standalone">Standalone</option>
+                            <option value="rewamping">Rewamping</option>
+                        </select>
+                        <div class="form-text">Usato per classificare l'impianto in Dashboard e nei filtri.</div>
+                    </div>
+                    <div class="col-md-4 mb-3 d-flex align-items-end">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" role="switch" id="newPlantPermanentOffline" name="permanently_offline" value="1">
+                            <label class="form-check-label" for="newPlantPermanentOffline">Impianto permanentemente offline</label>
+                            <div class="form-text">Attivalo per impianti che non andranno mai online.</div>
+                        </div>
+                    </div>
+                    <?php if ($isAdmin || $isBuilder): ?>
+                    <div class="col-md-4 mb-3">
+                        <label class="form-label"><?php echo $lang['settings_assign_maintainer']; ?></label>
+                        <select name="maintainer_id" class="form-select">
+                            <option value=""><?php echo $lang['settings_none']; ?></option>
+                            <?php foreach ($assignMaintainerOptions as $maintainerOption): ?>
+                                <option value="<?php echo (int)$maintainerOption['id']; ?>" data-address="<?php echo htmlspecialchars((string)($maintainerOption['address'] ?? '')); ?>">
+                                    <?php echo htmlspecialchars(ecSettingsUserOptionLabel($maintainerOption, $hasUsersPortalAccessLevelColumn)); ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <?php endif; ?>
+                </div>
+                <div class="row">
+                    <?php if (($isAdmin || $isBuilder) && $hasMasterBuilderColumn): ?>
+                    <div class="col-md-4 mb-3">
+                        <label class="form-label"><?php echo $lang['settings_builder'] ?? 'Costruttore'; ?></label>
+                        <select name="builder_id" class="form-select">
+                            <option value=""><?php echo $lang['settings_none']; ?></option>
+                            <?php foreach ($assignBuilderOptions as $builderOption): ?>
+                                <option value="<?php echo (int)$builderOption['id']; ?>" data-address="<?php echo htmlspecialchars((string)($builderOption['address'] ?? '')); ?>" <?php echo ($isBuilder && (int)$builderOption['id'] === (int)$currentUserId) ? 'selected' : ''; ?>>
+                                    <?php echo htmlspecialchars(ecSettingsUserOptionLabel($builderOption, $hasUsersPortalAccessLevelColumn)); ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <?php endif; ?>
+                    <?php if ($hasMasterDeliveryDateColumn): ?>
+                    <div class="col-md-4 mb-3">
+                        <label class="form-label">Data consegna</label>
+                        <input type="date" name="delivery_date" class="form-control">
+                    </div>
+                    <?php endif; ?>
+                    <div class="col-md-4 mb-3 d-flex align-items-end">
+                        <div class="form-text">La data di creazione verra impostata automaticamente dal sistema.</div>
                     </div>
                 </div>
+                <?php if ($hasMasterNotesColumn): ?>
+                <div class="row">
+                    <div class="col-md-12 mb-3">
+                        <label class="form-label">Note impianto</label>
+                        <textarea name="notes" class="form-control" rows="2" placeholder="Es. numero ordine interno, riferimenti commessa, note operative"></textarea>
+                    </div>
+                </div>
+                <?php endif; ?>
                 <button type="submit" class="btn btn-primary"><?php echo $lang['settings_btn_add']; ?></button>
             </form>
         </div>
@@ -599,34 +1166,114 @@ $masters = $stmtM->fetchAll();
 
     <!-- Card per Gestire gli Impianti Esistenti -->
     <div class="card shadow-sm">
-        <div class="card-header">
-            <h5 class="mb-0"><i class="fas fa-sliders-h"></i> <?php echo $lang['settings_manage_existing']; ?></h5>
+        <div class="card-header d-flex justify-content-between align-items-center gap-2 flex-wrap">
+            <div>
+                <h5 class="mb-0"><i class="fas fa-sliders-h"></i> <?php echo $lang['settings_manage_existing']; ?></h5>
+                <div class="small text-muted">Visualizzati: <strong id="existingPlantVisibleCount"><?php echo count($masters); ?></strong> / <?php echo count($masters); ?></div>
+            </div>
+            <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#existingPlantFiltersCollapse" aria-expanded="false" aria-controls="existingPlantFiltersCollapse">
+                <i class="fas fa-filter"></i> Filtri
+            </button>
+        </div>
+        <div id="existingPlantFiltersCollapse" class="collapse border-top">
+            <div class="card-body bg-light">
+                <div class="existing-plant-filter-grid">
+                    <div>
+                        <label class="form-label form-label-sm">Nome impianto</label>
+                        <input type="text" class="form-control form-control-sm" id="existingPlantFilterName" placeholder="Cerca nome">
+                    </div>
+                    <div>
+                        <label class="form-label form-label-sm">Seriale master</label>
+                        <input type="text" class="form-control form-control-sm" id="existingPlantFilterSerial" placeholder="Cerca seriale">
+                    </div>
+                    <div>
+                        <label class="form-label form-label-sm">Indirizzo</label>
+                        <input type="text" class="form-control form-control-sm" id="existingPlantFilterAddress" placeholder="Cerca indirizzo">
+                    </div>
+                    <div>
+                        <label class="form-label form-label-sm">Stato</label>
+                        <select class="form-select form-select-sm" id="existingPlantFilterStatus">
+                            <option value="">Tutti</option>
+                            <option value="active">Attivi</option>
+                            <option value="deleted">Eliminati</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="form-label form-label-sm">Proprietario</label>
+                        <input type="text" class="form-control form-control-sm" id="existingPlantFilterOwner" placeholder="Cerca proprietario">
+                    </div>
+                    <div>
+                        <label class="form-label form-label-sm">Manutentore</label>
+                        <input type="text" class="form-control form-control-sm" id="existingPlantFilterMaintainer" placeholder="Cerca manutentore">
+                    </div>
+                    <?php if ($hasMasterBuilderColumn): ?>
+                    <div>
+                        <label class="form-label form-label-sm"><?php echo $lang['settings_builder'] ?? 'Costruttore'; ?></label>
+                        <input type="text" class="form-control form-control-sm" id="existingPlantFilterBuilder" placeholder="Cerca costruttore">
+                    </div>
+                    <?php endif; ?>
+                    <div class="full d-flex justify-content-end">
+                        <button class="btn btn-sm btn-outline-secondary" type="button" id="resetExistingPlantFilters">Reset filtri</button>
+                    </div>
+                </div>
+            </div>
         </div>
         <div class="card-body">
             <?php foreach ($masters as $master): ?>
                 <?php
                     $isDeleted = !empty($master['deleted_at']);
                     $bgStyle = $isDeleted ? "background-color: #ffe6e6;" : "";
-                    // Determina se l'utente corrente può modificare/assegnare questo impianto
-                    $canManage = $isAdmin || ($isBuilder && $master['creator_id'] == $currentUserId);
+                    $resolvedPlantKind = ecSettingsResolvedPlantKind($master, $hasMasterPlantKindColumn);
+                    $plantKindLabel = ecSettingsPlantKindLabel($resolvedPlantKind);
+                    $isPermanentOffline = $hasMasterPermanentOfflineColumn && ((int)($master['permanently_offline'] ?? 0) === 1);
+                    // Determina se l'utente corrente puÃ² modificare/assegnare questo impianto
+                    $canManage = $isAdmin
+                        || ($isBuilder && (
+                            (int)$master['creator_id'] === (int)$currentUserId
+                            || ($hasMasterBuilderColumn && (int)($master['builder_id'] ?? 0) === (int)$currentUserId)
+                        ));
                     // Eliminazione impianto consentita ad admin/creator/owner/maintainer.
                     $canDeletePlant = $isAdmin
                         || ((int)$master['creator_id'] === (int)$currentUserId)
                         || ((int)$master['owner_id'] === (int)$currentUserId)
-                        || ((int)$master['maintainer_id'] === (int)$currentUserId);
+                        || ((int)$master['maintainer_id'] === (int)$currentUserId)
+                        || ($hasMasterBuilderColumn && ((int)($master['builder_id'] ?? 0) === (int)$currentUserId));
                 ?>
-                <form method="POST" class="border rounded p-3 mb-3" style="<?php echo $bgStyle; ?>">
+                <form method="POST"
+                      class="border rounded p-3 mb-3 existing-plant-card"
+                      data-plant-name="<?php echo htmlspecialchars(strtolower((string)($master['nickname'] ?? ''))); ?>"
+                      data-serial="<?php echo htmlspecialchars(strtolower((string)($master['serial_number'] ?? ''))); ?>"
+                      data-address="<?php echo htmlspecialchars(strtolower((string)($master['address'] ?? ''))); ?>"
+                      data-owner="<?php echo htmlspecialchars(strtolower((string)($master['owner_email'] ?? ''))); ?>"
+                      data-maintainer="<?php echo htmlspecialchars(strtolower((string)($master['maintainer_email'] ?? ''))); ?>"
+                      data-builder="<?php echo htmlspecialchars(strtolower((string)($master['builder_email'] ?? ''))); ?>"
+                      data-status="<?php echo $isDeleted ? 'deleted' : 'active'; ?>"
+                      style="<?php echo $bgStyle; ?>">
                     <input type="hidden" name="master_id" value="<?php echo $master['id']; ?>">
                     
                     <h5>
-                        <?php echo htmlspecialchars($master['nickname']); ?>
+                        <a href="plant_detail.php?plant_id=<?php echo (int)$master['id']; ?>" class="text-decoration-none">
+                            <?php echo htmlspecialchars($master['nickname']); ?>
+                        </a>
                         <?php if($isDeleted) echo " <span class='badge bg-danger'>{$lang['settings_deleted']}</span>"; ?>
+                        <?php if($plantKindLabel !== '-'): ?> <span class="badge bg-secondary"><?php echo htmlspecialchars($plantKindLabel); ?></span><?php endif; ?>
+                        <?php if($isPermanentOffline): ?> <span class="badge bg-dark">Offline permanente</span><?php endif; ?>
                         <?php if($isAdmin) echo " <small class='text-muted'>({$lang['settings_creator']}: " . ($master['creator_email'] ?? 'N/D') . ")</small>"; ?>
                     </h5>
-                    
+
+                    <div class="d-flex justify-content-end mb-2">
+                        <button class="btn btn-sm btn-outline-primary" type="button" data-bs-toggle="collapse" data-bs-target="#plantSettingsCollapse-<?php echo (int)$master['id']; ?>" aria-expanded="false" aria-controls="plantSettingsCollapse-<?php echo (int)$master['id']; ?>">
+                            <i class="fas fa-chevron-down"></i> Dettagli impianto
+                        </button>
+                    </div>
+
+                    <div class="collapse" id="plantSettingsCollapse-<?php echo (int)$master['id']; ?>">
                     <div class="mb-2 small text-muted">
                         <?php echo $lang['settings_owner']; ?>: <?php echo $master['owner_email'] ?? $lang['settings_unassigned']; ?> | 
                         <?php echo $lang['settings_maintainer']; ?>: <?php echo $master['maintainer_email'] ?? $lang['settings_unassigned']; ?>
+                        <?php if ($hasMasterBuilderColumn): ?>
+                            | <?php echo $lang['settings_builder'] ?? 'Costruttore'; ?>: <?php echo $master['builder_email'] ?? $lang['settings_unassigned']; ?>
+                        <?php endif; ?>
                     </div>
 
                     <div class="input-group mb-3">
@@ -640,37 +1287,105 @@ $masters = $stmtM->fetchAll();
                         <div class="col-md-5"><label><?php echo $lang['settings_address']; ?></label><input type="text" name="address" class="form-control" value="<?php echo htmlspecialchars($master['address']); ?>" <?php if(!$canManage) echo 'readonly'; ?>></div>
                         <div class="col-md-3"><label><?php echo $lang['settings_log_retention']; ?></label><input type="number" name="log_retention_days" class="form-control" value="<?php echo $master['log_retention_days']; ?>" min="1" max="365" <?php if(!$canManage) echo 'readonly'; ?>></div>
                     </div>
+                    <div class="row mt-3">
+                        <div class="col-md-4">
+                            <label>Data creazione</label>
+                            <input type="text" class="form-control" value="<?php echo htmlspecialchars((string)($master['created_at'] ?? '')); ?>" readonly>
+                        </div>
+                        <?php if ($hasMasterDeliveryDateColumn): ?>
+                        <div class="col-md-4">
+                            <label>Data consegna</label>
+                            <input type="date" name="delivery_date" class="form-control" value="<?php echo htmlspecialchars((string)($master['delivery_date'] ?? '')); ?>" <?php if(!$canManage) echo 'readonly'; ?>>
+                        </div>
+                        <?php endif; ?>
+                    </div>
+                    <?php if ($hasMasterNotesColumn): ?>
+                    <div class="row mt-3">
+                        <div class="col-md-12">
+                            <label>Note impianto</label>
+                            <textarea name="notes" class="form-control" rows="2" <?php if(!$canManage) echo 'readonly'; ?>><?php echo htmlspecialchars((string)($master['notes'] ?? '')); ?></textarea>
+                        </div>
+                    </div>
+                    <?php endif; ?>
 
-                    <?php if ($canManage): // Mostra i campi di assegnazione solo a chi può gestire ?>
+                    <?php if ($canManage): // Mostra i campi di assegnazione solo a chi puÃ² gestire ?>
                         <div class="row mt-3">
-                            <div class="col-md-6">
+                            <div class="col-md-4">
+                                <label>Tipo impianto</label>
+                                <select name="plant_kind" class="form-select">
+                                    <option value="" <?php echo $resolvedPlantKind === '' ? 'selected' : ''; ?>>Non specificato</option>
+                                    <option value="display" <?php echo $resolvedPlantKind === 'display' ? 'selected' : ''; ?>>Display</option>
+                                    <option value="standalone" <?php echo $resolvedPlantKind === 'standalone' ? 'selected' : ''; ?>>Standalone</option>
+                                    <option value="rewamping" <?php echo $resolvedPlantKind === 'rewamping' ? 'selected' : ''; ?>>Rewamping</option>
+                                </select>
+                            </div>
+                            <div class="col-md-4 d-flex align-items-end">
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" role="switch" id="permanentOffline-<?php echo (int)$master['id']; ?>" name="permanently_offline" value="1" <?php echo $isPermanentOffline ? 'checked' : ''; ?>>
+                                    <label class="form-check-label" for="permanentOffline-<?php echo (int)$master['id']; ?>">Impianto permanentemente offline</label>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="row mt-3">
+                            <div class="col-md-4">
                                 <label><?php echo $lang['settings_assign_owner']; ?></label>
-                                <select name="owner_id" class="form-select">
+                                <input type="text" class="form-control form-control-sm mb-1 select-filter-input" data-target="ownerSelect-<?php echo (int)$master['id']; ?>" placeholder="Filtra...">
+                                <select name="owner_id" id="ownerSelect-<?php echo (int)$master['id']; ?>" class="form-select">
                                     <option value=""><?php echo $lang['settings_none']; ?></option>
                                     <?php
-                                    // Carica i contatti dell'utente che sono anche utenti del sistema
-                                    $contacts_stmt = $pdo->prepare("SELECT u.id, c.name, u.email FROM contacts c JOIN users u ON c.linked_user_id = u.id WHERE c.managed_by_user_id = ? ORDER BY c.name");
-                                    $contacts_stmt->execute([$currentUserId]);
-                                    foreach($contacts_stmt->fetchAll() as $c) {
-                                        $selected = ($c['id'] == $master['owner_id']) ? 'selected' : '';
-                                        echo "<option value='{$c['id']}' {$selected}>{$c['email']}</option>";
+                                    $ownerOptionIds = array_map(static fn($row) => (int)$row['id'], $assignOwnerOptions);
+                                    if (!empty($master['owner_id']) && !in_array((int)$master['owner_id'], $ownerOptionIds, true) && !empty($master['owner_email'])) {
+                                        echo "<option value='" . (int)$master['owner_id'] . "' selected>" . htmlspecialchars((string)$master['owner_email'] . ' [non attivo]') . "</option>";
+                                    }
+                                    ?>
+                                    <?php
+                                    foreach($assignOwnerOptions as $c) {
+                                        $selected = ((int)$c['id'] === (int)$master['owner_id']) ? 'selected' : '';
+                                        echo "<option value='{$c['id']}' {$selected}>" . htmlspecialchars(ecSettingsUserOptionLabel($c, $hasUsersPortalAccessLevelColumn)) . "</option>";
                                     }
                                     ?>
                                 </select>
                             </div>
-                            <div class="col-md-6">
+                            <div class="col-md-4">
                                 <label><?php echo $lang['settings_assign_maintainer']; ?></label>
-                                <select name="maintainer_id" class="form-select">
+                                <input type="text" class="form-control form-control-sm mb-1 select-filter-input" data-target="maintainerSelect-<?php echo (int)$master['id']; ?>" placeholder="Filtra...">
+                                <select name="maintainer_id" id="maintainerSelect-<?php echo (int)$master['id']; ?>" class="form-select">
                                     <option value=""><?php echo $lang['settings_none']; ?></option>
-                                    <?php 
-                                    $maintainers = $pdo->query("SELECT id, email FROM users WHERE role = 'maintainer'")->fetchAll();
-                                    foreach($maintainers as $m) {
-                                        $selected = ($m['id'] == $master['maintainer_id']) ? 'selected' : '';
-                                        echo "<option value='{$m['id']}' {$selected}>{$m['email']}</option>";
+                                    <?php
+                                    $maintainerOptionIds = array_map(static fn($row) => (int)$row['id'], $assignMaintainerOptions);
+                                    if (!empty($master['maintainer_id']) && !in_array((int)$master['maintainer_id'], $maintainerOptionIds, true) && !empty($master['maintainer_email'])) {
+                                        echo "<option value='" . (int)$master['maintainer_id'] . "' selected>" . htmlspecialchars((string)$master['maintainer_email'] . ' [non attivo]') . "</option>";
+                                    }
+                                    ?>
+                                    <?php
+                                    foreach($assignMaintainerOptions as $m) {
+                                        $selected = ((int)$m['id'] === (int)$master['maintainer_id']) ? 'selected' : '';
+                                        echo "<option value='{$m['id']}' {$selected}>" . htmlspecialchars(ecSettingsUserOptionLabel($m, $hasUsersPortalAccessLevelColumn)) . "</option>";
                                     }
                                     ?>
                                 </select>
                             </div>
+                            <?php if ($hasMasterBuilderColumn): ?>
+                            <div class="col-md-4">
+                                <label><?php echo $lang['settings_assign_builder'] ?? 'Assegna a Costruttore'; ?></label>
+                                <input type="text" class="form-control form-control-sm mb-1 select-filter-input" data-target="builderSelect-<?php echo (int)$master['id']; ?>" placeholder="Filtra...">
+                                <select name="builder_id" id="builderSelect-<?php echo (int)$master['id']; ?>" class="form-select">
+                                    <option value=""><?php echo $lang['settings_none']; ?></option>
+                                    <?php
+                                    $builderOptionIds = array_map(static fn($row) => (int)$row['id'], $assignBuilderOptions);
+                                    if (!empty($master['builder_id']) && !in_array((int)$master['builder_id'], $builderOptionIds, true) && !empty($master['builder_email'])) {
+                                        echo "<option value='" . (int)$master['builder_id'] . "' selected>" . htmlspecialchars((string)$master['builder_email'] . ' [non attivo]') . "</option>";
+                                    }
+                                    ?>
+                                    <?php
+                                    foreach($assignBuilderOptions as $b) {
+                                        $selected = ((int)$b['id'] === (int)($master['builder_id'] ?? 0)) ? 'selected' : '';
+                                        echo "<option value='{$b['id']}' {$selected}>" . htmlspecialchars(ecSettingsUserOptionLabel($b, $hasUsersPortalAccessLevelColumn)) . "</option>";
+                                    }
+                                    ?>
+                                </select>
+                            </div>
+                            <?php endif; ?>
                         </div>
                     <?php endif; ?>
 
@@ -696,6 +1411,7 @@ $masters = $stmtM->fetchAll();
                             <button type="submit" name="action" value="restore_master" class="btn btn-warning btn-sm"><?php echo $lang['settings_restore']; ?></button>
                             <button type="submit" name="action" value="hard_delete_master" class="btn btn-dark btn-sm" onclick="return confirm('<?php echo $lang['settings_hard_delete_confirm']; ?>');"><?php echo $lang['settings_hard_delete']; ?></button>
                         <?php endif; ?>
+                    </div>
                     </div>
                 </form>
             <?php endforeach; ?>
@@ -834,9 +1550,14 @@ $masters = $stmtM->fetchAll();
           <label class="form-label">Dismissione seriali durante eliminazione</label>
           <select name="retire_mode" id="deleteRetireMode" class="form-select">
             <option value="none">Nessuna dismissione automatica</option>
+            <?php if ($canSerialLifecycle): ?>
             <option value="master_only">Dismetti solo la master</option>
             <option value="all_devices">Dismetti master + tutte le periferiche rilevate</option>
+            <?php endif; ?>
           </select>
+          <?php if (!$canSerialLifecycle): ?>
+          <div class="form-text text-muted">Dismissione/annullamento seriali non abilitati per la tua utenza.</div>
+          <?php endif; ?>
         </div>
 
         <div id="retireReasonWrap" class="d-none">
@@ -869,6 +1590,8 @@ $masters = $stmtM->fetchAll();
 
 <script>
 let deletePlantModal;
+let addressSuggestTimer = null;
+const USER_CAN_SERIAL_LIFECYCLE_SETTINGS = <?php echo $canSerialLifecycle ? 'true' : 'false'; ?>;
 
 function copyToClipboard(elementId) {
     var copyText = document.getElementById(elementId);
@@ -884,6 +1607,9 @@ function openDeletePlantModal(masterId, nickname, serialNumber) {
     document.getElementById('deleteRetireMode').value = 'none';
     document.getElementById('deleteRetireReason').value = '';
     document.getElementById('retireReasonWrap').classList.add('d-none');
+    if (!USER_CAN_SERIAL_LIFECYCLE_SETTINGS) {
+        document.getElementById('deleteRetireMode').value = 'none';
+    }
     deletePlantModal.show();
 }
 
@@ -894,11 +1620,166 @@ document.addEventListener('DOMContentLoaded', function () {
     const reasonEl = document.getElementById('deleteRetireReason');
     if (retireModeEl && reasonWrapEl && reasonEl) {
         retireModeEl.addEventListener('change', function () {
-            const needReason = this.value !== 'none';
+            const needReason = USER_CAN_SERIAL_LIFECYCLE_SETTINGS && this.value !== 'none';
             reasonWrapEl.classList.toggle('d-none', !needReason);
             reasonEl.required = needReason;
             if (!needReason) {
                 reasonEl.value = '';
+            }
+        });
+    }
+
+    // Filtro client-side dei select assegnazione (owner/maintainer/builder).
+    document.querySelectorAll('.select-filter-input').forEach((inputEl) => {
+        inputEl.addEventListener('input', function () {
+            const targetId = this.getAttribute('data-target');
+            if (!targetId) return;
+            const selectEl = document.getElementById(targetId);
+            if (!selectEl) return;
+            const q = (this.value || '').toLowerCase().trim();
+            Array.from(selectEl.options).forEach((opt, idx) => {
+                if (idx === 0) {
+                    opt.hidden = false; // "Nessuno" sempre visibile
+                    return;
+                }
+                const txt = (opt.textContent || '').toLowerCase();
+                opt.hidden = q !== '' && txt.indexOf(q) === -1;
+            });
+        });
+    });
+
+    const existingPlantFilterEls = {
+        name: document.getElementById('existingPlantFilterName'),
+        serial: document.getElementById('existingPlantFilterSerial'),
+        address: document.getElementById('existingPlantFilterAddress'),
+        owner: document.getElementById('existingPlantFilterOwner'),
+        maintainer: document.getElementById('existingPlantFilterMaintainer'),
+        builder: document.getElementById('existingPlantFilterBuilder'),
+        status: document.getElementById('existingPlantFilterStatus')
+    };
+    const existingPlantCards = Array.from(document.querySelectorAll('.existing-plant-card'));
+    const existingPlantVisibleCountEl = document.getElementById('existingPlantVisibleCount');
+    function applyExistingPlantFilters() {
+        let visible = 0;
+        existingPlantCards.forEach((card) => {
+            const matches =
+                (!existingPlantFilterEls.name || !existingPlantFilterEls.name.value || (card.dataset.plantName || '').includes(existingPlantFilterEls.name.value.toLowerCase())) &&
+                (!existingPlantFilterEls.serial || !existingPlantFilterEls.serial.value || (card.dataset.serial || '').includes(existingPlantFilterEls.serial.value.toLowerCase())) &&
+                (!existingPlantFilterEls.address || !existingPlantFilterEls.address.value || (card.dataset.address || '').includes(existingPlantFilterEls.address.value.toLowerCase())) &&
+                (!existingPlantFilterEls.owner || !existingPlantFilterEls.owner.value || (card.dataset.owner || '').includes(existingPlantFilterEls.owner.value.toLowerCase())) &&
+                (!existingPlantFilterEls.maintainer || !existingPlantFilterEls.maintainer.value || (card.dataset.maintainer || '').includes(existingPlantFilterEls.maintainer.value.toLowerCase())) &&
+                (!existingPlantFilterEls.builder || !existingPlantFilterEls.builder.value || (card.dataset.builder || '').includes(existingPlantFilterEls.builder.value.toLowerCase())) &&
+                (!existingPlantFilterEls.status || !existingPlantFilterEls.status.value || (card.dataset.status || '') === existingPlantFilterEls.status.value.toLowerCase());
+            card.classList.toggle('existing-plant-hidden', !matches);
+            if (matches) {
+                visible++;
+            }
+        });
+        if (existingPlantVisibleCountEl) {
+            existingPlantVisibleCountEl.textContent = String(visible);
+        }
+    }
+    Object.values(existingPlantFilterEls).forEach((el) => {
+        if (!el) return;
+        el.addEventListener('input', applyExistingPlantFilters);
+        el.addEventListener('change', applyExistingPlantFilters);
+    });
+    const resetExistingPlantFiltersEl = document.getElementById('resetExistingPlantFilters');
+    if (resetExistingPlantFiltersEl) {
+        resetExistingPlantFiltersEl.addEventListener('click', function () {
+            Object.values(existingPlantFilterEls).forEach((el) => {
+                if (el) el.value = '';
+            });
+            applyExistingPlantFilters();
+        });
+    }
+    applyExistingPlantFilters();
+
+    // Suggerimenti indirizzo (OpenStreetMap Nominatim) per la creazione nuovo impianto.
+    // Non e' vincolante: il campo resta liberamente modificabile.
+    const addressInputEl = document.getElementById('newPlantAddress');
+    const addressListEl = document.getElementById('addressSuggestions');
+    const ownerSelectEl = document.getElementById('newPlantOwnerId');
+    const maintainerSelectEl = document.querySelector('select[name="maintainer_id"]');
+    const builderSelectEl = document.querySelector('select[name="builder_id"]');
+    if (addressInputEl && addressListEl) {
+        addressInputEl.addEventListener('input', function () {
+            const query = (this.value || '').trim();
+            if (query.length < 4) {
+                addressListEl.innerHTML = '';
+                return;
+            }
+
+            if (addressSuggestTimer) {
+                clearTimeout(addressSuggestTimer);
+            }
+
+            addressSuggestTimer = setTimeout(async () => {
+                try {
+                    const url = 'https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=0&limit=8&countrycodes=it&q=' + encodeURIComponent(query);
+                    const res = await fetch(url, { method: 'GET', headers: { 'Accept': 'application/json' } });
+                    if (!res.ok) return;
+                    const rows = await res.json();
+                    if (!Array.isArray(rows)) return;
+
+                    addressListEl.innerHTML = '';
+                    const seen = new Set();
+                    rows.forEach((item) => {
+                        const display = String(item.display_name || '').trim();
+                        if (!display || seen.has(display)) return;
+                        seen.add(display);
+                        const opt = document.createElement('option');
+                        opt.value = display;
+                        addressListEl.appendChild(opt);
+                    });
+                } catch (e) {
+                    // In caso di errore rete non blocchiamo il form.
+                }
+            }, 350);
+        });
+    }
+    function syncAddressFromSelect(selectEl) {
+        if (!addressInputEl || !selectEl) return;
+        if (String(addressInputEl.value || '').trim() !== '' || String(selectEl.value || '').trim() === '') {
+            return;
+        }
+        const selectedOpt = selectEl.options[selectEl.selectedIndex];
+        const candidateAddress = selectedOpt ? String(selectedOpt.getAttribute('data-address') || '').trim() : '';
+        if (candidateAddress !== '') {
+            addressInputEl.value = candidateAddress;
+        }
+    }
+    if (ownerSelectEl) {
+        ownerSelectEl.addEventListener('change', function () {
+            syncAddressFromSelect(ownerSelectEl);
+        });
+    }
+    if (maintainerSelectEl) {
+        maintainerSelectEl.addEventListener('change', function () {
+            if (ownerSelectEl && String(ownerSelectEl.value || '').trim() !== '') return;
+            syncAddressFromSelect(maintainerSelectEl);
+        });
+    }
+    if (builderSelectEl) {
+        builderSelectEl.addEventListener('change', function () {
+            if (ownerSelectEl && String(ownerSelectEl.value || '').trim() !== '') return;
+            if (maintainerSelectEl && String(maintainerSelectEl.value || '').trim() !== '') return;
+            syncAddressFromSelect(builderSelectEl);
+        });
+    }
+
+    const newPlantSerialEl = document.getElementById('newPlantSerial');
+    const newPlantKindEl = document.getElementById('newPlantKind');
+    if (newPlantSerialEl && newPlantKindEl) {
+        newPlantSerialEl.addEventListener('input', function () {
+            const serial = String(this.value || '').trim();
+            const match = serial.match(/^[0-9]{6}(01|02|03|04|05)[0-9]{4}$/);
+            if (!match) return;
+            const typeCode = match[1];
+            if (typeCode === '01') {
+                newPlantKindEl.value = 'display';
+            } else if (typeCode === '02' && newPlantKindEl.value === 'display') {
+                newPlantKindEl.value = '';
             }
         });
     }
@@ -907,6 +1788,8 @@ document.addEventListener('DOMContentLoaded', function () {
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
+
+
 
 
 

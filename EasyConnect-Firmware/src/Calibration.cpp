@@ -5,7 +5,8 @@
 
 extern Impostazioni config;
 extern Preferences memoria;
-extern float currentDeltaP; // Variabile globale definita in main_master.cpp
+extern float currentDeltaP; // Variabile globale definita in main_standalone_rewamping_controller.cpp
+extern bool currentDeltaPValid; // True quando il DeltaP corrente e' valido
 extern WebServer server; // Riferimento al server HTTP definito in WebHandler.cpp
 
 // Variabili di stato per il Wizard
@@ -15,6 +16,158 @@ unsigned long lastSampleTick = 0;
 int sampleCount = 0;
 float sampleAccumulator = 0.0;
 float lastSampledValue = 0.0;
+
+// --- STATO MONITOR DELTA P (Filtro + Isteresi) ---
+static const int DELTA_WINDOW_SIZE = 5;
+static const int DELTA_MIN_VALID_FOR_FILTER = 3;
+static const float DELTA_EMA_ALPHA = 0.35f;
+static const unsigned long ALERT_RISE_HOLD_MS = 12000;   // tempo minimo sopra soglia prima di alzare lo stato
+static const unsigned long ALERT_FALL_HOLD_MS = 20000;   // tempo minimo sotto soglia prima di abbassare lo stato
+static const float ALERT_CLEAR_HYST_PCT = 8.0f;          // isteresi in discesa per stabilizzare
+
+static float gDeltaWindow[DELTA_WINDOW_SIZE] = {0.0f};
+static int gDeltaWindowCount = 0;
+static int gDeltaWindowIdx = 0;
+static int gDeltaInvalidStreak = 0;
+static bool gFilteredDeltaValid = false;
+static float gFilteredDelta = 0.0f;
+
+static int gStableExceeded = -1;
+static int gPendingRiseTarget = -1;
+static unsigned long gPendingRiseStart = 0;
+static bool gPendingFallActive = false;
+static int gPendingFallTarget = -1;
+static unsigned long gPendingFallStart = 0;
+
+static void resetDeltaMonitorState() {
+    for (int i = 0; i < DELTA_WINDOW_SIZE; i++) gDeltaWindow[i] = 0.0f;
+    gDeltaWindowCount = 0;
+    gDeltaWindowIdx = 0;
+    gDeltaInvalidStreak = 0;
+    gFilteredDeltaValid = false;
+    gFilteredDelta = 0.0f;
+    gStableExceeded = -1;
+    gPendingRiseTarget = -1;
+    gPendingRiseStart = 0;
+    gPendingFallActive = false;
+    gPendingFallTarget = -1;
+    gPendingFallStart = 0;
+}
+
+static float medianWindowValue() {
+    if (gDeltaWindowCount <= 0) return 0.0f;
+    float tmp[DELTA_WINDOW_SIZE];
+    for (int i = 0; i < gDeltaWindowCount; i++) tmp[i] = gDeltaWindow[i];
+
+    for (int i = 0; i < gDeltaWindowCount - 1; i++) {
+        for (int j = i + 1; j < gDeltaWindowCount; j++) {
+            if (tmp[j] < tmp[i]) {
+                float t = tmp[i];
+                tmp[i] = tmp[j];
+                tmp[j] = t;
+            }
+        }
+    }
+
+    const int mid = gDeltaWindowCount / 2;
+    if ((gDeltaWindowCount % 2) == 1) return tmp[mid];
+    return (tmp[mid - 1] + tmp[mid]) * 0.5f;
+}
+
+static int computeExceededLevelInstant(float currentP) {
+    if (config.numVelocitaSistema <= 0) return -1;
+    int maxExceeded = -1;
+    for (int i = 1; i <= config.numVelocitaSistema; i++) {
+        float base = config.deltaP_Calib[i];
+        if (base <= 5.0f) continue;
+        float limit = base * (1.0f + (config.perc_Calib[i] / 100.0f));
+        if (currentP > limit) maxExceeded = i;
+    }
+    return maxExceeded;
+}
+
+static float clearLimitForLevel(int level) {
+    if (level < 1 || level > config.numVelocitaSistema) return 0.0f;
+    float base = config.deltaP_Calib[level];
+    float limit = base * (1.0f + (config.perc_Calib[level] / 100.0f));
+    float clearLimit = limit * (1.0f - (ALERT_CLEAR_HYST_PCT / 100.0f));
+    float floorLimit = base * 1.02f; // non scendere sotto ~baseline
+    return (clearLimit > floorLimit) ? clearLimit : floorLimit;
+}
+
+static void updateThresholdState(float filteredP, bool validSample) {
+    if (!validSample || config.numVelocitaSistema <= 0) return;
+
+    const unsigned long now = millis();
+    const int instantExceeded = computeExceededLevelInstant(filteredP);
+
+    // Gestione salita stato (verso soglie piu' alte).
+    if (instantExceeded > gStableExceeded) {
+        if (gPendingRiseTarget != instantExceeded) {
+            gPendingRiseTarget = instantExceeded;
+            gPendingRiseStart = now;
+        } else if ((now - gPendingRiseStart) >= ALERT_RISE_HOLD_MS) {
+            gStableExceeded = instantExceeded;
+            gPendingRiseTarget = -1;
+        }
+    } else {
+        gPendingRiseTarget = -1;
+    }
+
+    // Gestione discesa stato con isteresi.
+    if (gStableExceeded >= 0) {
+        bool belowClear = (filteredP < clearLimitForLevel(gStableExceeded));
+        int desiredFallTarget = belowClear ? instantExceeded : gStableExceeded;
+        if (desiredFallTarget < gStableExceeded) {
+            if (!gPendingFallActive || gPendingFallTarget != desiredFallTarget) {
+                gPendingFallActive = true;
+                gPendingFallTarget = desiredFallTarget;
+                gPendingFallStart = now;
+            } else if ((now - gPendingFallStart) >= ALERT_FALL_HOLD_MS) {
+                gStableExceeded = desiredFallTarget;
+                gPendingFallActive = false;
+            }
+        } else {
+            gPendingFallActive = false;
+        }
+    } else {
+        gPendingFallActive = false;
+    }
+}
+
+void updateDeltaPMonitoring(float rawDeltaP, bool isValidSample) {
+    if (!isValidSample) {
+        gDeltaInvalidStreak++;
+        if (gDeltaInvalidStreak >= 3) {
+            gFilteredDeltaValid = false;
+        }
+        return;
+    }
+
+    gDeltaInvalidStreak = 0;
+    gDeltaWindow[gDeltaWindowIdx] = rawDeltaP;
+    gDeltaWindowIdx = (gDeltaWindowIdx + 1) % DELTA_WINDOW_SIZE;
+    if (gDeltaWindowCount < DELTA_WINDOW_SIZE) gDeltaWindowCount++;
+
+    float median = medianWindowValue();
+    if (gDeltaWindowCount >= DELTA_MIN_VALID_FOR_FILTER) {
+        if (!gFilteredDeltaValid) {
+            gFilteredDelta = median;
+        } else {
+            gFilteredDelta = (DELTA_EMA_ALPHA * median) + ((1.0f - DELTA_EMA_ALPHA) * gFilteredDelta);
+        }
+        gFilteredDeltaValid = true;
+        updateThresholdState(gFilteredDelta, true);
+    }
+}
+
+float getFilteredDeltaP() {
+    return gFilteredDelta;
+}
+
+bool isFilteredDeltaPValid() {
+    return gFilteredDeltaValid;
+}
 
 // --- HTML PAGINA CALIBRAZIONE ---
 String getCalibrationPageHTML() {
@@ -177,7 +330,8 @@ void handleApiStartSample() {
     sampleCount = 0;
     sampleAccumulator = 0.0;
     sampleStartTime = millis();
-    lastSampleTick = 0;
+    lastSampleTick = sampleStartTime;
+    lastSampledValue = 0.0f;
     server.send(200, "text/plain", "OK");
 }
 
@@ -208,11 +362,12 @@ void handleApiSaveStep() {
             
             // Salvataggio in memoria se è l'ultimo step
             if (idx == total) {
-                memoria.begin("easy", false);
-                memoria.putBytes("calibP", config.deltaP_Calib, sizeof(config.deltaP_Calib));
-                memoria.putBytes("calibPerc", config.perc_Calib, sizeof(config.perc_Calib));
-                memoria.putInt("numVel", config.numVelocitaSistema);
-                memoria.end();
+                Preferences pref;
+                pref.begin("easy", false);
+                pref.putBytes("calibP", config.deltaP_Calib, sizeof(config.deltaP_Calib));
+                pref.putBytes("calibPerc", config.perc_Calib, sizeof(config.perc_Calib));
+                pref.putInt("numVel", config.numVelocitaSistema);
+                pref.end();
             }
         }
     }
@@ -238,9 +393,10 @@ void handleApiUpdateThresholds() {
             }
         }
 
-        memoria.begin("easy", false);
-        memoria.putBytes("calibPerc", config.perc_Calib, sizeof(config.perc_Calib));
-        memoria.end();
+        Preferences pref;
+        pref.begin("easy", false);
+        pref.putBytes("calibPerc", config.perc_Calib, sizeof(config.perc_Calib));
+        pref.end();
     }
     server.send(200, "text/plain", "OK");
 }
@@ -249,17 +405,22 @@ void handleApiUpdateThresholds() {
 void calibrationLoop() {
     if (isSampling) {
         unsigned long now = millis();
-        // Eseguiamo un campionamento ogni secondo
-        if (now - lastSampleTick >= 1000) {
-            lastSampleTick = now;
-            sampleAccumulator += currentDeltaP;
-            sampleCount++;
-            
-            // Fine campionamento (20 campioni)
-            if (sampleCount >= 20) {
-                lastSampledValue = sampleAccumulator / 20.0;
-                isSampling = false;
+        const unsigned long SAMPLE_INTERVAL_MS = 1000;
+        const unsigned long SAMPLE_WINDOW_MS = 20000;
+
+        // Campionamento a 1 Hz: media solo su campioni validi.
+        while (now - lastSampleTick >= SAMPLE_INTERVAL_MS) {
+            lastSampleTick += SAMPLE_INTERVAL_MS;
+            if (currentDeltaPValid) {
+                sampleAccumulator += currentDeltaP;
+                sampleCount++;
             }
+        }
+
+        // Finestra temporale fissa di 20 secondi.
+        if (now - sampleStartTime >= SAMPLE_WINDOW_MS) {
+            lastSampledValue = (sampleCount > 0) ? (sampleAccumulator / (float)sampleCount) : 0.0f;
+            isSampling = false;
         }
     }
 }
@@ -273,33 +434,25 @@ void setupCalibration() {
     server.on("/api/calib/update", HTTP_POST, handleApiUpdateThresholds);
     
     // Caricamento dati all'avvio
-    memoria.begin("easy", true);
-    config.numVelocitaSistema = memoria.getInt("numVel", 0);
-    memoria.getBytes("calibP", config.deltaP_Calib, sizeof(config.deltaP_Calib));
-    memoria.getBytes("calibPerc", config.perc_Calib, sizeof(config.perc_Calib));
-    memoria.end();
+    Preferences pref;
+    pref.begin("easy", true);
+    config.numVelocitaSistema = pref.getInt("numVel", 0);
+    pref.getBytes("calibP", config.deltaP_Calib, sizeof(config.deltaP_Calib));
+    pref.getBytes("calibPerc", config.perc_Calib, sizeof(config.perc_Calib));
+    pref.end();
+    resetDeltaMonitorState();
 }
 
 // --- LOGICA SOGLIE ---
 String checkThresholds(float currentP) {
-    if (config.numVelocitaSistema == 0) return ""; // Nessuna calibrazione
+    (void)currentP; // La decisione usa stato stabile interno (filtro + isteresi).
+    if (config.numVelocitaSistema == 0 || !gFilteredDeltaValid) return "";
 
-    int maxExceeded = -1;
-
-    // Controlla tutte le soglie
-    for (int i = 1; i <= config.numVelocitaSistema; i++) {
-        float limit = config.deltaP_Calib[i] * (1.0 + (config.perc_Calib[i] / 100.0));
-        // Ignora soglie a 0 o molto basse se non rilevanti
-        if (config.deltaP_Calib[i] > 5.0 && currentP > limit) {
-            maxExceeded = i;
-        }
-    }
-
-    if (maxExceeded != -1) {
-        if (maxExceeded == config.numVelocitaSistema) {
+    if (gStableExceeded != -1) {
+        if (gStableExceeded == config.numVelocitaSistema) {
             return "Cambiare Filtri";
         } else {
-            return "Superata soglia " + String(maxExceeded);
+            return "Superata soglia " + String(gStableExceeded);
         }
     }
     

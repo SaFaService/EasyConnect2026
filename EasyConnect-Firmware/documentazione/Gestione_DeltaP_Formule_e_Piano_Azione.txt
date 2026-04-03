@@ -1,0 +1,217 @@
+GESTIONE DELTA P - FORMULE, VARIABILI E PIANO AZIONE
+Versione: 2026-03-03
+
+OBIETTIVO
+- Gestire soglie DeltaP per velocita 1..N evitando:
+  1) falsi allarmi
+  2) allarmi tardivi quando la velocita massima non viene quasi mai usata.
+- Produrre eventi del tipo:
+  - allarme velocita 1
+  - allarme velocita 2
+  - ...
+  - allarme velocita N (massima)
+
+---------------------------------------------------------------------
+1) VARIABILI (GLOSSARIO)
+---------------------------------------------------------------------
+INDICI E DATI BASE
+- N: numero velocita impianto (impostato in calibrazione).
+- v: indice velocita, con v = 1..N.
+- vmax: velocita massima, quindi vmax = N.
+- P_raw: DeltaP istantaneo (Pa).
+- P_filt: DeltaP filtrato (Pa), usato per decisioni.
+
+DATI DA CALIBRAZIONE "PULITO"
+- C[v]: riferimento pulito alla velocita v (tipicamente mediana su 20-60 s).
+  Significato: baseline pulita per quella velocita.
+- Nband[v]: banda rumore pulito alla velocita v.
+  Formula consigliata: Nband[v] = P95_clean[v] - P05_clean[v].
+  Significato: ampiezza oscillazione naturale a filtro pulito.
+
+PARAMETRI DI SOGLIA
+- Lmax: soglia allarme assoluta in Pa alla velocita massima (vmax).
+  Viene impostata nel wizard.
+- Rmax: margine relativo alla velocita massima.
+  Formula: Rmax = (Lmax - C[vmax]) / C[vmax].
+  Significato: quanto sopra il pulito (in percentuale relativa) si vuole allarmare in vmax.
+
+PARAMETRI DI SCALATURA VELOCITA
+- k_lab[v]: coefficiente da laboratorio per velocita v.
+  Vincoli tipici: 0 < k_lab[v] <= 1, con k_lab[vmax] = 1.
+- Ksite: fattore sito (opzionale) per adattare un impianto reale rispetto al lab.
+  Esempio range: 0.85 .. 1.20.
+- k_eff[v]: coefficiente effettivo.
+  Formula: k_eff[v] = k_lab[v] * Ksite.
+
+MARGINI E SOGLIE PER VELOCITA
+- Mraw[v]: margine teorico calcolato da Rmax.
+  Formula: Mraw[v] = C[v] * k_eff[v] * Rmax.
+- Mmin[v]: margine minimo anti-falsi, basato sul rumore.
+  Formula: Mmin[v] = gamma * Nband[v].
+  gamma consigliato: 2.0 .. 2.5 (start 2.2).
+- M[v]: margine finale usato per soglia.
+  Formula: M[v] = max(Mraw[v], Mmin[v]).
+- L[v]: soglia allarme ON alla velocita v.
+  Formula: L[v] = C[v] + M[v].
+
+ISTERESI E SOGLIE OFF
+- H[v]: isteresi in Pa per velocita v.
+  Formula consigliata: H[v] = max(0.35*Nband[v], 0.20*M[v]).
+- alarm_on[v] = L[v]
+- alarm_off[v] = L[v] - H[v]
+
+PREALLARME (OPZIONALE MA CONSIGLIATO)
+- pre_on[v]  = C[v] + 0.75*M[v]
+- pre_off[v] = pre_on[v] - 0.60*H[v]
+
+PERSISTENZE TEMPORALI (ANTI CHATTER)
+- Ton_ms: tempo minimo sopra soglia ON prima di confermare allarme.
+  Tipico: 60_000 .. 120_000 ms.
+- Toff_ms: tempo minimo sotto soglia OFF prima di chiudere allarme.
+  Tipico: 180_000 .. 300_000 ms.
+- blanking_speed_change_ms: pausa dopo cambio velocita.
+  Tipico: 20_000 .. 30_000 ms.
+
+STATO EVENTI
+- level_active: livello allarme attuale (0=nessun allarme, 1..N=allarme velocita v).
+- event_sent[v]: flag per non reinviare ripetutamente lo stesso evento.
+
+---------------------------------------------------------------------
+2) FORMULE - FLUSSO DI CALCOLO
+---------------------------------------------------------------------
+STEP A: FILTRO MISURA
+- Acquisisco P_raw.
+- Calcolo P_filt (mediana finestra + EMA, come gia presente nel firmware).
+
+STEP B: COSTRUZIONE MODELLO SOGLIE
+1) Rmax = (Lmax - C[vmax]) / C[vmax]
+2) Per ogni velocita v:
+   - Mraw[v] = C[v] * k_eff[v] * Rmax
+   - Mmin[v] = gamma * Nband[v]
+   - M[v] = max(Mraw[v], Mmin[v])
+   - L[v] = C[v] + M[v]
+   - H[v] = max(0.35*Nband[v], 0.20*M[v])
+   - alarm_on[v] = L[v]
+   - alarm_off[v] = L[v] - H[v]
+   - pre_on[v] = C[v] + 0.75*M[v]
+   - pre_off[v] = pre_on[v] - 0.60*H[v]
+
+STEP C: DECISIONE STATO (RUNTIME)
+- Determino velocita corrente v_cur.
+- Se P_filt >= alarm_on[v_cur] per almeno Ton_ms -> stato = "allarme velocita v_cur".
+- Per uscire: P_filt <= alarm_off[v_cur] per almeno Toff_ms.
+- Preallarme analogo su pre_on/pre_off.
+- Dopo cambio velocita applico blanking (temporaneo) per evitare transitori.
+
+---------------------------------------------------------------------
+3) ESEMPIO NUMERICO COERENTE (COMPATIBILE)
+---------------------------------------------------------------------
+NOTA
+- I numeri seguenti sono coerenti con i test, ma usati solo come esempio didattico.
+
+DATI INPUT (calibrazione pulito)
+- N = 5
+- C[1..5] = [63, 72, 82, 119, 138] Pa
+- Nband[1..5] = [8, 12, 16, 24, 28] Pa
+- Lmax = 220 Pa in vmax=5
+- k_lab[1..5] = [0.55, 0.70, 0.82, 0.92, 1.00]
+- Ksite = 1.00
+- gamma = 2.2
+
+CALCOLO BASE
+- Rmax = (220 - 138) / 138 = 0.5942 = 59.42%
+
+SVILUPPO DETTAGLIATO SU VELOCITA 3
+- C[3] = 82
+- Nband[3] = 16
+- k_eff[3] = 0.82 * 1.00 = 0.82
+- Mraw[3] = 82 * 0.82 * 0.5942 = 39.95
+- Mmin[3] = 2.2 * 16 = 35.20
+- M[3] = max(39.95, 35.20) = 39.95
+- L[3] = 82 + 39.95 = 121.95
+- H[3] = max(0.35*16, 0.20*39.95) = max(5.60, 7.99) = 7.99
+- alarm_on[3] = 121.95
+- alarm_off[3] = 121.95 - 7.99 = 113.96
+- pre_on[3] = 82 + 0.75*39.95 = 111.97
+- pre_off[3] = 111.97 - 0.60*7.99 = 107.17
+
+RISULTATI FINALI TUTTE LE VELOCITA (arrotondati)
+- v1: L=83.59, H=4.12, pre_on=78.44, pre_off=75.97, alarm_off=79.47
+- v2: L=101.95, H=5.99, pre_on=94.46, pre_off=90.87, alarm_off=95.96
+- v3: L=121.95, H=7.99, pre_on=111.97, pre_off=107.17, alarm_off=113.96
+- v4: L=184.05, H=13.01, pre_on=167.79, pre_off=159.98, alarm_off=171.04
+- v5: L=220.00, H=16.40, pre_on=199.50, pre_off=189.66, alarm_off=203.60
+
+INTERPRETAZIONE
+- Se lo chef usa quasi sempre velocita 2 o 3, il sistema puo comunque generare
+  "allarme velocita 2" o "allarme velocita 3" senza attendere la velocita 5.
+- Lallarme vmax resta comunque il limite finale quando si lavora alla massima.
+
+---------------------------------------------------------------------
+4) NOTE IMPORTANTI PER EVITARE FALSI ALLARMI
+---------------------------------------------------------------------
+- Usare P_filt, non P_raw, per le decisioni.
+- Applicare sempre isteresi H[v].
+- Applicare persistenze Ton/Toff.
+- Applicare blanking dopo cambio velocita.
+- Fare sanity check sensori (misure invalide -> stato non aggiornato).
+- Registrare su log il motivo transizione stato (ON/OFF + velocita + DeltaP).
+
+---------------------------------------------------------------------
+5) COME PASSARE ALLIMPLEMENTAZIONE NEL SOFTWARE ATTUALE
+---------------------------------------------------------------------
+FILE ESISTENTI COINVOLTI
+- include/GestioneMemoria.h
+- include/Calibration.h
+- src/Calibration.cpp
+- src/Serial_Controller.cpp
+- src/API_Manager.cpp
+- src/WebHandler.cpp
+
+PIANO IMPLEMENTATIVO PROPOSTO
+FASE 1 - MODELLO DATI
+- Estendere la struct Impostazioni con i campi necessari:
+  - lmax_pa
+  - k_lab[11]
+  - k_site
+  - nband_clean[11]
+  - eventuale model_version per compatibilita.
+- Mantenere retrocompatibilita con i campi esistenti (deltaP_Calib, perc_Calib).
+
+FASE 2 - CALIBRAZIONE/WIZARD
+- Nel wizard attuale, oltre a C[v], acquisire una piccola statistica di rumore pulito
+  per ottenere Nband[v] (es. P95-P05 su finestra).
+- Inserire nel wizard il valore Lmax (Pa o %) alla velocita massima.
+- Opzionale: campo Ksite (default 1.00, visibile solo avanzato).
+
+FASE 3 - CALCOLO SOGLIE IN CALIBRATION.CPP
+- Aggiungere funzione di calcolo soglie per velocita con le formule sopra.
+- Salvare soglie runtime L[v], H[v], pre_on/off.
+- Aggiornare checkThresholds() per ritornare stringhe:
+  - "Allarme velocita X"
+  - "Preallarme velocita X"
+
+FASE 4 - MACCHINA STATI ALLARMI
+- Integrare Ton/Toff e blanking cambio velocita.
+- Evitare spam eventi inviando solo su transizione (OFF->ON, ON->OFF, cambio livello).
+
+FASE 5 - ESPOSIZIONE EVENTI VERSO PORTALE
+- Nel payload API aggiungere:
+  - speed_index_current
+  - alert_level_current
+  - alert_state (ok/prealarm/alarm)
+  - alert_message (es. "allarme velocita 3").
+- Nel passaggio successivo collegheremo questi eventi ai canali Telegram/WhatsApp/mail.
+
+FASE 6 - TEST E VALIDAZIONE
+- Test su banco con scenari:
+  1) rumore alto ma filtro pulito
+  2) incremento progressivo sporco a velocita bassa
+  3) passaggi rapidi tra velocita
+  4) impianto che non usa quasi mai vmax.
+- Verificare KPI:
+  - zero/pochi falsi allarmi
+  - anticipo adeguato rispetto al "filtro molto sporco"
+  - stabilita ON/OFF (niente oscillazioni continue).
+
+FINE DOCUMENTO

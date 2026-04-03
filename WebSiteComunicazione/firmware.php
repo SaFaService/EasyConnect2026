@@ -1,12 +1,13 @@
 <?php
 session_start();
 require 'config.php';
+require_once 'auth_common.php';
 
 // Includi il gestore della lingua
 require 'lang.php';
 
-// Protezione: Solo Admin e Costruttori possono accedere
-if (!isset($_SESSION['user_id']) || ($_SESSION['user_role'] !== 'admin' && $_SESSION['user_role'] !== 'builder')) {
+// Protezione: solo Admin puo gestire le release firmware dal portale.
+if (!isset($_SESSION['user_id']) || $_SESSION['user_role'] !== 'admin') {
     header("Location: login.php");
     exit;
 }
@@ -71,6 +72,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $message_type = 'success';
         }
 
+        // 2b. DISATTIVA VERSIONE ATTIVA (senza attivarne un'altra)
+        if ($action === 'set_inactive') {
+            $fw_id = (int)($_POST['fw_id'] ?? 0);
+            if ($fw_id > 0) {
+                $stmt = $pdo->prepare("UPDATE firmware_releases SET is_active = 0 WHERE id = ?");
+                $stmt->execute([$fw_id]);
+                $message = "Firmware disattivato. Nessuna release attiva per quel tipo finche non ne attivi una manualmente.";
+                $message_type = 'warning';
+            }
+        }
+
         // 3. ELIMINA FIRMWARE
         if ($action === 'delete_firmware') {
             $fw_id = $_POST['fw_id'];
@@ -83,6 +95,53 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $message = "Errore Database: " . $e->getMessage();
         $message_type = 'danger';
     }
+}
+
+// Auto-disattiva release attive se il firmware in campo e' piu recente.
+try {
+    $deactivate = [];
+
+    // Master: versione massima realmente vista in campo.
+    $obsMaster = $pdo->query("SELECT fw_version FROM masters WHERE fw_version IS NOT NULL AND fw_version <> ''")->fetchAll(PDO::FETCH_COLUMN);
+    $maxMaster = '0.0.0';
+    foreach ($obsMaster as $v) {
+        if (version_compare((string)$v, $maxMaster, '>')) $maxMaster = (string)$v;
+    }
+    $actMaster = $pdo->query("SELECT id, version FROM firmware_releases WHERE device_type = 'master' AND is_active = 1 ORDER BY id DESC LIMIT 1")->fetch();
+    if ($actMaster && version_compare($maxMaster, (string)$actMaster['version'], '>')) {
+        $deactivate[] = (int)$actMaster['id'];
+    }
+
+    // Slave pressione: versione massima vista in measurements.
+    $obsSlave = $pdo->query("
+        SELECT fw_version
+        FROM measurements
+        WHERE slave_sn IS NOT NULL
+          AND slave_sn <> ''
+          AND slave_sn <> '0'
+          AND fw_version IS NOT NULL
+          AND fw_version <> ''
+    ")->fetchAll(PDO::FETCH_COLUMN);
+    $maxSlave = '0.0.0';
+    foreach ($obsSlave as $v) {
+        if (version_compare((string)$v, $maxSlave, '>')) $maxSlave = (string)$v;
+    }
+    $actSlave = $pdo->query("SELECT id, version FROM firmware_releases WHERE device_type = 'slave_pressure' AND is_active = 1 ORDER BY id DESC LIMIT 1")->fetch();
+    if ($actSlave && version_compare($maxSlave, (string)$actSlave['version'], '>')) {
+        $deactivate[] = (int)$actSlave['id'];
+    }
+
+    if (!empty($deactivate)) {
+        $in = implode(',', array_fill(0, count($deactivate), '?'));
+        $stmtAuto = $pdo->prepare("UPDATE firmware_releases SET is_active = 0 WHERE id IN ($in)");
+        $stmtAuto->execute($deactivate);
+        if ($message === '') {
+            $message = "Alcune release attive sono state disattivate automaticamente: in campo esistono versioni firmware superiori.";
+            $message_type = 'warning';
+        }
+    }
+} catch (Throwable $e) {
+    // Non bloccare pagina in caso di errore auto-check.
 }
 
 // Recupera l'ultima versione per ogni tipo (per il JS)
@@ -231,6 +290,10 @@ try {
                                                 <?php if (!$fw['is_active']): ?>
                                                     <button type="submit" name="action" value="set_active" class="btn btn-sm btn-outline-success" title="<?php echo $lang['fw_btn_activate_tooltip']; ?>">
                                                         <i class="fas fa-check"></i> <?php echo $lang['fw_btn_activate']; ?>
+                                                    </button>
+                                                <?php else: ?>
+                                                    <button type="submit" name="action" value="set_inactive" class="btn btn-sm btn-outline-warning" title="Disattiva release attiva">
+                                                        <i class="fas fa-pause"></i>
                                                     </button>
                                                 <?php endif; ?>
                                                 

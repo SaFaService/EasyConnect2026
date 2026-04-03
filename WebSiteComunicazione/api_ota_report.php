@@ -4,7 +4,8 @@ header('Content-Type: application/json');
 
 $input = json_decode(file_get_contents('php://input'), true);
 $apiKey = $input['api_key'] ?? '';
-$errorMessage = $input['error_message'] ?? 'Errore non specificato dal dispositivo.';
+$status = trim((string)($input['status'] ?? 'Failed'));
+$message = trim((string)($input['message'] ?? ($input['error_message'] ?? 'Errore non specificato dal dispositivo.')));
 
 if (empty($apiKey)) {
     http_response_code(403);
@@ -23,9 +24,17 @@ if (!$master) {
     exit;
 }
 
-// Aggiorna lo stato OTA a "Failed" e resetta la richiesta
-$updateStmt = $pdo->prepare("UPDATE masters SET update_requested = 0, ota_status = 'Failed', ota_message = ? WHERE id = ?");
-$updateStmt->execute([$errorMessage, $master['id']]);
+if ($status === 'Success') {
+    $updateStmt = $pdo->prepare("UPDATE masters SET update_requested = 0, ota_status = 'Success', ota_message = ? WHERE id = ?");
+    $updateStmt->execute([$message !== '' ? $message : 'Aggiornamento completato con successo.', $master['id']]);
+} elseif ($status === 'InProgress') {
+    $updateStmt = $pdo->prepare("UPDATE masters SET ota_status = 'InProgress', ota_message = ? WHERE id = ?");
+    $updateStmt->execute([$message !== '' ? $message : 'Aggiornamento in corso...', $master['id']]);
+} else {
+    // Default: fallimento
+    $updateStmt = $pdo->prepare("UPDATE masters SET update_requested = 0, ota_status = 'Failed', ota_message = ? WHERE id = ?");
+    $updateStmt->execute([$message !== '' ? $message : 'Errore non specificato dal dispositivo.', $master['id']]);
+}
 
-echo json_encode(['status' => 'ok', 'message' => 'Report di fallimento ricevuto.']);
+echo json_encode(['status' => 'ok', 'message' => 'Report OTA ricevuto.']);
 ?>

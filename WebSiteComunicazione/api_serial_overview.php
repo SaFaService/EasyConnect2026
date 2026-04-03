@@ -1,16 +1,24 @@
 <?php
 session_start();
 require 'config.php';
+require_once 'auth_common.php';
 header('Content-Type: application/json');
 
 // API overview seriali: pensata per polling UI (serials.php).
-// Risponde a utenti autenticati con ruolo admin/builder/maintainer.
+// Risponde a utenti autenticati con ruolo tecnico (admin/builder/maintainer).
 if (!isset($_SESSION['user_id'])) {
     http_response_code(401);
     echo json_encode(['status' => 'error', 'message' => 'Non autorizzato']);
     exit;
 }
-if (!isset($_SESSION['user_role']) || !in_array($_SESSION['user_role'], ['admin', 'builder', 'maintainer'], true)) {
+if (!isset($_SESSION['user_role'])) {
+    http_response_code(403);
+    echo json_encode(['status' => 'error', 'message' => 'Permessi insufficienti']);
+    exit;
+}
+$currentUserId = (int)$_SESSION['user_id'];
+$currentUserRole = (string)$_SESSION['user_role'];
+if (!in_array($currentUserRole, ['admin', 'builder', 'maintainer'], true)) {
     http_response_code(403);
     echo json_encode(['status' => 'error', 'message' => 'Permessi insufficienti']);
     exit;
@@ -54,17 +62,42 @@ function columnExists(PDO $pdo, string $tableName, string $columnName): bool {
     return (bool)$stmt->fetchColumn();
 }
 
+function deviceModeLabel(string $productTypeCode, ?int $deviceMode): string {
+    if ($deviceMode === null) {
+        return '';
+    }
+    $map = [];
+    switch ($productTypeCode) {
+        case '02':
+            $map = [1 => 'Standalone', 2 => 'Rewamping'];
+            break;
+        case '03':
+            $map = [1 => 'LUCE', 2 => 'UVC', 3 => 'ELETTROSTATICO', 4 => 'GAS', 5 => 'COMANDO'];
+            break;
+        case '04':
+            $map = [1 => 'Temp/Humidity', 2 => 'Pressure', 3 => 'All'];
+            break;
+    }
+    return $map[$deviceMode] ?? '';
+}
+
 try {
     $warnings = [];
     $serials = [];
     $audit = [];
+    $isAdmin = ($currentUserRole === 'admin');
+    $hasBuilderMasterCol = columnExists($pdo, 'masters', 'builder_id');
+    $hasOwnerUser = columnExists($pdo, 'device_serials', 'owner_user_id');
+    $hasAssignedUser = columnExists($pdo, 'device_serials', 'assigned_user_id');
 
     if (tableExists($pdo, 'device_serials')) {
         $hasReason = columnExists($pdo, 'device_serials', 'status_reason_code');
         $hasReplaced = columnExists($pdo, 'device_serials', 'replaced_by_serial');
+        $hasDeviceMode = columnExists($pdo, 'device_serials', 'device_mode');
 
         $reasonSelect = $hasReason ? "ds.status_reason_code AS status_reason_code" : "'' AS status_reason_code";
         $replacedSelect = $hasReplaced ? "ds.replaced_by_serial AS replaced_by_serial" : "'' AS replaced_by_serial";
+        $deviceModeSelect = $hasDeviceMode ? "ds.device_mode AS device_mode" : "NULL AS device_mode";
 
         // Lista sintetica ultimi seriali con riferimento master, se presente.
         $sql = "
@@ -74,6 +107,7 @@ try {
                 ds.status,
                 $reasonSelect,
                 $replacedSelect,
+                $deviceModeSelect,
                 ds.serial_locked,
                 ds.assigned_master_id,
                 ds.created_at,
@@ -81,10 +115,75 @@ try {
                 m.serial_number AS master_serial
             FROM device_serials ds
             LEFT JOIN masters m ON m.id = ds.assigned_master_id
+        ";
+        $params = [];
+        if (!$isAdmin) {
+            $masterExprM2 = "(m2.creator_id = ? OR m2.owner_id = ? OR m2.maintainer_id = ?" . ($hasBuilderMasterCol ? " OR m2.builder_id = ?" : "") . ")";
+            $masterScopeParams = [$currentUserId, $currentUserId, $currentUserId];
+            if ($hasBuilderMasterCol) {
+                $masterScopeParams[] = $currentUserId;
+            }
+            $params = array_merge($params, $masterScopeParams);
+
+            $ownerClauses = [];
+            if ($hasOwnerUser) {
+                $ownerClauses[] = "ds.owner_user_id = ?";
+                $params[] = $currentUserId;
+            }
+            if ($hasAssignedUser) {
+                $ownerClauses[] = "ds.assigned_user_id = ?";
+                $params[] = $currentUserId;
+            }
+            $ownerSql = !empty($ownerClauses) ? implode(' OR ', $ownerClauses) : "0=1";
+
+            $historyClauses = [];
+            if (tableExists($pdo, 'serial_audit_logs')) {
+                $masterExprM3 = "(m3.creator_id = ? OR m3.owner_id = ? OR m3.maintainer_id = ?" . ($hasBuilderMasterCol ? " OR m3.builder_id = ?" : "") . ")";
+                $historyClauses[] = "EXISTS (
+                    SELECT 1
+                    FROM serial_audit_logs sal
+                    JOIN masters m3 ON m3.id = sal.master_id
+                    WHERE sal.serial_number = ds.serial_number
+                      AND sal.master_id IS NOT NULL
+                      AND $masterExprM3
+                )";
+                $params = array_merge($params, $masterScopeParams);
+            }
+            if (tableExists($pdo, 'serial_lifecycle_events')) {
+                $masterExprM4 = "(m4.creator_id = ? OR m4.owner_id = ? OR m4.maintainer_id = ?" . ($hasBuilderMasterCol ? " OR m4.builder_id = ?" : "") . ")";
+                $historyClauses[] = "EXISTS (
+                    SELECT 1
+                    FROM serial_lifecycle_events sle
+                    JOIN masters m4 ON m4.id = sle.master_id
+                    WHERE sle.serial_number = ds.serial_number
+                      AND sle.master_id IS NOT NULL
+                      AND $masterExprM4
+                )";
+                $params = array_merge($params, $masterScopeParams);
+            }
+
+            $historySql = !empty($historyClauses) ? implode(' OR ', $historyClauses) : '0=1';
+            $sql .= "
+                WHERE (
+                    (ds.assigned_master_id IS NOT NULL AND EXISTS (
+                        SELECT 1
+                        FROM masters m2
+                        WHERE m2.id = ds.assigned_master_id
+                          AND $masterExprM2
+                    ))
+                    OR
+                    (ds.assigned_master_id IS NULL AND ($ownerSql))
+                    OR
+                    ($historySql)
+                )
+            ";
+        }
+        $sql .= "
             ORDER BY ds.id DESC
             LIMIT 20
         ";
-        $stmt = $pdo->query($sql);
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($params);
 
         foreach ($stmt->fetchAll() as $row) {
             $masterLabel = '';
@@ -101,6 +200,8 @@ try {
             $serials[] = [
                 'serial_number' => (string)$row['serial_number'],
                 'product_type_code' => (string)$row['product_type_code'],
+                'device_mode' => isset($row['device_mode']) && $row['device_mode'] !== null ? (int)$row['device_mode'] : null,
+                'device_mode_label' => deviceModeLabel((string)$row['product_type_code'], isset($row['device_mode']) && $row['device_mode'] !== null ? (int)$row['device_mode'] : null),
                 'status' => (string)$row['status'],
                 'status_reason_code' => isset($row['status_reason_code']) ? (string)$row['status_reason_code'] : '',
                 'replaced_by_serial' => isset($row['replaced_by_serial']) ? (string)$row['replaced_by_serial'] : '',
@@ -116,8 +217,7 @@ try {
 
     if (tableExists($pdo, 'serial_audit_logs')) {
         // Ultime azioni audit con utente che ha effettuato l'operazione.
-        $stmt = $pdo->query(
-            "SELECT
+        $sqlAudit = "SELECT
                 sal.created_at,
                 sal.action,
                 sal.serial_number,
@@ -126,9 +226,32 @@ try {
                 u.email AS actor_email
              FROM serial_audit_logs sal
              LEFT JOIN users u ON u.id = sal.actor_user_id
-             ORDER BY sal.id DESC
-             LIMIT 20"
-        );
+        ";
+        $auditParams = [];
+        if (!$isAdmin) {
+            $masterExpr = "(m2.creator_id = ? OR m2.owner_id = ? OR m2.maintainer_id = ?" . ($hasBuilderMasterCol ? " OR m2.builder_id = ?" : "") . ")";
+            $auditParams[] = $currentUserId;
+            $auditParams[] = $currentUserId;
+            $auditParams[] = $currentUserId;
+            if ($hasBuilderMasterCol) {
+                $auditParams[] = $currentUserId;
+            }
+            $sqlAudit .= "
+                WHERE sal.master_id IS NOT NULL
+                  AND EXISTS (
+                    SELECT 1
+                    FROM masters m2
+                    WHERE m2.id = sal.master_id
+                      AND $masterExpr
+                  )
+            ";
+        }
+        $sqlAudit .= "
+            ORDER BY sal.id DESC
+            LIMIT 20
+        ";
+        $stmt = $pdo->prepare($sqlAudit);
+        $stmt->execute($auditParams);
 
         foreach ($stmt->fetchAll() as $row) {
             $details = (string)($row['details'] ?? '');

@@ -87,14 +87,76 @@ try {
                 'new_version' => $fw['version'],
                 'url' => convertDriveLink($fw['download_url'])
             ]);
+            exit;
         } else {
             echo json_encode(['status' => 'no_update', 'message' => 'Nessun firmware attivo trovato nel sistema']);
+            exit;
         }
-    } else {
-        echo json_encode(['status' => 'no_update', 'message' => 'Nessun aggiornamento richiesto']);
     }
 
+    // 4. Coda comandi remoti (es. configurazione scheda pressione)
+    // Viene valutata solo quando non ci sono OTA pending.
+    if ($master['update_requested'] != 1 && empty($master['slave_update_request_sn'])) {
+        $tableCheck = $pdo->prepare("
+            SELECT 1
+            FROM information_schema.tables
+            WHERE table_schema = DATABASE()
+              AND table_name = 'device_commands'
+            LIMIT 1
+        ");
+        $tableCheck->execute();
+        $hasCmdTable = (bool)$tableCheck->fetchColumn();
+
+        if ($hasCmdTable) {
+            $pdo->beginTransaction();
+            $cmdStmt = $pdo->prepare("
+                SELECT *
+                FROM device_commands
+                WHERE master_id = ?
+                  AND status = 'pending'
+                ORDER BY id ASC
+                LIMIT 1
+                FOR UPDATE
+            ");
+            $cmdStmt->execute([$master['id']]);
+            $cmd = $cmdStmt->fetch();
+
+            if ($cmd) {
+                $updCmd = $pdo->prepare("
+                    UPDATE device_commands
+                    SET status = 'sent',
+                        sent_at = NOW(),
+                        attempt_count = attempt_count + 1
+                    WHERE id = ?
+                ");
+                $updCmd->execute([(int)$cmd['id']]);
+                $pdo->commit();
+
+                $payload = json_decode((string)($cmd['payload_json'] ?? '{}'), true);
+                if (!is_array($payload)) {
+                    $payload = [];
+                }
+
+                echo json_encode([
+                    'status' => 'command_ready',
+                    'command_id' => (int)$cmd['id'],
+                    'command_type' => (string)$cmd['command_type'],
+                    'target_slave_sn' => (string)$cmd['target_serial'],
+                    'payload' => $payload
+                ]);
+                exit;
+            }
+            $pdo->commit();
+        }
+    }
+
+    echo json_encode(['status' => 'no_update', 'message' => 'Nessun aggiornamento richiesto']);
+    exit;
+
 } catch (PDOException $e) {
+    if ($pdo->inTransaction()) {
+        $pdo->rollBack();
+    }
     echo json_encode(['status' => 'error', 'message' => 'DB Error: ' . $e->getMessage()]);
 }
 ?>

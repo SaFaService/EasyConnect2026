@@ -5,7 +5,7 @@ require 'config.php';
 // Includi il gestore della lingua
 require 'lang.php';
 
-// Protezione: se l'utente non è loggato, lo rimanda alla pagina di login.
+// Protezione: se l'utente non e' loggato, lo rimanda alla pagina di login.
 if (!isset($_SESSION['user_id'])) {
     header("Location: login.php");
     exit;
@@ -13,6 +13,8 @@ if (!isset($_SESSION['user_id'])) {
 
 $message = '';
 $message_type = '';
+$prefillSubject = trim((string)($_GET['subject'] ?? ''));
+$prefillBody = trim((string)($_GET['body'] ?? ''));
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $senderEmail = trim($_POST['sender_email']);
@@ -29,7 +31,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $to = "info@safaservice.com";
         
         // Prefisso Oggetto
-        $finalSubject = "[Antralux Cloud] " . $subject;
+        $finalSubject = "[AntraluxCloud] " . $subject;
         
         // Aggiunta Info Tecniche al corpo del messaggio
         $finalBody = $body . "\n\n--------------------------------------------------\n";
@@ -47,7 +49,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $message = "Messaggio inviato con successo! Sarai ricontattato all'indirizzo: " . htmlspecialchars($senderEmail);
             $message_type = 'success';
         } else {
-            $message = "Errore del server durante l'invio del messaggio. Riprova più tardi.";
+            $message = "Errore del server durante l'invio del messaggio. Riprova piu tardi.";
             $message_type = 'danger';
         }
     } else {
@@ -92,8 +94,8 @@ $userEmail = $user ? $user['email'] : '';
                         <input type="hidden" name="screen_height" id="screen_height">
 
                         <div class="mb-3"><label class="form-label"><?php echo $lang['contact_your_email']; ?></label><input type="email" name="sender_email" class="form-control" value="<?php echo htmlspecialchars($userEmail); ?>" required></div>
-                        <div class="mb-3"><label class="form-label"><?php echo $lang['contact_subject']; ?></label><input type="text" name="subject" class="form-control" required></div>
-                        <div class="mb-3"><label class="form-label"><?php echo $lang['contact_message']; ?></label><textarea name="body" class="form-control" rows="6" required></textarea></div>
+                        <div class="mb-3"><label class="form-label"><?php echo $lang['contact_subject']; ?></label><input type="text" name="subject" class="form-control" value="<?php echo htmlspecialchars($prefillSubject); ?>" required></div>
+                        <div class="mb-3"><label class="form-label"><?php echo $lang['contact_message']; ?></label><textarea name="body" class="form-control" rows="6" required><?php echo htmlspecialchars($prefillBody); ?></textarea></div>
                         
                         <div class="mb-3 form-check">
                             <input type="checkbox" class="form-check-input" id="privacyCheck" required>
@@ -122,3 +124,4 @@ $userEmail = $user ? $user['email'] : '';
 </script>
 </body>
 </html>
+

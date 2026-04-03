@@ -5,9 +5,10 @@
 #include "Led.h"
 #include <SPIFFS.h>
 #include <MD5Builder.h>
+#include <string.h>
 
 // La parola chiave 'extern' indica al compilatore che queste variabili sono definite
-// in un altro file (in questo caso, in 'main_master.cpp').
+// in un altro file (in questo caso, in 'main_standalone_rewamping_controller.cpp').
 // Questo ci permette di accedervi e modificarle da questo file.
 extern bool listaPerifericheAttive[101];
 extern DatiSlave databaseSlave[101];
@@ -17,12 +18,86 @@ extern bool scansioneInCorso;
 extern bool qualchePerifericaTrovata;
 extern bool debugViewData;
 extern int partialFailCycles;
+extern bool slaveExcludedByPortal[101];
 extern Led greenLed;
 extern Impostazioni config; // Mi serve per la API key
-extern float currentDeltaP; // Variabile globale definita in main_master.cpp
+extern float currentDeltaP; // Variabile globale definita in main_standalone_rewamping_controller.cpp
+extern bool currentDeltaPValid; // True quando il delta P e' calcolato da due sensori validi
+extern void updateDeltaPMonitoring(float rawDeltaP, bool isValidSample);
+extern void requestStandaloneWifiPortalStart();
 
 // Variabili per la modalità Standalone
 bool relayBoardDetected[5]; // Indici 1-4 usati
+static bool relayOnCommandIssued[5]; // Evita ON ridondanti che resettano il timer feedback.
+
+struct StandaloneRelayStatus {
+    bool detectedAtBoot;
+    bool online;
+    bool relayOn;
+    bool safetyClosed;
+    bool feedbackMatched;
+    bool safetyAlarm;
+    bool lifetimeAlarm;
+    bool lampFault;
+    bool modeMismatch;
+    bool hasLifeFields;
+    bool hasFeedbackFaultField;
+    bool feedbackFaultLatched;
+    uint32_t lifeLimitHours;
+    int mode;
+    uint32_t starts;
+    float hours;
+    unsigned long lastResponseMs;
+    unsigned long lastPollMs;
+    unsigned long nextOnRetryMs;
+    char stateText[16];
+};
+
+static StandaloneRelayStatus standaloneRelay[5];
+static bool standaloneKeyboardInitialized = false;
+static bool standaloneResetModeActive = false;
+static int standaloneResetSelection = -1; // -1 nessuna, 0..3 BAL1..BAL4, 4 TUTTI
+static bool standaloneButtonPrevPressed = false;
+static bool standaloneButtonLongActionDone = false;
+static unsigned long standaloneButtonPressStartMs = 0;
+static unsigned long standaloneLastPollMs = 0;
+static unsigned long standaloneLastFrameTxMs = 0;
+static bool standaloneSafetyInterlockWasActive = false;
+enum StandaloneHoldPreviewMode {
+    STANDALONE_HOLD_PREVIEW_NONE = 0,
+    STANDALONE_HOLD_PREVIEW_RESET,
+    STANDALONE_HOLD_PREVIEW_WIFI
+};
+static StandaloneHoldPreviewMode standaloneHoldPreviewMode = STANDALONE_HOLD_PREVIEW_NONE;
+static unsigned long standaloneHoldPreviewStartMs = 0;
+
+static const unsigned long STANDALONE_POLL_INTERVAL_MS = 2000UL;
+static const unsigned long STANDALONE_OFFLINE_TIMEOUT_MS = 10000UL;
+static const unsigned long STANDALONE_INTERFRAME_GAP_MS = 8UL;
+static const uint8_t STANDALONE_BOOT_SWEEP_CYCLES = 4;
+static const unsigned long STANDALONE_BOOT_SWEEP_STEP_MS = 140UL;
+static const unsigned long STANDALONE_BOOT_DETECTED_PREPAUSE_MS = 180UL;
+static const unsigned long STANDALONE_BOOT_DETECTED_STEP_MS = 240UL;
+static const unsigned long STANDALONE_BOOT_DETECTED_POSTPAUSE_MS = 220UL;
+static const unsigned long STANDALONE_WIFI_START_ANIMATION_MS = 5000UL;
+static const unsigned long STANDALONE_HOLD_WIFI_SWEEP_STEP_MS = 180UL;
+static const unsigned long STANDALONE_RESET_PREVIEW_BLINK_STEP_MS = 500UL;
+static const uint8_t STANDALONE_RESET_PREVIEW_BLINK_COUNT = 5;
+static const unsigned long STANDALONE_RESET_PREVIEW_CYCLE_PAUSE_MS = 500UL;
+static const unsigned long STANDALONE_ENTER_RESET_HOLD_MS = 5000UL;
+static const unsigned long STANDALONE_WIFI_PORTAL_HOLD_MS = 10000UL;
+static const unsigned long STANDALONE_CONFIRM_RESET_HOLD_MS = 3000UL;
+static const uint8_t STANDALONE_RESET_CMD_RETRIES = 3;
+static const float STANDALONE_MIN_VALID_HOURS = 0.0f;
+
+// Mappatura richiesta utente/Manuale membrana:
+// Pin4(BAL1)->IP1, Pin3(BAL2)->IP2, Pin2(BAL3)->IP3, Pin1(BAL4)->IP4.
+static Led standaloneLedBal1(MK_PIN_WIFI);   // Pin 4 membrana
+static Led standaloneLedBal2(MK_PIN_SENS1);  // Pin 3 membrana
+static Led standaloneLedBal3(MK_PIN_SENS2);  // Pin 2 membrana
+static Led standaloneLedBal4(MK_PIN_AUX1);   // Pin 1 membrana
+static Led standaloneLedExpLife(MK_PIN_AUX2); // Pin 5 membrana
+static Led standaloneLedSafety(MK_PIN_SAFETY); // Pin 7 membrana
 
 // --- VARIABILI GESTIONE OTA SLAVE ---
 bool otaSlaveActive = false;       // Se true, il master è occupato ad aggiornare uno slave
@@ -52,9 +127,54 @@ void modoRicezione() {
 // Imposta il pin di direzione del transceiver RS485 su HIGH per abilitare la trasmissione.
 void modoTrasmissione() { digitalWrite(PIN_RS485_DIR, HIGH); delayMicroseconds(80); }
 
+// Frame tipico Relay: OK,RELAY,MODE,...
+// In modalita' Rewamping le schede Relay devono essere ignorate.
+static bool isRelayResponse(const String& payload) {
+    return payload.startsWith("OK,RELAY,");
+}
+
+// Mantiene una cache minima (SN/FW/ID) delle Relay per consentire OTA remoto via SN.
+static void cacheRelayMetadata(String payload, int address) {
+    String fields[16];
+    int count = 0;
+    int start = 0;
+    for (int i = 0; i <= payload.length(); i++) {
+        const bool isSep = (i == payload.length()) || (payload.charAt(i) == ',');
+        if (!isSep) continue;
+        if (count < 16) {
+            fields[count] = payload.substring(start, i);
+            fields[count].trim();
+        }
+        count++;
+        start = i + 1;
+    }
+
+    // Formato atteso minimo:
+    // OK,RELAY,mode,on,safety,feedback,starts,hours,group,serial,state,fw
+    if (count < 12) return;
+    if (fields[0] != "OK" || fields[1] != "RELAY") return;
+
+    String groupToken = fields[8];
+    String serialToken = fields[9];
+    String fwToken = fields[11];
+
+    if (serialToken.length() == 0) return;
+
+    databaseSlave[address].t = 0.0f;
+    databaseSlave[address].h = 0.0f;
+    databaseSlave[address].p = 0.0f;
+    databaseSlave[address].sic = fields[4].toInt();
+    databaseSlave[address].grp = groupToken.toInt();
+    serialToken.toCharArray(databaseSlave[address].sn, 32);
+    fwToken.toCharArray(databaseSlave[address].version, 16);
+    databaseSlave[address].lastResponseTime = millis();
+}
+
 // Funzione per analizzare la stringa di risposta ricevuta da uno slave.
 // Estrae i dati (temperatura, pressione, etc.) e li salva nel database.
 void parseDatiSlave(String payload, int address) {
+    if (isRelayResponse(payload)) return;
+
     // Formato atteso: OK,T,H,P,S,G,SN,VER!
     // Conta quante virgole ci sono per capire se il formato è nuovo (con versione FW) o vecchio.
     int commaCount = 0;
@@ -120,10 +240,17 @@ void scansionaSlave() {
                     Serial.printf("[SCAN-RX] <- %s!\n", resp.c_str());
                 }
                 if (resp.startsWith("OK")) {
-                    listaPerifericheAttive[i] = true;
-                    qualchePerifericaTrovata = true;
-                    databaseSlave[i].lastResponseTime = millis(); // Inizializza il timestamp
-                    Serial.printf("[SCAN] Trovato Slave ID: %d\n", i);
+                    if (isRelayResponse(resp)) {
+                        cacheRelayMetadata(resp, i);
+                        if (debugViewData) {
+                            Serial.printf("[SCAN] ID %d relay rilevata (cache OTA SN/FW aggiornata)\n", i);
+                        }
+                    } else {
+                        listaPerifericheAttive[i] = true;
+                        qualchePerifericaTrovata = true;
+                        databaseSlave[i].lastResponseTime = millis(); // Inizializza il timestamp
+                        Serial.printf("[SCAN] Trovato Slave ID: %d\n", i);
+                    }
                 }
                 break; // Trovata una risposta (o un disturbo), passa all'indirizzo successivo.
             }
@@ -152,6 +279,111 @@ uint8_t calculateChecksum(String &data) {
         crc ^= data.charAt(i);
     }
     return crc;
+}
+
+static bool waitRs485Frame(String& out, unsigned long timeoutMs) {
+    unsigned long t0 = millis();
+    while (millis() - t0 < timeoutMs) {
+        if (Serial1.available()) {
+            out = Serial1.readStringUntil('!');
+            return true;
+        }
+        delay(1);
+    }
+    out = "";
+    return false;
+}
+
+static bool sendCfgCommandExpect(const String& tx, const String& expectedPrefix, String& rxOut, unsigned long timeoutMs = 900) {
+    while (Serial1.available()) Serial1.read();
+    modoTrasmissione();
+    Serial1.print(tx);
+    modoRicezione();
+
+    if (!waitRs485Frame(rxOut, timeoutMs)) {
+        return false;
+    }
+    return rxOut.startsWith(expectedPrefix);
+}
+
+bool executePressureConfigCommand(const String& slaveSn, int newMode, int newGroup, int newIp, String& outMessage) {
+    outMessage = "";
+    if (otaSlaveActive) {
+        outMessage = "OTA slave attiva: comando configurazione rimandato.";
+        return false;
+    }
+    if (newMode < 0 && newGroup < 0 && newIp < 0) {
+        outMessage = "Nessun parametro da aggiornare.";
+        return false;
+    }
+    if (newIp > 30) {
+        outMessage = "IP RS485 non valido (range 1..30).";
+        return false;
+    }
+
+    int targetId = -1;
+    for (int i = 1; i <= 30; i++) {
+        if (String(databaseSlave[i].sn) == slaveSn) {
+            targetId = i;
+            break;
+        }
+    }
+    if (targetId < 1) {
+        outMessage = "Slave non trovato in rete RS485.";
+        return false;
+    }
+
+    String rx;
+    int workingId = targetId;
+
+    if (newMode >= 1) {
+        String tx = "MOD" + String(workingId) + ":" + String(newMode) + "!";
+        String expected = "OK,CFG,MODE," + String(workingId) + "," + String(newMode);
+        if (!sendCfgCommandExpect(tx, expected, rx)) {
+            outMessage = "Cambio modalita fallito. RX: " + rx;
+            return false;
+        }
+    }
+
+    if (newGroup >= 1) {
+        String tx = "GRP" + String(workingId) + ":" + String(newGroup) + "!";
+        String expected = "OK,CFG,GRP," + String(workingId) + "," + String(newGroup);
+        if (!sendCfgCommandExpect(tx, expected, rx)) {
+            outMessage = "Cambio gruppo fallito. RX: " + rx;
+            return false;
+        }
+        databaseSlave[workingId].grp = newGroup;
+    }
+
+    if (newIp >= 1 && newIp != workingId) {
+        String tx = "IP" + String(workingId) + ":" + String(newIp) + "!";
+        String expected = "OK,CFG,IP," + String(workingId) + "," + String(newIp);
+        if (!sendCfgCommandExpect(tx, expected, rx)) {
+            outMessage = "Cambio IP fallito. RX: " + rx;
+            return false;
+        }
+
+        // Verifica veloce che lo slave risponda sul nuovo indirizzo.
+        while (Serial1.available()) Serial1.read();
+        modoTrasmissione();
+        Serial1.printf("?%d!", newIp);
+        modoRicezione();
+        String pingResp;
+        if (!waitRs485Frame(pingResp, 500) || !pingResp.startsWith("OK")) {
+            outMessage = "IP aggiornato ma slave non risponde subito sul nuovo indirizzo.";
+            return false;
+        }
+
+        databaseSlave[newIp] = databaseSlave[workingId];
+        databaseSlave[newIp].lastResponseTime = millis();
+        listaPerifericheAttive[newIp] = true;
+        databaseSlave[workingId] = {};
+        listaPerifericheAttive[workingId] = false;
+        workingId = newIp;
+    }
+
+    outMessage = "Configurazione applicata con successo.";
+    return true;
 }
 
 void reportSlaveProgress(String status, String message) {
@@ -480,14 +712,18 @@ void RS485_Master_Loop() {
         int activeSlavesCount = 0;
         int respondedSlavesCount = 0;
 
-        // Conta quanti slave dovrebbero rispondere in base all'ultima scansione.
-        for (int i = 1; i <= 100; i++) if (listaPerifericheAttive[i]) activeSlavesCount++;
+        // Conta quanti slave dovrebbero rispondere (escludendo quelli marcati retired/voided dal portale).
+        for (int i = 1; i <= 100; i++) {
+            if (listaPerifericheAttive[i] && !slaveExcludedByPortal[i]) {
+                activeSlavesCount++;
+            }
+        }
 
         // Se c'è almeno uno slave attivo...
         if (activeSlavesCount > 0) {
             // ...interroga ogni slave che è risultato attivo durante la scansione.
             for (int i = 1; i <= 100; i++) {
-                if (listaPerifericheAttive[i]) {
+                if (listaPerifericheAttive[i] && !slaveExcludedByPortal[i]) {
                     while (Serial1.available()) Serial1.read(); // Evita contaminazione tra richieste
                     modoTrasmissione(); Serial1.printf("?%d!", i); modoRicezione();
                     unsigned long st = millis();
@@ -498,6 +734,15 @@ void RS485_Master_Loop() {
                             // Se la risposta è valida ("OK..."), incrementa il contatore
                             // e analizza i dati.
                             if (d.startsWith("OK")) {
+                                if (isRelayResponse(d)) {
+                                    if (debugViewData) {
+                                        Serial.printf("[POLL] ID %d ignorato: Relay rilevata in Rewamping\n", i);
+                                    }
+                                    // Rimuove subito l'ID dalla lista attiva per evitare polling futuri.
+                                    listaPerifericheAttive[i] = false;
+                                    databaseSlave[i] = {};
+                                    break;
+                                }
                                 respondedSlavesCount++;
                                 databaseSlave[i].lastResponseTime = millis(); // Aggiorna timestamp
                                 if (debugViewData) Serial.println("RX: " + d);
@@ -528,123 +773,843 @@ void RS485_Master_Loop() {
         timerStampa = ora; // Aggiorna il timer del polling.
 
         // --- CALCOLO DELTA PRESSIONE ---
-        // Se abbiamo sia Slave 1 che Slave 2, calcoliamo la differenza
-        if (listaPerifericheAttive[1] && listaPerifericheAttive[2]) {
-            currentDeltaP = databaseSlave[1].p - databaseSlave[2].p;
+        // Usa solo slave online in questo intervallo e non esclusi dal portale.
+        // Priorita':
+        // 1) Coppia gruppo 1 / gruppo 2 (logica impianto standard)
+        // 2) Fallback: primi due slave online (ordine ID) per evitare delta sempre 0 in test/lab
+        const unsigned long OFFLINE_TIMEOUT_MS = 10000;
+        bool grp1Found = false;
+        bool grp2Found = false;
+        float grp1Pressure = 0.0f;
+        float grp2Pressure = 0.0f;
+        bool firstOnlineFound = false;
+        bool secondOnlineFound = false;
+        float firstOnlinePressure = 0.0f;
+        float secondOnlinePressure = 0.0f;
+
+        for (int i = 1; i <= 100; i++) {
+            if (!listaPerifericheAttive[i] || slaveExcludedByPortal[i]) continue;
+            bool online485 = (databaseSlave[i].lastResponseTime > 0) && ((ora - databaseSlave[i].lastResponseTime) <= OFFLINE_TIMEOUT_MS);
+            if (!online485) continue;
+
+            if (!firstOnlineFound) {
+                firstOnlinePressure = databaseSlave[i].p;
+                firstOnlineFound = true;
+            } else if (!secondOnlineFound) {
+                secondOnlinePressure = databaseSlave[i].p;
+                secondOnlineFound = true;
+            }
+
+            if (!grp1Found && databaseSlave[i].grp == 1) {
+                grp1Pressure = databaseSlave[i].p;
+                grp1Found = true;
+            } else if (!grp2Found && databaseSlave[i].grp == 2) {
+                grp2Pressure = databaseSlave[i].p;
+                grp2Found = true;
+            }
+        }
+
+        if (grp1Found && grp2Found) {
+            currentDeltaP = grp1Pressure - grp2Pressure;
+            currentDeltaPValid = true;
+            updateDeltaPMonitoring(currentDeltaP, true);
+        } else if (firstOnlineFound && secondOnlineFound) {
+            currentDeltaP = firstOnlinePressure - secondOnlinePressure;
+            currentDeltaPValid = true;
+            updateDeltaPMonitoring(currentDeltaP, true);
         } else {
-            currentDeltaP = 0.0;
+            currentDeltaP = 0.0f;
+            currentDeltaPValid = false;
+            updateDeltaPMonitoring(0.0f, false);
         }
     }
 }
 
 // --- FUNZIONI PER MODALITA' STANDALONE (MODE 1) ---
 
+static Led* standaloneBalLedByRelayId(int relayId) {
+    if (relayId == 1) return &standaloneLedBal1; // BAL1 -> IP1
+    if (relayId == 2) return &standaloneLedBal2; // BAL2 -> IP2
+    if (relayId == 3) return &standaloneLedBal3; // BAL3 -> IP3
+    if (relayId == 4) return &standaloneLedBal4; // BAL4 -> IP4
+    return nullptr;
+}
+
+static const char* standaloneSelectionName(int selection) {
+    if (selection == 0) return "BAL1 (IP1)";
+    if (selection == 1) return "BAL2 (IP2)";
+    if (selection == 2) return "BAL3 (IP3)";
+    if (selection == 3) return "BAL4 (IP4)";
+    if (selection == 4) return "TUTTI I BAL";
+    return "NESSUNA";
+}
+
+static void standaloneBeginKeyboardIfNeeded() {
+    if (standaloneKeyboardInitialized) return;
+
+    standaloneLedBal1.begin();
+    standaloneLedBal2.begin();
+    standaloneLedBal3.begin();
+    standaloneLedBal4.begin();
+    standaloneLedExpLife.begin();
+    standaloneLedSafety.begin();
+    pinMode(MK_PIN_BUTTON, INPUT_PULLUP);
+
+    standaloneKeyboardInitialized = true;
+}
+
+static void standaloneUpdateLedObjects() {
+    standaloneLedBal1.update();
+    standaloneLedBal2.update();
+    standaloneLedBal3.update();
+    standaloneLedBal4.update();
+    standaloneLedExpLife.update();
+    standaloneLedSafety.update();
+}
+
+static void standaloneSetAllBalLeds(LedState state) {
+    standaloneLedBal1.setState(state);
+    standaloneLedBal2.setState(state);
+    standaloneLedBal3.setState(state);
+    standaloneLedBal4.setState(state);
+}
+
+static void standaloneApplySweepFrame(int frameIndex) {
+    static const int seq[6] = {1, 2, 3, 4, 3, 2};
+    const int relayId = seq[frameIndex % 6];
+
+    standaloneSetAllBalLeds(LED_OFF);
+    Led* led = standaloneBalLedByRelayId(relayId);
+    if (led) led->setState(LED_SOLID);
+    standaloneLedExpLife.setState(LED_OFF);
+    standaloneLedSafety.setState(LED_OFF);
+}
+
+static void standaloneShowScanSweepFrame(int frameIndex) {
+    standaloneApplySweepFrame(frameIndex);
+    standaloneUpdateLedObjects();
+    delay(STANDALONE_BOOT_SWEEP_STEP_MS);
+}
+
+static void standaloneShowDetectedRelaySequence() {
+    standaloneSetAllBalLeds(LED_OFF);
+    standaloneLedExpLife.setState(LED_OFF);
+    standaloneLedSafety.setState(LED_OFF);
+    standaloneUpdateLedObjects();
+    delay(STANDALONE_BOOT_DETECTED_PREPAUSE_MS);
+
+    bool anyDetected = false;
+    for (int relayId = 1; relayId <= 4; relayId++) {
+        // Sequenza sempre BAL1 -> BAL4.
+        Led* led = standaloneBalLedByRelayId(relayId);
+        if (relayBoardDetected[relayId]) {
+            anyDetected = true;
+            if (led) led->setState(LED_SOLID);
+        }
+        standaloneUpdateLedObjects();
+        delay(STANDALONE_BOOT_DETECTED_STEP_MS);
+    }
+
+    if (!anyDetected) {
+        delay(STANDALONE_BOOT_DETECTED_POSTPAUSE_MS);
+    } else {
+        delay(STANDALONE_BOOT_DETECTED_POSTPAUSE_MS);
+    }
+}
+
+void standalonePlayWifiStartAnimation() {
+    standaloneBeginKeyboardIfNeeded();
+    const unsigned long startMs = millis();
+    int frame = 0;
+    while (millis() - startMs < STANDALONE_WIFI_START_ANIMATION_MS) {
+        standaloneShowScanSweepFrame(frame++);
+    }
+    standaloneSetAllBalLeds(LED_OFF);
+    standaloneLedExpLife.setState(LED_OFF);
+    standaloneLedSafety.setState(LED_OFF);
+    standaloneUpdateLedObjects();
+}
+
+static bool standaloneExchangeFrame(const String& tx, String& rxOut, unsigned long timeoutMs) {
+    const unsigned long nowMs = millis();
+    if (standaloneLastFrameTxMs != 0) {
+        const unsigned long elapsed = nowMs - standaloneLastFrameTxMs;
+        if (elapsed < STANDALONE_INTERFRAME_GAP_MS) {
+            delay(STANDALONE_INTERFRAME_GAP_MS - elapsed);
+        }
+    }
+    while (Serial1.available()) Serial1.read();
+    modoTrasmissione();
+    Serial1.print(tx);
+    modoRicezione();
+    standaloneLastFrameTxMs = millis();
+    return waitRs485Frame(rxOut, timeoutMs);
+}
+
+static int standaloneSplitCsv(const String& src, String* out, int maxItems) {
+    int count = 0;
+    int start = 0;
+    for (int i = 0; i <= src.length(); i++) {
+        const bool isSep = (i == src.length()) || (src.charAt(i) == ',');
+        if (!isSep) continue;
+        if (count < maxItems) {
+            out[count] = src.substring(start, i);
+            out[count].trim();
+        }
+        count++;
+        start = i + 1;
+    }
+    return count;
+}
+
+static bool standaloneParseRelayStatus(const String& payload, StandaloneRelayStatus& outStatus) {
+    String fields[16];
+    const int fieldCount = standaloneSplitCsv(payload, fields, 16);
+    if (fieldCount < 11) return false;
+    if (fields[0] != "OK" || fields[1] != "RELAY") return false;
+    if (fields[2] == "CMD") return false; // e' una risposta comando, non uno status.
+
+    outStatus.mode = fields[2].toInt();
+    outStatus.relayOn = (fields[3].toInt() != 0);
+    outStatus.safetyClosed = (fields[4].toInt() != 0);
+    outStatus.feedbackMatched = (fields[5].toInt() != 0);
+    outStatus.starts = static_cast<uint32_t>(fields[6].toInt());
+    outStatus.hours = fields[7].toFloat();
+    if (outStatus.hours < STANDALONE_MIN_VALID_HOURS) outStatus.hours = 0.0f;
+
+    String state = fields[10];
+    state.toUpperCase();
+    state.toCharArray(outStatus.stateText, sizeof(outStatus.stateText));
+
+    outStatus.modeMismatch = (outStatus.mode != 2);
+    outStatus.hasLifeFields = false;
+    outStatus.hasFeedbackFaultField = false;
+    outStatus.lifeLimitHours = 0;
+    outStatus.lifetimeAlarm = false;
+    if (fieldCount >= 14) {
+        outStatus.lifeLimitHours = static_cast<uint32_t>(fields[12].toInt());
+        outStatus.lifetimeAlarm = (fields[13].toInt() != 0);
+        outStatus.hasLifeFields = true;
+    }
+    if (fieldCount >= 15) {
+        outStatus.feedbackFaultLatched = (fields[14].toInt() != 0);
+        outStatus.hasFeedbackFaultField = true;
+    }
+    return true;
+}
+
+static void standaloneRefreshDerivedFlags(int relayId, unsigned long nowMs) {
+    StandaloneRelayStatus& st = standaloneRelay[relayId];
+    if (!st.detectedAtBoot) return;
+
+    const bool stale = (st.lastResponseMs == 0) || ((nowMs - st.lastResponseMs) > STANDALONE_OFFLINE_TIMEOUT_MS);
+    if (stale) {
+        st.online = false;
+        st.safetyAlarm = false;
+        st.lifetimeAlarm = false;
+        st.lampFault = false;
+        relayOnCommandIssued[relayId] = false; // se torna online, ritenta ON.
+        return;
+    }
+
+    st.online = true;
+    st.safetyAlarm = !st.safetyClosed;
+    st.modeMismatch = (st.mode != 2);
+
+    if (!st.hasLifeFields) {
+        // Fallback legacy: usa soglia lato controller solo per relay con firmware vecchio.
+        const bool lifetimeEnabled = (config.sogliaManutenzione > 0);
+        st.lifetimeAlarm = lifetimeEnabled && (st.hours >= static_cast<float>(config.sogliaManutenzione));
+    }
+
+    const bool isRunning = (strcmp(st.stateText, "RUNNING") == 0);
+    if (isRunning && st.relayOn) {
+        st.feedbackFaultLatched = false;
+    }
+
+    const bool isFault = (strcmp(st.stateText, "FAULT") == 0);
+    const bool legacyFeedbackFault =
+        (!st.hasFeedbackFaultField) &&
+        relayOnCommandIssued[relayId] &&
+        st.safetyClosed &&
+        !st.relayOn &&
+        !st.feedbackMatched &&
+        (strcmp(st.stateText, "OFF") == 0);
+    if (legacyFeedbackFault) {
+        st.feedbackFaultLatched = true;
+    }
+    st.lampFault = (isFault && st.safetyClosed) || st.feedbackFaultLatched || legacyFeedbackFault;
+}
+
+static bool standalonePollRelayStatus(int relayId, unsigned long nowMs) {
+    String resp;
+    if (!standaloneExchangeFrame("?" + String(relayId) + "!", resp, 180)) {
+        return false;
+    }
+    if (debugViewData) {
+        Serial.printf("[STANDALONE][POLL-RX] ID %d <- %s!\n", relayId, resp.c_str());
+    }
+
+    StandaloneRelayStatus parsed = standaloneRelay[relayId];
+    if (!standaloneParseRelayStatus(resp, parsed)) {
+        return false;
+    }
+
+    parsed.lastResponseMs = nowMs;
+    parsed.lastPollMs = nowMs;
+    parsed.detectedAtBoot = true;
+    parsed.online = true;
+    standaloneRelay[relayId] = parsed;
+
+    databaseSlave[relayId].lastResponseTime = nowMs;
+    databaseSlave[relayId].sic = parsed.safetyClosed ? 0 : 1;
+    databaseSlave[relayId].p = parsed.hours;
+
+    return true;
+}
+
+static void standaloneIssueOnCommandIfNeeded(int relayId) {
+    StandaloneRelayStatus& st = standaloneRelay[relayId];
+    if (!st.detectedAtBoot || !st.online || st.modeMismatch) return;
+    const unsigned long nowMs = millis();
+    if (st.nextOnRetryMs > nowMs) return;
+
+    bool shouldIssue = !relayOnCommandIssued[relayId];
+    const bool isOffState = (strcmp(st.stateText, "OFF") == 0);
+    if (!shouldIssue && !st.relayOn && st.safetyClosed && isOffState && !st.feedbackFaultLatched) {
+        shouldIssue = true;
+        relayOnCommandIssued[relayId] = false;
+    }
+    if (!shouldIssue) return;
+
+    String resp;
+    const String tx = "CMD," + String(relayId) + ",ON!";
+    if (debugViewData) {
+        Serial.printf("[STANDALONE][CMD-TX] -> %s\n", tx.c_str());
+    }
+    if (!standaloneExchangeFrame(tx, resp, 220)) {
+        return;
+    }
+    if (debugViewData) {
+        Serial.printf("[STANDALONE][CMD-RX] ID %d <- %s!\n", relayId, resp.c_str());
+    }
+
+    const String okPrefix = "OK,RELAY,CMD," + String(relayId) + ",ON";
+    const String errPrefix = "ERR,RELAY,CMD," + String(relayId) + ",ON";
+    if (resp.startsWith(okPrefix) || resp.startsWith(errPrefix)) {
+        relayOnCommandIssued[relayId] = true;
+
+        if (resp.indexOf("FEEDBACK_FAULT_LATCHED") >= 0) {
+            st.feedbackFaultLatched = true;
+            st.lampFault = true;
+            st.nextOnRetryMs = nowMs + 15000UL; // evita spam ON continuo su fault latched.
+        } else {
+            st.nextOnRetryMs = 0;
+        }
+    }
+
+    if (resp.startsWith(okPrefix) && resp.indexOf(",ON,1,") >= 0) {
+        st.feedbackFaultLatched = false;
+        st.lampFault = false;
+        st.nextOnRetryMs = 0;
+    }
+}
+
+static void standaloneIssueOffCommandIfNeeded(int relayId) {
+    StandaloneRelayStatus& st = standaloneRelay[relayId];
+    if (!st.detectedAtBoot || !st.online || st.modeMismatch) {
+        relayOnCommandIssued[relayId] = false;
+        return;
+    }
+
+    if (!st.relayOn && !relayOnCommandIssued[relayId]) return;
+
+    String resp;
+    const String tx = "CMD," + String(relayId) + ",OFF!";
+    if (debugViewData) {
+        Serial.printf("[STANDALONE][CMD-TX] -> %s\n", tx.c_str());
+    }
+    if (!standaloneExchangeFrame(tx, resp, 220)) {
+        return;
+    }
+    if (debugViewData) {
+        Serial.printf("[STANDALONE][CMD-RX] ID %d <- %s!\n", relayId, resp.c_str());
+    }
+
+    const String okPrefix = "OK,RELAY,CMD," + String(relayId) + ",OFF";
+    if (resp.startsWith(okPrefix)) {
+        relayOnCommandIssued[relayId] = false;
+        st.relayOn = false;
+        st.feedbackFaultLatched = false;
+        st.lampFault = false;
+        st.nextOnRetryMs = 0;
+    }
+}
+
+static bool standaloneIsSystemSafetyInterlockActive(unsigned long nowMs) {
+    if (config.usaSicurezzaLocale && (digitalRead(PIN_MASTER_SICUREZZA) == HIGH)) {
+        return true;
+    }
+
+    for (int relayId = 1; relayId <= 4; relayId++) {
+        if (!relayBoardDetected[relayId]) continue;
+        standaloneRefreshDerivedFlags(relayId, nowMs);
+        if (standaloneRelay[relayId].safetyAlarm) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void standaloneSetSelectionVisual(int selection, bool on) {
+    const LedState state = on ? LED_SOLID : LED_OFF;
+    standaloneLedBal1.setState(LED_OFF);
+    standaloneLedBal2.setState(LED_OFF);
+    standaloneLedBal3.setState(LED_OFF);
+    standaloneLedBal4.setState(LED_OFF);
+
+    if (!on || selection < 0) return;
+
+    if (selection == 0) standaloneLedBal1.setState(state);
+    else if (selection == 1) standaloneLedBal2.setState(state);
+    else if (selection == 2) standaloneLedBal3.setState(state);
+    else if (selection == 3) standaloneLedBal4.setState(state);
+    else if (selection == 4) {
+        standaloneLedBal1.setState(state);
+        standaloneLedBal2.setState(state);
+        standaloneLedBal3.setState(state);
+        standaloneLedBal4.setState(state);
+    }
+}
+
+static bool standaloneSendResetCountersCommand(int relayId) {
+    for (uint8_t attempt = 0; attempt < STANDALONE_RESET_CMD_RETRIES; attempt++) {
+        String resp;
+        const String tx = "CNT" + String(relayId) + ":RESET!";
+        if (debugViewData) {
+            Serial.printf("[STANDALONE][RESET-TX] -> %s\n", tx.c_str());
+        }
+        if (!standaloneExchangeFrame(tx, resp, 450)) {
+            continue;
+        }
+        if (debugViewData) {
+            Serial.printf("[STANDALONE][RESET-RX] ID %d <- %s!\n", relayId, resp.c_str());
+        }
+        const String expected = "OK,CFG,CNT," + String(relayId) + ",RESET";
+        if (resp.startsWith(expected)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void standaloneAnimateResetAck() {
+    for (int i = 0; i < 5; i++) {
+        standaloneSetSelectionVisual(standaloneResetSelection, true);
+        standaloneLedExpLife.setState(LED_SOLID);
+        standaloneLedSafety.setState(LED_OFF);
+        standaloneUpdateLedObjects();
+        delay(180);
+
+        standaloneSetSelectionVisual(standaloneResetSelection, false);
+        standaloneLedExpLife.setState(LED_OFF);
+        standaloneLedSafety.setState(LED_OFF);
+        standaloneUpdateLedObjects();
+        delay(180);
+    }
+}
+
+static bool standaloneExecuteResetSelection() {
+    int targets[4] = {0, 0, 0, 0};
+    int targetCount = 0;
+
+    if (standaloneResetSelection >= 0 && standaloneResetSelection <= 3) {
+        const int relayId = standaloneResetSelection + 1;
+        if (!relayBoardDetected[relayId]) {
+            Serial.printf("[STANDALONE][RESET] %s non disponibile (IP non rilevato).\n",
+                          standaloneSelectionName(standaloneResetSelection));
+            return false;
+        }
+        targets[targetCount++] = relayId;
+    } else if (standaloneResetSelection == 4) {
+        for (int relayId = 1; relayId <= 4; relayId++) {
+            if (relayBoardDetected[relayId]) {
+                targets[targetCount++] = relayId;
+            }
+        }
+        if (targetCount == 0) {
+            Serial.println("[STANDALONE][RESET] Nessuna scheda relay disponibile per reset contatori.");
+            return false;
+        }
+    } else {
+        Serial.println("[STANDALONE][RESET] Selezione non valida.");
+        return false;
+    }
+
+    standaloneAnimateResetAck();
+
+    bool allOk = true;
+    for (int i = 0; i < targetCount; i++) {
+        const int relayId = targets[i];
+        const bool ok = standaloneSendResetCountersCommand(relayId);
+        if (!ok) {
+            allOk = false;
+            Serial.printf("[STANDALONE][RESET] Fallito reset contatori su ID %d.\n", relayId);
+        } else {
+            relayOnCommandIssued[relayId] = false;
+            standaloneRelay[relayId].lastResponseMs = 0;
+            standaloneRelay[relayId].online = false;
+            standaloneRelay[relayId].hours = 0.0f;
+            standaloneRelay[relayId].lifetimeAlarm = false;
+            Serial.printf("[STANDALONE][RESET] OK contatori azzerati su ID %d.\n", relayId);
+        }
+    }
+
+    if (allOk) {
+        Serial.println("[STANDALONE][RESET] Reset contatori confermato, riavvio controller...");
+        delay(250);
+        ESP.restart();
+    }
+    return allOk;
+}
+
+static void standaloneSetHoldPreviewMode(StandaloneHoldPreviewMode mode, unsigned long nowMs) {
+    if (standaloneHoldPreviewMode == mode) return;
+    standaloneHoldPreviewMode = mode;
+    standaloneHoldPreviewStartMs = nowMs;
+
+    if (mode == STANDALONE_HOLD_PREVIEW_RESET) {
+        Serial.println("[STANDALONE][RESET] Hold 5s: rilascia per entrare in reset ore (continua fino a 10s per WiFi).");
+    } else if (mode == STANDALONE_HOLD_PREVIEW_WIFI) {
+        Serial.println("[STANDALONE][WIFI] Hold 10s: rilascia per avviare il WiFi locale.");
+    }
+}
+
+static void standaloneHandleResetButton(unsigned long nowMs) {
+    const bool pressed = (digitalRead(MK_PIN_BUTTON) == LOW);
+
+    if (pressed && !standaloneButtonPrevPressed) {
+        standaloneButtonPressStartMs = nowMs;
+        standaloneButtonLongActionDone = false;
+        standaloneSetHoldPreviewMode(STANDALONE_HOLD_PREVIEW_NONE, nowMs);
+    }
+
+    if (pressed && !standaloneResetModeActive) {
+        const unsigned long heldMs = nowMs - standaloneButtonPressStartMs;
+        StandaloneHoldPreviewMode targetPreview = STANDALONE_HOLD_PREVIEW_NONE;
+        if (heldMs >= STANDALONE_WIFI_PORTAL_HOLD_MS) {
+            targetPreview = STANDALONE_HOLD_PREVIEW_WIFI;
+        } else if (heldMs >= STANDALONE_ENTER_RESET_HOLD_MS) {
+            targetPreview = STANDALONE_HOLD_PREVIEW_RESET;
+        }
+        standaloneSetHoldPreviewMode(targetPreview, nowMs);
+    } else if (pressed) {
+        standaloneSetHoldPreviewMode(STANDALONE_HOLD_PREVIEW_NONE, nowMs);
+    }
+
+    if (pressed && standaloneResetModeActive && !standaloneButtonLongActionDone && standaloneResetSelection >= 0) {
+        const unsigned long heldMs = nowMs - standaloneButtonPressStartMs;
+        if (heldMs >= STANDALONE_CONFIRM_RESET_HOLD_MS) {
+            standaloneButtonLongActionDone = true;
+            const bool ok = standaloneExecuteResetSelection();
+            if (!ok) {
+                Serial.println("[STANDALONE][RESET] Operazione non completata. Rimango in modalita' reset.");
+            }
+        }
+    }
+
+    if (!pressed && standaloneButtonPrevPressed) {
+        const unsigned long heldMs = nowMs - standaloneButtonPressStartMs;
+        standaloneSetHoldPreviewMode(STANDALONE_HOLD_PREVIEW_NONE, nowMs);
+
+        if (!standaloneResetModeActive) {
+            if (heldMs >= STANDALONE_WIFI_PORTAL_HOLD_MS) {
+                standaloneButtonLongActionDone = true;
+                requestStandaloneWifiPortalStart();
+                Serial.println("[STANDALONE][WIFI] Richiesta avvio WiFi locale (hold 10s).");
+            } else if (heldMs >= STANDALONE_ENTER_RESET_HOLD_MS) {
+                standaloneResetModeActive = true;
+                standaloneResetSelection = -1;
+                standaloneButtonLongActionDone = true;
+                Serial.println("[STANDALONE][RESET] Modalita' reset ore attiva. Premi il tasto per selezionare BAL.");
+            }
+        } else {
+            if (standaloneResetSelection < 0) {
+                if (heldMs >= STANDALONE_ENTER_RESET_HOLD_MS) {
+                    standaloneResetModeActive = false;
+                    standaloneButtonLongActionDone = true;
+                    Serial.println("[STANDALONE][RESET] Uscita dalla modalita' reset ore.");
+                } else if (!standaloneButtonLongActionDone) {
+                    standaloneResetSelection = 0;
+                    Serial.printf("[STANDALONE][RESET] Selezione: %s\n", standaloneSelectionName(standaloneResetSelection));
+                }
+            } else if (!standaloneButtonLongActionDone && heldMs < STANDALONE_CONFIRM_RESET_HOLD_MS) {
+                standaloneResetSelection++;
+                if (standaloneResetSelection > 4) standaloneResetSelection = 0;
+                Serial.printf("[STANDALONE][RESET] Selezione: %s\n", standaloneSelectionName(standaloneResetSelection));
+            }
+        }
+    }
+
+    standaloneButtonPrevPressed = pressed;
+}
+
+static bool standaloneApplyHoldPreviewLeds(unsigned long nowMs) {
+    if (standaloneHoldPreviewMode == STANDALONE_HOLD_PREVIEW_NONE) {
+        return false;
+    }
+
+    standaloneLedExpLife.setState(LED_OFF);
+    standaloneLedSafety.setState(LED_OFF);
+
+    if (standaloneHoldPreviewMode == STANDALONE_HOLD_PREVIEW_WIFI) {
+        const unsigned long elapsed = nowMs - standaloneHoldPreviewStartMs;
+        const int frame = static_cast<int>((elapsed / STANDALONE_HOLD_WIFI_SWEEP_STEP_MS) % 6UL);
+        standaloneApplySweepFrame(frame);
+        return true;
+    }
+
+    const unsigned long activePhaseMs = static_cast<unsigned long>(STANDALONE_RESET_PREVIEW_BLINK_COUNT) * 2UL * STANDALONE_RESET_PREVIEW_BLINK_STEP_MS;
+    const unsigned long cycleMs = activePhaseMs + STANDALONE_RESET_PREVIEW_CYCLE_PAUSE_MS;
+    const unsigned long elapsedCycle = (nowMs - standaloneHoldPreviewStartMs) % cycleMs;
+    bool on = false;
+    if (elapsedCycle < activePhaseMs) {
+        const unsigned long phase = elapsedCycle / STANDALONE_RESET_PREVIEW_BLINK_STEP_MS;
+        on = (phase % 2UL) == 0UL;
+    }
+    standaloneSetAllBalLeds(on ? LED_SOLID : LED_OFF);
+    return true;
+}
+
+static void standaloneApplyResetModeLeds() {
+    standaloneSetSelectionVisual(standaloneResetSelection, true);
+    standaloneLedExpLife.setState(LED_OFF);
+    standaloneLedSafety.setState(LED_OFF);
+}
+
+static void standaloneApplyNormalLeds(unsigned long nowMs) {
+    int detectedCount = 0;
+    int relaySafetyOpenCount = 0;
+    int lifetimeAlarmCount = 0;
+    const bool masterSafetyConsidered = config.usaSicurezzaLocale;
+    const bool masterSafetyOpen = masterSafetyConsidered && (digitalRead(PIN_MASTER_SICUREZZA) == HIGH);
+
+    for (int relayId = 1; relayId <= 4; relayId++) {
+        Led* balLed = standaloneBalLedByRelayId(relayId);
+        if (!balLed) continue;
+
+        if (!relayBoardDetected[relayId]) {
+            balLed->setState(LED_OFF);
+            continue;
+        }
+
+        detectedCount++;
+        standaloneRefreshDerivedFlags(relayId, nowMs);
+
+        const StandaloneRelayStatus& st = standaloneRelay[relayId];
+        if (st.safetyAlarm) relaySafetyOpenCount++;
+        if (st.lifetimeAlarm) lifetimeAlarmCount++;
+
+        const bool fastProblem = (!st.online) || st.modeMismatch || st.safetyAlarm || st.lifetimeAlarm;
+        LedState balState = LED_SOLID;
+        if (!st.online) balState = LED_BLINK_FAST;
+        else if (fastProblem) balState = LED_BLINK_FAST;
+        else if (st.lampFault) balState = LED_BLINK_SLOW;
+        else balState = LED_SOLID;
+
+        balLed->setState(balState);
+    }
+
+    const int totalSafeties = detectedCount + (masterSafetyConsidered ? 1 : 0);
+    const int openSafeties = relaySafetyOpenCount + (masterSafetyOpen ? 1 : 0);
+    if (openSafeties == 0) {
+        standaloneLedSafety.setState(LED_OFF);
+    } else if (totalSafeties > 0 && openSafeties >= totalSafeties) {
+        standaloneLedSafety.setState(LED_SOLID);
+    } else {
+        standaloneLedSafety.setState(LED_BLINK_SLOW);
+    }
+
+    if (lifetimeAlarmCount == 0) {
+        standaloneLedExpLife.setState(LED_OFF);
+    } else if (detectedCount > 0 && lifetimeAlarmCount == detectedCount) {
+        standaloneLedExpLife.setState(LED_SOLID);
+    } else {
+        standaloneLedExpLife.setState(LED_BLINK_SLOW);
+    }
+}
+
 void scansionaSlaveStandalone() {
     Serial.println("[SCAN] Avvio scansione RELAY (Standalone)...");
-    
-    // Reset array rilevamento
-    for(int i=0; i<5; i++) relayBoardDetected[i] = false;
-    
+
+    standaloneBeginKeyboardIfNeeded();
+    standaloneLastFrameTxMs = 0;
+    standaloneSafetyInterlockWasActive = false;
+
+    for (int i = 0; i < 5; i++) {
+        relayBoardDetected[i] = false;
+        relayOnCommandIssued[i] = false;
+        standaloneRelay[i] = {};
+        standaloneRelay[i].stateText[0] = '\0';
+    }
+    for (int i = 1; i <= 30; i++) {
+        databaseSlave[i] = {};
+        listaPerifericheAttive[i] = false;
+    }
+
     int foundCount = 0;
     int unsupportedCount = 0;
+    const unsigned long nowMs = millis();
 
-    // Scansiona fino a 30 per rilevare eventuali schede in eccesso
+    // Scansione estesa: rileva eventuali schede non conformi ma abilita solo Relay UVC su ID 1..4.
     for (int i = 1; i <= 30; i++) {
-        while (Serial1.available()) Serial1.read(); // Pulisce eventuali byte residui/sporchi
+        if (i <= static_cast<int>(STANDALONE_BOOT_SWEEP_CYCLES) * 6) {
+            standaloneShowScanSweepFrame((i - 1) % 6); // Cicli sweep configurabili durante ricerca.
+        }
+        while (Serial1.available()) Serial1.read();
         if (debugViewData) {
             Serial.printf("[SCAN-TX] -> ?%d!\n", i);
         }
         modoTrasmissione();
         Serial1.printf("?%d!", i);
         modoRicezione();
-        
-        unsigned long startWait = millis();
-        while (millis() - startWait < 50) {
-            if (Serial1.available()) {
-                String resp = Serial1.readStringUntil('!');
-                if (debugViewData) {
-                    Serial.printf("[SCAN-RX] <- %s!\n", resp.c_str());
-                }
-                // Protocollo atteso Relay: OK,RELAY,MODE,STATE,... (es. OK,RELAY,2,0!)
-                
-                if (resp.startsWith("OK")) {
-                    Serial.printf("[SCAN] Risposta da ID %d: %s\n", i, resp.c_str());
-                    
-                    // Verifica se è una scheda Relay
-                    if (resp.indexOf("RELAY") != -1) {
-                        // Estrae il Modo (terzo campo, dopo OK e RELAY)
-                        int firstComma = resp.indexOf(',');
-                        int secondComma = resp.indexOf(',', firstComma+1);
-                        int thirdComma = resp.indexOf(',', secondComma+1);
-                        
-                        int mode = -1;
-                        if (secondComma != -1 && thirdComma != -1) {
-                            mode = resp.substring(secondComma+1, thirdComma).toInt();
-                        }
 
-                        if (mode == 2) { // Deve essere Mode 2 (UVC)
-                            if (i <= 4) {
-                                relayBoardDetected[i] = true;
-                                foundCount++;
-                                Serial.printf("[SCAN] ID %d: Relay Mode 2 -> OK\n", i);
-                            } else {
-                                Serial.printf("[ALARM] ID %d: Relay rilevato ma ID > 4 (Non gestito)!\n", i);
-                                unsupportedCount++;
-                            }
-                        } else {
-                            Serial.printf("[ALARM] ID %d: Relay rilevato ma Mode %d errato (Richiesto 2)!\n", i, mode);
-                            unsupportedCount++;
-                        }
-                    } else {
-                        // Risposta ricevuta ma non contiene la firma "RELAY"
-                        Serial.printf("[ALARM] ID %d: Scheda sconosciuta o non Relay!\n", i);
-                        unsupportedCount++;
-                    }
-                }
-                break; 
+        unsigned long startWait = millis();
+        while (millis() - startWait < 90) {
+            if (!Serial1.available()) continue;
+            String resp = Serial1.readStringUntil('!');
+            if (debugViewData) {
+                Serial.printf("[SCAN-RX] <- %s!\n", resp.c_str());
             }
+            if (!resp.startsWith("OK")) break;
+
+            if (!resp.startsWith("OK,RELAY,")) {
+                unsupportedCount++;
+                Serial.printf("[SCAN] ID %d ignorato: non e' una relay.\n", i);
+                break;
+            }
+
+            cacheRelayMetadata(resp, i);
+
+            StandaloneRelayStatus parsed = {};
+            parsed.stateText[0] = '\0';
+            if (!standaloneParseRelayStatus(resp, parsed)) {
+                unsupportedCount++;
+                Serial.printf("[SCAN] ID %d relay con formato status non valido.\n", i);
+                break;
+            }
+
+            if (parsed.mode != 2) {
+                unsupportedCount++;
+                Serial.printf("[SCAN] ID %d relay ignorata: mode=%d (richiesto UVC=2).\n", i, parsed.mode);
+                break;
+            }
+
+            if (i > 4) {
+                unsupportedCount++;
+                Serial.printf("[SCAN] ID %d relay UVC ignorata: fuori range Standalone (1..4).\n", i);
+                break;
+            }
+
+            relayBoardDetected[i] = true;
+            listaPerifericheAttive[i] = true;
+            parsed.detectedAtBoot = true;
+            parsed.online = true;
+            parsed.lastResponseMs = nowMs;
+            parsed.lastPollMs = nowMs;
+            standaloneRelay[i] = parsed;
+            foundCount++;
+            Serial.printf("[SCAN] ID %d: Relay UVC valida.\n", i);
+            break;
         }
     }
-    
+
     if (unsupportedCount > 0) {
-        Serial.printf("!!! ATTENZIONE: Trovate %d schede non conformi o fuori range !!!\n", unsupportedCount);
+        Serial.printf("[SCAN] Trovate %d schede non conformi/non gestite (ignorate).\n", unsupportedCount);
     }
-    Serial.printf("[SCAN] Scansione terminata. Relay validi trovati: %d\n", foundCount);
+    Serial.printf("[SCAN] Scansione terminata. Relay UVC valide: %d\n", foundCount);
+    standaloneShowDetectedRelaySequence();
 }
 
 void RS485_Master_Standalone_Loop() {
-    static unsigned long lastPoll = 0;
-    // Polling ogni 1 secondo
-    if (millis() - lastPoll < 1000) return; 
-    lastPoll = millis();
+    standaloneBeginKeyboardIfNeeded();
+    const unsigned long nowMs = millis();
 
-    for (int i = 1; i <= 4; i++) {
-        // Mappatura LED (da Manuale e richiesta):
-        // ID 1 -> BAL1 (Pin 4) -> PIN_LED_EXT_4
-        // ID 2 -> BAL2 (Pin 3) -> PIN_LED_EXT_3
-        // ID 3 -> BAL3 (Pin 2) -> PIN_LED_EXT_2
-        // ID 4 -> BAL4 (Pin 1) -> PIN_LED_EXT_1
-        int pinLed = -1;
-        if (i==1) pinLed = PIN_LED_EXT_4;
-        else if (i==2) pinLed = PIN_LED_EXT_3;
-        else if (i==3) pinLed = PIN_LED_EXT_2;
-        else if (i==4) pinLed = PIN_LED_EXT_1;
+    standaloneHandleResetButton(nowMs);
 
-        if (relayBoardDetected[i]) {
-            // Invia comando di accensione
-            modoTrasmissione();
-            Serial1.printf("CMD,%d,ON!", i); 
-            modoRicezione();
-            
-            // Per ora accendiamo il LED se la scheda è stata rilevata e (presumibilmente) attivata.
-            // In futuro potremmo leggere la risposta per confermare l'accensione effettiva.
-            if (pinLed != -1) digitalWrite(pinLed, HIGH);
-            
+    if (nowMs - standaloneLastPollMs >= STANDALONE_POLL_INTERVAL_MS) {
+        standaloneLastPollMs = nowMs;
+
+        for (int relayId = 1; relayId <= 4; relayId++) {
+            if (!relayBoardDetected[relayId]) continue;
+
+            standaloneRelay[relayId].lastPollMs = nowMs;
+            standalonePollRelayStatus(relayId, nowMs);
+            standaloneRefreshDerivedFlags(relayId, nowMs);
+        }
+
+        const bool safetyInterlockActive = standaloneIsSystemSafetyInterlockActive(nowMs);
+        if (safetyInterlockActive) {
+            if (!standaloneSafetyInterlockWasActive) {
+                Serial.println("[STANDALONE][SAFETY] Interlock attivo: OFF su tutte le relay.");
+                standaloneSafetyInterlockWasActive = true;
+            }
+            for (int relayId = 1; relayId <= 4; relayId++) {
+                if (!relayBoardDetected[relayId]) continue;
+                standaloneIssueOffCommandIfNeeded(relayId);
+            }
         } else {
-            // Se la scheda non è presente, LED spento
-            if (pinLed != -1) digitalWrite(pinLed, LOW);
+            if (standaloneSafetyInterlockWasActive) {
+                Serial.println("[STANDALONE][SAFETY] Interlock rientrato: riprendo gestione ON.");
+                standaloneSafetyInterlockWasActive = false;
+            }
+            for (int relayId = 1; relayId <= 4; relayId++) {
+                if (!relayBoardDetected[relayId]) continue;
+                standaloneIssueOnCommandIfNeeded(relayId);
+            }
+        }
+
+        for (int relayId = 1; relayId <= 4; relayId++) {
+            if (!relayBoardDetected[relayId]) continue;
+            standaloneRefreshDerivedFlags(relayId, millis());
         }
     }
+
+    if (standaloneApplyHoldPreviewLeds(nowMs)) {
+        // Preview "rilascia per entrare" durante pressione lunga.
+    } else if (standaloneResetModeActive) {
+        standaloneApplyResetModeLeds();
+    } else {
+        standaloneApplyNormalLeds(nowMs);
+    }
+
+    standaloneUpdateLedObjects();
+}
+
+bool getStandaloneRelaySnapshot(int relayId, StandaloneRelaySnapshot& outSnapshot) {
+    if (relayId < 1 || relayId > 4) {
+        return false;
+    }
+
+    const StandaloneRelayStatus& st = standaloneRelay[relayId];
+    outSnapshot.detectedAtBoot = st.detectedAtBoot;
+    outSnapshot.online = st.online;
+    outSnapshot.relayOn = st.relayOn;
+    outSnapshot.safetyClosed = st.safetyClosed;
+    outSnapshot.feedbackMatched = st.feedbackMatched;
+    outSnapshot.safetyAlarm = st.safetyAlarm;
+    outSnapshot.lifetimeAlarm = st.lifetimeAlarm;
+    outSnapshot.lampFault = st.lampFault;
+    outSnapshot.modeMismatch = st.modeMismatch;
+    outSnapshot.feedbackFaultLatched = st.feedbackFaultLatched;
+    outSnapshot.lifeLimitHours = st.lifeLimitHours;
+    outSnapshot.mode = st.mode;
+    outSnapshot.starts = st.starts;
+    outSnapshot.hours = st.hours;
+    strncpy(outSnapshot.stateText, st.stateText, sizeof(outSnapshot.stateText));
+    outSnapshot.stateText[sizeof(outSnapshot.stateText) - 1] = '\0';
+
+    return st.detectedAtBoot;
 }
 
 // Report progresso OTA con seriale slave esplicito (utile prima di avviare la state machine OTA)
@@ -678,4 +1643,9 @@ void reportSlaveProgressFor(String slaveSn, String status, String message) {
     }
     http.POST(jsonPayload);
     http.end();
+}
+
+// Alias neutro mantenuto in parallelo alla nomenclatura RS485 legacy.
+void RS485_Controller_Loop() {
+    RS485_Master_Loop();
 }

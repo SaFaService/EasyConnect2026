@@ -3,6 +3,7 @@
 $lang = [
     // Navbar
     'navbar_dashboard' => 'Dashboard',
+    'navbar_deltap_tests' => 'Test DeltaP',
     'navbar_address_book' => 'Rubrica',
     'navbar_plant_management' => 'Gestione Impianti',
     'navbar_user_management' => 'Gestione Utenti',
@@ -14,11 +15,12 @@ $lang = [
     'navbar_user_profile' => 'Profilo Utente',
     'navbar_my_profile' => 'Mio Profilo',
     'navbar_logout' => 'Esci',
-    'navbar_title' => 'Antralux Cloud',
+    'navbar_title' => 'AntraluxCloud',
+    'deltap_tests_title' => 'Campionamento DeltaP',
 
     // Login Page
-    'login_title' => 'Login - Antralux Cloud',
-    'login_header' => 'Antralux Cloud',
+    'login_title' => 'Login - AntraluxCloud',
+    'login_header' => 'AntraluxCloud',
     'login_error' => 'Email o Password non validi.',
     'login_email_label' => 'Email',
     'login_password_label' => 'Password',
@@ -71,7 +73,7 @@ $lang = [
     'privacy_controller_title' => '1. Titolare del Trattamento',
     'privacy_controller_text' => 'Il titolare del trattamento dei dati è <strong>SaFa Service srl</strong>, Via Galileo Ferraris 12, 56121 Pisa, Italy.',
     'privacy_data_title' => '2. Tipologia di Dati Raccolti',
-    'privacy_data_text' => 'Questo sistema "Antralux Cloud" raccoglie esclusivamente dati tecnici e anagrafici necessari al funzionamento del servizio di telecontrollo:',
+    'privacy_data_text' => 'Questo sistema "AntraluxCloud" raccoglie esclusivamente dati tecnici e anagrafici necessari al funzionamento del servizio di telecontrollo:',
     'privacy_data_nav' => 'Dati di Navigazione',
     'privacy_data_nav_desc' => 'Indirizzi IP, tipo di browser, risoluzione schermo e altri parametri tecnici per fini diagnostici e di sicurezza.',
     'privacy_data_user' => 'Dati Utente',
@@ -117,6 +119,7 @@ $lang = [
     'settings_creator' => 'Creatore',
     'settings_owner' => 'Proprietario',
     'settings_maintainer' => 'Manutentore',
+    'settings_builder' => 'Costruttore',
     'settings_unassigned' => 'Non assegnato',
     'settings_api_key' => 'API Key',
     'settings_copy' => 'Copia',
@@ -124,6 +127,7 @@ $lang = [
     'settings_log_retention' => 'Conserva Log (giorni)',
     'settings_assign_owner' => 'Assegna a Proprietario (Cliente)',
     'settings_assign_maintainer' => 'Assegna a Manutentore',
+    'settings_assign_builder' => 'Assegna a Costruttore',
     'settings_none' => 'Nessuno',
     'settings_save_data' => 'Salva Dati',
     'settings_save_assign' => 'Salva Assegnazioni',
@@ -263,3 +267,4 @@ $lang = [
     // Footer
     'footer_portal_version' => 'Versione Portale',
 ];
+

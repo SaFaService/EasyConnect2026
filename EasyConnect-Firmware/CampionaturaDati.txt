@@ -1,0 +1,66 @@
+﻿Analisi campionature DeltaP - Sporco 1 e Sporco 2
+Generato il: 2026-02-27 12:14:38
+
+Metodo
+- Input: file CSV in Download con prefisso deltap_test_sporco_1* e deltap_test_sporco_2*
+- Parser robusto riga-per-riga (gestisce anche file senza intestazione)
+- Dati usati: solo record con raw_valid=1 e delta_raw_pa valorizzato
+- Deduplica: chiave (dirt_level, speed_index, session_id, uptime_ms, delta_raw_pa)
+- Statistiche per velocita': sessione con piu' campioni (best session)
+- Metriche: min, avg, mediana, P10, P90, max, deviazione standard, coeff. variazione
+
+File considerati
+- deltap_test_sporco_1 - Velocità 1.csv (33302 bytes)
+- deltap_test_sporco_1 - Velocità 2.csv (23082 bytes)
+- deltap_test_sporco_1 - Velocità 3.csv (20480 bytes)
+- deltap_test_sporco_1 - Velocità 4.csv (16919 bytes)
+- deltap_test_sporco_1 - Velocità 5.csv (54474 bytes)
+- deltap_test_sporco_2 - Velocità 1.csv (38726 bytes)
+- deltap_test_sporco_2 - Velocità 2.csv (11877 bytes) [no-header]
+- deltap_test_sporco_2 Velocità 3.csv (895 bytes)
+- deltap_test_sporco_2 Velocità 4.csv (170 bytes)
+- deltap_test_sporco_2 Velocità 5.csv (330 bytes)
+- deltap_test_sporco_2.csv (11877 bytes) [no-header]
+
+Sporco livello 1
+- File letti: 5
+- Record raw validi unici: 2501
+  Vel1: sessione=75848 campioni=900
+    min/avg/med/max = 66,0/76,2/76,0/85,0 Pa
+    P10-P90 = 72,0-80,0 Pa | std = 3,1 | cv = 4,0%
+  Vel2: sessione=92247 campioni=392
+    min/avg/med/max = 74,0/83,8/84,0/108,0 Pa
+    P10-P90 = 79,0-89,0 Pa | std = 4,2 | cv = 5,0%
+  Vel3: sessione=1367641 campioni=100
+    min/avg/med/max = 75,0/88,7/89,5/99,0 Pa
+    P10-P90 = 82,0-95,0 Pa | std = 5,2 | cv = 5,9%
+  Vel4: sessione=2545269 campioni=209
+    min/avg/med/max = 87,0/108,5/107,0/160,0 Pa
+    P10-P90 = 94,0-123,0 Pa | std = 13,1 | cv = 12,0%
+  Vel5: sessione=5777502 campioni=900
+    min/avg/med/max = 69,0/113,2/112,0/169,0 Pa
+    P10-P90 = 97,0-131,0 Pa | std = 14,3 | cv = 12,6%
+
+Sporco livello 2
+- File letti: 6
+- Record raw validi unici: 1098
+  Vel1: sessione=10186204 campioni=900
+    min/avg/med/max = 68,0/79,3/79,0/88,0 Pa
+    P10-P90 = 76,0-83,0 Pa | std = 3,0 | cv = 3,7%
+  Vel2: sessione=85831929 campioni=179
+    min/avg/med/max = 70,0/93,6/94,0/107,0 Pa
+    P10-P90 = 83,0-103,0 Pa | std = 7,7 | cv = 8,2%
+  Vel3: sessione=2427877 campioni=14
+    min/avg/med/max = 102,0/106,7/107,0/112,0 Pa
+    P10-P90 = 102,0-111,4 Pa | std = 3,5 | cv = 3,3%
+  Vel4: sessione=38411 campioni=1
+    min/avg/med/max = 150,0/150,0/150,0/150,0 Pa
+    P10-P90 = 150,0-150,0 Pa | std = 0,0 | cv = 0,0%
+  Vel5: sessione=1015171 campioni=4
+    min/avg/med/max = 154,0/163,0/163,0/172,0 Pa
+    P10-P90 = 154,0-172,0 Pa | std = 10,4 | cv = 6,4%
+
+Note operative
+- Sono presenti duplicati/multi-export; la deduplica riduce il rischio di bias.
+- Alcuni file sporco 2 risultano incompleti o senza intestazione; parser gestito ma i campioni restano pochi su Vel3-4-5.
+- Sporco 2: per Vel3-4-5 servono nuove acquisizioni da almeno 15 minuti per avere statistiche stabili.

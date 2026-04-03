@@ -3,12 +3,20 @@
 
 #include <Arduino.h>
 
-// Funzione per gestire i comandi seriali specifici della scheda Master.
-// Da chiamare nel loop() del Master.
-void Serial_Master_Menu();
+// Gestione comandi seriali per schede Controller (Display, Standalone/Rewamping).
+void Serial_Controller_Menu();
 
-// Funzione per gestire i comandi seriali specifici della scheda Slave.
-// Da chiamare nel loop() dello Slave.
+// Gestione comandi seriali per schede Peripheral (Pressione, Relay, Motore).
+void Serial_Peripheral_Menu();
+
+// Alias legacy mantenuti per compatibilita' con codice esistente.
+void Serial_Master_Menu();
 void Serial_Slave_Menu();
+
+// API interne per controllo wizard DeltaP da pagina web locale.
+bool webStartDeltaPTestWizard(int totalSpeeds, int dirtLevel, int speedIndex, String &message);
+bool webStopDeltaPTestWizard(bool saveIfPossible, String &message);
+String webGetDeltaPTestWizardStatusJson();
+bool webIsDeltaPTestWizardBusy();
 
 #endif

@@ -1,6 +1,7 @@
 <?php
 session_start();
 require 'config.php';
+require_once 'auth_common.php';
 header('Content-Type: application/json');
 
 /*
@@ -13,8 +14,10 @@ header('Content-Type: application/json');
  * - assign_serial_to_master : assegna seriale a una master esistente
  *
  * NOTE OPERATIVE:
- * - Operazioni core (riserva/manuale/assegnazione master): ADMIN.
- * - Verifica e lifecycle (retired/voided): ADMIN/BUILDER/MAINTAINER.
+ * - Verifica seriale/lista motivazioni: ADMIN/BUILDER/MAINTAINER.
+ * - Lifecycle + assegnazione master: richiedono abilitazione serial_lifecycle.
+ * - Riserva seriali: richiede abilitazione serial_reserve.
+ * - Registrazione manuale seriale: ADMIN.
  * - In fase successiva l'app Python usera' la stessa logica DB.
  * - Le operazioni critiche scrivono audit in serial_audit_logs.
  */
@@ -46,6 +49,9 @@ if (!isset($_SESSION['user_role'])) {
 
 $userId = (int)$_SESSION['user_id'];
 $userRole = (string)$_SESSION['user_role'];
+$userPermissions = ecAuthCurrentUserPermissions($pdo, $userId);
+$canSerialLifecycle = !empty($userPermissions['serial_lifecycle']);
+$canSerialReserve = !empty($userPermissions['serial_reserve']);
 
 /* ------------------------------------------------------------
  * Parse input JSON
@@ -62,10 +68,10 @@ if ($action === '') {
 
 function requireActionRoles(string $action, string $currentRole): void {
     $acl = [
-        // Admin-only operations
-        'reserve_next_serial' => ['admin'],
+        // Operazioni operative condivise (abilitazione gestita anche da permessi granulari)
+        'reserve_next_serial' => ['admin', 'builder', 'maintainer'],
         'register_manual_serial' => ['admin'],
-        'assign_serial_to_master' => ['admin'],
+        'assign_serial_to_master' => ['admin', 'builder', 'maintainer'],
         // Shared operations for field/service roles
         'check_serial' => ['admin', 'builder', 'maintainer'],
         'list_status_reasons' => ['admin', 'builder', 'maintainer'],
@@ -80,7 +86,17 @@ function requireActionRoles(string $action, string $currentRole): void {
     }
 }
 
+function requireActionPermission(string $action, bool $canSerialLifecycle, bool $canSerialReserve): void {
+    if (in_array($action, ['set_serial_status', 'assign_serial_to_master'], true) && !$canSerialLifecycle) {
+        jsonErr('Gestione seriali non abilitata per questa utenza.', 403);
+    }
+    if ($action === 'reserve_next_serial' && !$canSerialReserve) {
+        jsonErr('Riserva seriali non abilitata per questa utenza.', 403);
+    }
+}
+
 requireActionRoles($action, $userRole);
+requireActionPermission($action, $canSerialLifecycle, $canSerialReserve);
 
 /* ------------------------------------------------------------
  * Helper audit seriali (tabella dedicata, indipendente da masters)
@@ -126,6 +142,116 @@ function columnExists(PDO $pdo, string $tableName, string $columnName): bool {
     $stmt->execute([$tableName, $columnName]);
     return (bool)$stmt->fetchColumn();
 }
+
+function canUserAccessMaster(PDO $pdo, int $masterId, int $userId, string $userRole): bool {
+    if ($masterId <= 0) {
+        return false;
+    }
+    if ($userRole === 'admin') {
+        return true;
+    }
+    $hasBuilderMasterCol = columnExists($pdo, 'masters', 'builder_id');
+    $sql = "SELECT 1 FROM masters WHERE id = ? AND (creator_id = ? OR owner_id = ? OR maintainer_id = ?";
+    $params = [$masterId, $userId, $userId, $userId];
+    if ($hasBuilderMasterCol) {
+        $sql .= " OR builder_id = ?";
+        $params[] = $userId;
+    }
+    $sql .= ") LIMIT 1";
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($params);
+    return (bool)$stmt->fetchColumn();
+}
+
+function userHasMasterHistoryForSerial(PDO $pdo, string $serial, int $userId): bool {
+    $hasBuilderMasterCol = columnExists($pdo, 'masters', 'builder_id');
+    $masterScope = "(m.creator_id = ? OR m.owner_id = ? OR m.maintainer_id = ?" . ($hasBuilderMasterCol ? " OR m.builder_id = ?" : "") . ")";
+    $baseParams = [$serial, $userId, $userId, $userId];
+    if ($hasBuilderMasterCol) {
+        $baseParams[] = $userId;
+    }
+
+    if (tableExists($pdo, 'serial_audit_logs')) {
+        $sql = "
+            SELECT 1
+            FROM serial_audit_logs sal
+            JOIN masters m ON m.id = sal.master_id
+            WHERE sal.serial_number = ?
+              AND sal.master_id IS NOT NULL
+              AND $masterScope
+            LIMIT 1
+        ";
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($baseParams);
+        if ((bool)$stmt->fetchColumn()) {
+            return true;
+        }
+    }
+
+    if (tableExists($pdo, 'serial_lifecycle_events')) {
+        $sqlEvt = "
+            SELECT 1
+            FROM serial_lifecycle_events sle
+            JOIN masters m ON m.id = sle.master_id
+            WHERE sle.serial_number = ?
+              AND sle.master_id IS NOT NULL
+              AND $masterScope
+            LIMIT 1
+        ";
+        $stmtEvt = $pdo->prepare($sqlEvt);
+        $stmtEvt->execute($baseParams);
+        if ((bool)$stmtEvt->fetchColumn()) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function canUserAccessSerial(PDO $pdo, string $serial, int $userId, string $userRole): bool {
+    if ($serial === '') {
+        return false;
+    }
+    if ($userRole === 'admin') {
+        return true;
+    }
+    if (!tableExists($pdo, 'device_serials')) {
+        return false;
+    }
+
+    $hasOwnerUser = columnExists($pdo, 'device_serials', 'owner_user_id');
+    $hasAssignedUser = columnExists($pdo, 'device_serials', 'assigned_user_id');
+    $hasAssignedMaster = columnExists($pdo, 'device_serials', 'assigned_master_id');
+    $select = [
+        'serial_number',
+        ($hasAssignedMaster ? 'assigned_master_id' : 'NULL AS assigned_master_id'),
+        ($hasOwnerUser ? 'owner_user_id' : 'NULL AS owner_user_id'),
+        ($hasAssignedUser ? 'assigned_user_id' : 'NULL AS assigned_user_id'),
+    ];
+    $stmt = $pdo->prepare("SELECT " . implode(', ', $select) . " FROM device_serials WHERE serial_number = ? LIMIT 1");
+    $stmt->execute([$serial]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!$row) {
+        return false;
+    }
+
+    $masterId = isset($row['assigned_master_id']) ? (int)$row['assigned_master_id'] : 0;
+    if ($masterId > 0 && canUserAccessMaster($pdo, $masterId, $userId, $userRole)) {
+        return true;
+    }
+    if ($hasOwnerUser && isset($row['owner_user_id']) && (int)$row['owner_user_id'] === $userId) {
+        return true;
+    }
+    if ($hasAssignedUser && isset($row['assigned_user_id']) && (int)$row['assigned_user_id'] === $userId) {
+        return true;
+    }
+    if (userHasMasterHistoryForSerial($pdo, $serial, $userId)) {
+        return true;
+    }
+    return false;
+}
+
+$hasDeviceModeColumn = tableExists($pdo, 'device_serials') && columnExists($pdo, 'device_serials', 'device_mode');
 
 function writeSerialLifecycleEvent(
     PDO $pdo,
@@ -193,6 +319,66 @@ function validProductType(string $code): bool {
     return (bool)preg_match('/^(01|02|03|04|05)$/', $code);
 }
 
+function normalizeDeviceMode($value): ?int {
+    if ($value === null) {
+        return null;
+    }
+    $raw = trim((string)$value);
+    if ($raw === '') {
+        return null;
+    }
+    if (!preg_match('/^\d+$/', $raw)) {
+        return null;
+    }
+    $mode = (int)$raw;
+    return $mode > 0 ? $mode : null;
+}
+
+function allowedDeviceModesForProductType(string $productTypeCode): array {
+    switch ($productTypeCode) {
+        case '02':
+            return [1, 2];
+        case '03':
+            return [1, 2, 3, 4, 5];
+        case '04':
+            return [1, 2, 3];
+        default:
+            return [];
+    }
+}
+
+function deviceModeLabel(string $productTypeCode, ?int $deviceMode): string {
+    if ($deviceMode === null) {
+        return '';
+    }
+    $map = [];
+    switch ($productTypeCode) {
+        case '02':
+            $map = [1 => 'Standalone', 2 => 'Rewamping'];
+            break;
+        case '03':
+            $map = [1 => 'LUCE', 2 => 'UVC', 3 => 'ELETTROSTATICO', 4 => 'GAS', 5 => 'COMANDO'];
+            break;
+        case '04':
+            $map = [1 => 'Temp/Humidity', 2 => 'Pressure', 3 => 'All'];
+            break;
+    }
+    return $map[$deviceMode] ?? '';
+}
+
+function validateDeviceModeOrErr(?int $deviceMode, string $productTypeCode): void {
+    if ($deviceMode === null) {
+        return;
+    }
+    $allowedModes = allowedDeviceModesForProductType($productTypeCode);
+    if (empty($allowedModes)) {
+        jsonErr('device_mode non previsto per il tipo prodotto selezionato.');
+    }
+    if (!in_array($deviceMode, $allowedModes, true)) {
+        jsonErr('device_mode non valido per il tipo prodotto selezionato.');
+    }
+}
+
 function detectSerialScheme(string $serial): string {
     if (preg_match('/^[0-9]{6}(01|02|03|04|05)[0-9]{4}$/', $serial)) {
         return 'v2_yyyymmttnnnn';
@@ -236,10 +422,16 @@ function releaseMonthLock(PDO $pdo, string $yearMonth): void {
 if ($action === 'reserve_next_serial') {
     $productTypeCode = (string)($input['product_type_code'] ?? '');
     $notes = $input['notes'] ?? null;
+    $deviceModeRaw = $input['device_mode'] ?? null;
+    $deviceMode = normalizeDeviceMode($deviceModeRaw);
 
     if (!validProductType($productTypeCode)) {
         jsonErr('product_type_code non valido.');
     }
+    if (trim((string)$deviceModeRaw) !== '' && $deviceMode === null) {
+        jsonErr('device_mode non valido.');
+    }
+    validateDeviceModeOrErr($deviceMode, $productTypeCode);
 
     $yearMonth = date('Ym');
     $lockAcquired = false;
@@ -273,26 +465,29 @@ if ($action === 'reserve_next_serial') {
 
         $serial = $yearMonth . $productTypeCode . str_pad((string)$nextSeq, 4, '0', STR_PAD_LEFT);
 
+        $insertCols = [
+            'serial_number',
+            'serial_scheme',
+            'product_type_code',
+            'serial_locked',
+            'lock_source',
+            'assigned_user_id',
+            'assigned_role',
+            'status',
+            'notes',
+        ];
+        $insertVals = ['?', "'v2_yyyymmttnnnn'", '?', '1', "'factory'", '?', '?', "'reserved'", '?'];
+        $insertParams = [$serial, $productTypeCode, $userId, $userRole, $notes];
+        if ($hasDeviceModeColumn) {
+            $insertCols[] = 'device_mode';
+            $insertVals[] = '?';
+            $insertParams[] = $deviceMode;
+        }
         $stmtIns = $pdo->prepare("
-            INSERT INTO device_serials (
-                serial_number,
-                serial_scheme,
-                product_type_code,
-                serial_locked,
-                lock_source,
-                assigned_user_id,
-                assigned_role,
-                status,
-                notes
-            ) VALUES (?, 'v2_yyyymmttnnnn', ?, 1, 'factory', ?, ?, 'reserved', ?)
+            INSERT INTO device_serials (" . implode(', ', $insertCols) . ")
+            VALUES (" . implode(', ', $insertVals) . ")
         ");
-        $stmtIns->execute([
-            $serial,
-            $productTypeCode,
-            $userId,
-            $userRole,
-            $notes
-        ]);
+        $stmtIns->execute($insertParams);
 
         writeSerialAudit(
             $pdo,
@@ -314,7 +509,9 @@ if ($action === 'reserve_next_serial') {
             'serial' => $serial,
             'message' => 'Seriale riservato con successo.',
             'year_month' => $yearMonth,
-            'monthly_seq' => $nextSeq
+            'monthly_seq' => $nextSeq,
+            'device_mode' => $deviceMode,
+            'device_mode_label' => deviceModeLabel($productTypeCode, $deviceMode)
         ]);
     } catch (Throwable $e) {
         if ($pdo->inTransaction()) {
@@ -361,6 +558,12 @@ if ($action === 'check_serial') {
 
         // Caso 1: seriale esatto gia' presente in archivio.
         if ($row) {
+            if ($userRole !== 'admin' && !canUserAccessSerial($pdo, $serial, $userId, $userRole)) {
+                jsonErr('Seriale non accessibile per questa utenza.', 403);
+            }
+            if (array_key_exists('device_mode', $row)) {
+                $row['device_mode_label'] = deviceModeLabel((string)($row['product_type_code'] ?? ''), isset($row['device_mode']) ? (int)$row['device_mode'] : null);
+            }
             jsonOk([
                 'exists' => true,
                 'assignable' => false,
@@ -459,6 +662,8 @@ if ($action === 'register_manual_serial') {
     $serial = trim((string)($input['serial_number'] ?? ''));
     $productTypeCode = (string)($input['product_type_code'] ?? '');
     $notes = trim((string)($input['notes'] ?? ''));
+    $deviceModeRaw = $input['device_mode'] ?? null;
+    $deviceMode = normalizeDeviceMode($deviceModeRaw);
 
     if ($serial === '') {
         jsonErr('serial_number mancante');
@@ -466,6 +671,10 @@ if ($action === 'register_manual_serial') {
     if (!validProductType($productTypeCode)) {
         jsonErr('product_type_code non valido');
     }
+    if (trim((string)$deviceModeRaw) !== '' && $deviceMode === null) {
+        jsonErr('device_mode non valido.');
+    }
+    validateDeviceModeOrErr($deviceMode, $productTypeCode);
 
     $serialScheme = detectSerialScheme($serial);
     $parsed = parseV2Serial($serial);
@@ -524,27 +733,36 @@ if ($action === 'register_manual_serial') {
             }
         }
 
-        $stmt = $pdo->prepare("
-            INSERT INTO device_serials (
-                serial_number,
-                serial_scheme,
-                product_type_code,
-                serial_locked,
-                lock_source,
-                assigned_user_id,
-                assigned_role,
-                status,
-                notes
-            ) VALUES (?, ?, ?, 1, 'manual', ?, ?, 'provisioned', ?)
-        ");
-        $stmt->execute([
+        $insertCols = [
+            'serial_number',
+            'serial_scheme',
+            'product_type_code',
+            'serial_locked',
+            'lock_source',
+            'assigned_user_id',
+            'assigned_role',
+            'status',
+            'notes',
+        ];
+        $insertVals = ['?', '?', '?', '1', "'manual'", '?', '?', "'provisioned'", '?'];
+        $insertParams = [
             $serial,
             $serialScheme,
             $productTypeCode,
             $userId,
             $userRole,
             $notes !== '' ? $notes : 'Inserimento manuale da portale'
-        ]);
+        ];
+        if ($hasDeviceModeColumn) {
+            $insertCols[] = 'device_mode';
+            $insertVals[] = '?';
+            $insertParams[] = $deviceMode;
+        }
+        $stmt = $pdo->prepare("
+            INSERT INTO device_serials (" . implode(', ', $insertCols) . ")
+            VALUES (" . implode(', ', $insertVals) . ")
+        ");
+        $stmt->execute($insertParams);
 
         writeSerialAudit(
             $pdo,
@@ -564,7 +782,9 @@ if ($action === 'register_manual_serial') {
         jsonOk([
             'serial_number' => $serial,
             'serial_scheme' => $serialScheme,
-            'message' => 'Seriale registrato manualmente.'
+            'message' => 'Seriale registrato manualmente.',
+            'device_mode' => $deviceMode,
+            'device_mode_label' => deviceModeLabel($productTypeCode, $deviceMode)
         ]);
     } catch (Throwable $e) {
         if ($lockAcquired && $lockYearMonth !== null) {
@@ -668,6 +888,10 @@ if ($action === 'set_serial_status') {
         if (!$row) {
             $pdo->rollBack();
             jsonErr('Seriale non trovato.');
+        }
+        if ($userRole !== 'admin' && !canUserAccessSerial($pdo, $serial, $userId, $userRole)) {
+            $pdo->rollBack();
+            jsonErr('Seriale non accessibile per questa utenza.', 403);
         }
 
         if ($replacedBy !== '') {
@@ -796,6 +1020,10 @@ if ($action === 'assign_serial_to_master') {
         if (!$master) {
             $pdo->rollBack();
             jsonErr('Master non trovato.');
+        }
+        if ($userRole !== 'admin' && !canUserAccessMaster($pdo, $masterId, $userId, $userRole)) {
+            $pdo->rollBack();
+            jsonErr('Master non accessibile per questa utenza.', 403);
         }
 
         // 2) Lock riga seriale

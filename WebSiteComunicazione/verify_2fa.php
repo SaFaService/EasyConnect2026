@@ -1,6 +1,7 @@
 <?php
 session_start();
 require 'config.php';
+require 'auth_common.php';
 require 'GoogleAuthenticator.php';
 
 if (!isset($_SESSION['temp_user_id'])) {
@@ -11,24 +12,73 @@ if (!isset($_SESSION['temp_user_id'])) {
 $error = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $code = $_POST['code'];
+    $code = trim((string)($_POST['code'] ?? ''));
     
     // Recupera il segreto dal DB
-    $stmt = $pdo->prepare("SELECT google_auth_secret, id, email, role FROM users WHERE id = ?");
+    $hasPortalAccessLevel = ecAuthColumnExists($pdo, 'users', 'portal_access_level');
+    $stmt = $pdo->prepare("SELECT google_auth_secret, id, email, role " . ($hasPortalAccessLevel ? ", portal_access_level" : ", 'active' AS portal_access_level") . " FROM users WHERE id = ?");
     $stmt->execute([$_SESSION['temp_user_id']]);
     $user = $stmt->fetch();
+    if (!$user) {
+        ecAuthWriteAccessLog(
+            $pdo,
+            null,
+            (string)($_SESSION['temp_user_email'] ?? ''),
+            '',
+            'web',
+            'failed',
+            'Sessione 2FA non valida o utente non trovato'
+        );
+        unset($_SESSION['temp_user_id'], $_SESSION['temp_user_email']);
+        header("Location: login.php");
+        exit;
+    }
+    if (!ecAuthPortalLoginAllowed((string)($user['portal_access_level'] ?? 'active'))) {
+        ecAuthWriteAccessLog(
+            $pdo,
+            (int)$user['id'],
+            (string)$user['email'],
+            (string)$user['role'],
+            'web',
+            'failed',
+            'Accesso portale bloccato durante verifica 2FA'
+        );
+        unset($_SESSION['temp_user_id'], $_SESSION['temp_user_email']);
+        header("Location: login.php");
+        exit;
+    }
 
     $ga = new GoogleAuthenticator();
     if ($ga->verifyCode($user['google_auth_secret'], $code)) {
         // Codice valido: Login completo
+        session_regenerate_id(true);
         $_SESSION['user_id'] = $user['id'];
         $_SESSION['user_email'] = $user['email'];
         $_SESSION['user_role'] = $user['role'];
         unset($_SESSION['temp_user_id']); // Rimuovi ID temporaneo
+        unset($_SESSION['temp_user_email']);
+        ecAuthWriteAccessLog(
+            $pdo,
+            (int)$user['id'],
+            (string)$user['email'],
+            (string)$user['role'],
+            'web',
+            'success',
+            'Login web completato con 2FA'
+        );
         
         header("Location: index.php");
         exit;
     } else {
+        ecAuthWriteAccessLog(
+            $pdo,
+            isset($user['id']) ? (int)$user['id'] : null,
+            (string)($_SESSION['temp_user_email'] ?? ''),
+            (string)($user['role'] ?? ''),
+            'web',
+            'failed',
+            '2FA non valida'
+        );
         $error = "Codice non valido.";
     }
 }

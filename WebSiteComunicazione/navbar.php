@@ -1,24 +1,35 @@
 <?php
 // navbar.php - Barra di navigazione riutilizzabile
+require_once 'auth_common.php';
+if (isset($_SESSION['user_id'], $pdo) && ecAuthCurrentUserAccessLevel($pdo, (int)$_SESSION['user_id']) === 'blocked') {
+    header('Location: logout.php');
+    exit;
+}
+$currentUserPermissions = [];
+if (isset($_SESSION['user_id'], $pdo)) {
+    $currentUserPermissions = ecAuthCurrentUserPermissions($pdo, (int)$_SESSION['user_id']);
+}
+$canSerialLifecycle = !empty($currentUserPermissions['serial_lifecycle']);
+$canReadSerials = in_array((string)($_SESSION['user_role'] ?? ''), ['admin', 'builder', 'maintainer'], true);
 ?>
 <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
   <div class="container-fluid">
     <a class="navbar-brand" href="index.php">
-        <img src="assets/img/AntraluxCloud.png" height="55" alt="Antralux Cloud" class="d-inline-block align-text-top">
+        <img src="assets/img/AntraluxCloud.png" height="55" alt="AntraluxCloud" class="d-inline-block align-text-top">
     </a>
     <div class="d-flex align-items-center">
         <a href="index.php" class="btn btn-outline-light me-2"><i class="fas fa-server"></i> <?php echo $lang['navbar_dashboard']; ?></a>
+        <?php if ($_SESSION['user_role'] === 'admin'): ?>
+        <a href="deltap_tests.php" class="btn btn-outline-light me-2"><i class="fas fa-flask-vial"></i> <?php echo isset($lang['navbar_deltap_tests']) ? $lang['navbar_deltap_tests'] : 'Test DeltaP'; ?></a>
+        <?php endif; ?>
         <?php if ($_SESSION['user_role'] !== 'client'): ?>
             <a href="contacts.php" class="btn btn-outline-light me-2"><i class="fas fa-address-book"></i> <?php echo $lang['navbar_address_book']; ?></a>
         <?php endif; ?>
         <a href="settings.php" class="btn btn-outline-light me-2"><i class="fas fa-cogs"></i> <?php echo $lang['navbar_plant_management']; ?></a>
         <?php if ($_SESSION['user_role'] === 'admin'): ?>
-            <a href="users.php" class="btn btn-outline-light me-2"><i class="fas fa-users"></i> <?php echo $lang['navbar_user_management']; ?></a>
-        <?php endif; ?>
-        <?php if ($_SESSION['user_role'] === 'admin' || $_SESSION['user_role'] === 'builder'): ?>
             <a href="firmware.php" class="btn btn-outline-light me-2"><i class="fas fa-cloud-upload-alt"></i> <?php echo $lang['navbar_firmware_management']; ?></a>
         <?php endif; ?>
-        <?php if ($_SESSION['user_role'] === 'admin' || $_SESSION['user_role'] === 'builder' || $_SESSION['user_role'] === 'maintainer'): ?>
+        <?php if ($canReadSerials || $canSerialLifecycle): ?>
             <a href="serials.php" class="btn btn-outline-light me-2"><i class="fas fa-barcode"></i> <?php echo $lang['navbar_serial_management']; ?></a>
         <?php endif; ?>
         
@@ -45,3 +56,4 @@
     </div>
   </div>
 </nav>
+

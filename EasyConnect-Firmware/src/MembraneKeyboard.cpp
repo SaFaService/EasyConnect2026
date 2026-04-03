@@ -8,6 +8,8 @@ extern bool listaPerifericheAttive[101];
 extern DatiSlave databaseSlave[101];
 extern Impostazioni config;
 extern int statoInternet;
+extern bool apiAuthRejected;
+extern bool apiCustomerIssue;
 
 MembraneKeyboard::MembraneKeyboard() :
     _ledWifi(MK_PIN_WIFI),
@@ -34,7 +36,11 @@ void MembraneKeyboard::begin() {
 void MembraneKeyboard::update() {
     // --- LOGICA PIN 1: WIFI ---
     if (WiFi.status() == WL_CONNECTED) {
-        _ledWifi.setState(LED_SOLID); // Wifi Connesso
+        if (apiAuthRejected || apiCustomerIssue) {
+            _ledWifi.setState(LED_BLINK_SLOW); // Wifi ok ma API cliente in errore/mancante
+        } else {
+            _ledWifi.setState(LED_SOLID); // Wifi connesso e API ok/non in errore auth
+        }
     } else if ((WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA) && WiFi.status() != WL_CONNECTED) {
         _ledWifi.setState(LED_BLINK_FAST); // Wifi Disconnesso ma AP Attivo
     } else {

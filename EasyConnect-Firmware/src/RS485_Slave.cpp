@@ -1,4 +1,4 @@
-#include "RS485_Manager.h"
+﻿#include "RS485_Manager.h"
 #include "RS485_Slave.h"
 #include "GestioneMemoria.h"
 #include "Pins.h"
@@ -9,7 +9,7 @@
 #include <ESP.h>
 
 // La parola chiave 'extern' indica al compilatore che queste variabili sono definite
-// in un altro file (in questo caso, in 'main_slave.cpp').
+// in un altro file (in questo caso, in 'main_pressure_peripheral.cpp').
 // Questo ci permette di accedervi e leggerle da questo file.
 extern Impostazioni config;
 extern Preferences memoria;
@@ -25,6 +25,7 @@ bool otaInProgress = false;
 size_t otaTotalSize = 0;
 String otaExpectedMD5 = "";
 size_t otaWrittenSize = 0;
+size_t otaExpectedOffset = 0;
 MD5Builder otaRunningMd5;
 bool otaRunningMd5Active = false;
 
@@ -46,7 +47,7 @@ void RS485_Slave_Loop() {
     if (Serial1.available()) {
         lastAny485Activity = millis(); // ...aggiorna il timer dell'ultima attività rilevata.
         String richiesta = Serial1.readStringUntil('!'); // ...leggi la stringa fino al carattere '!'.
-        
+
         // Gestione comandi OTA
         if (richiesta.startsWith("OTA,") || richiesta.startsWith("TEST,")) {
             if (debugViewData) Serial.println("RX OTA: " + richiesta);
@@ -66,37 +67,77 @@ void RS485_Slave_Loop() {
                 char buffer[150];
                 // ...prepara la stringa di risposta con tutti i dati richiesti.
                 // La pressione viene inviata in Pascal (il valore in mBar viene moltiplicato per 100).
-                snprintf(buffer, sizeof(buffer), "OK,%.2f,%.2f,%.2f,%d,%d,%s,%s!", 
-                         tempSHTC3, humSHTC3, pressioneMS * 100.0f, statoSicurezza, 
+                snprintf(buffer, sizeof(buffer), "OK,%.2f,%.2f,%.2f,%d,%d,%s,%s!",
+                         tempSHTC3, humSHTC3, pressioneMS * 100.0f, statoSicurezza,
                          config.gruppo, config.serialeID, FW_VERSION);
-                
+
                 // ...passa in modalità trasmissione, invia la risposta e torna in modalità ricezione.
                 modoTrasmissione();
                 Serial1.print(buffer);
                 modoRicezione();
-                
+
                 if (debugViewData) Serial.printf("TX 485: %s\n", buffer);
             }
         }
-        // Se la richiesta è un comando per cambiare gruppo (inizia con 'GRP')...
+        // Comando cambio gruppo: GRP<ID>:<GRP>
         else if (richiesta.startsWith("GRP")) {
             int duePunti = richiesta.indexOf(':');
             if (duePunti > 3) {
-                // ...estrae l'ID a cui è rivolto il comando.
                 int idRicevuto = richiesta.substring(3, duePunti).toInt();
-                // Se l'ID corrisponde a quello di questa scheda...
                 if (idRicevuto == config.indirizzo485) {
-                    // ...estrae il nuovo gruppo, lo aggiorna nella configurazione e lo salva in memoria.
                     int nuovoGruppo = richiesta.substring(duePunti + 1).toInt();
                     config.gruppo = nuovoGruppo;
                     memoria.putInt("grp", config.gruppo);
+                    modoTrasmissione();
+                    Serial1.printf("OK,CFG,GRP,%d,%d!", config.indirizzo485, config.gruppo);
+                    modoRicezione();
                     if (debugViewData) Serial.printf("Gruppo aggiornato da Master: %d\n", config.gruppo);
+                }
+            }
+        }
+        // Comando cambio modalità: MOD<ID>:<MODE>
+        else if (richiesta.startsWith("MOD")) {
+            int duePunti = richiesta.indexOf(':');
+            if (duePunti > 3) {
+                int idRicevuto = richiesta.substring(3, duePunti).toInt();
+                if (idRicevuto == config.indirizzo485) {
+                    int nuovaModalita = richiesta.substring(duePunti + 1).toInt();
+                    if (nuovaModalita >= 1 && nuovaModalita <= 3) {
+                        config.modalitaSensore = nuovaModalita;
+                        memoria.putInt("mode", config.modalitaSensore);
+                        modoTrasmissione();
+                        Serial1.printf("OK,CFG,MODE,%d,%d!", config.indirizzo485, config.modalitaSensore);
+                        modoRicezione();
+                        if (debugViewData) Serial.printf("Modalita aggiornata da Master: %d\n", config.modalitaSensore);
+                    }
+                }
+            }
+        }
+        // Comando cambio IP RS485: IP<ID_ATTUALE>:<NUOVO_ID>
+        else if (richiesta.startsWith("IP")) {
+            int duePunti = richiesta.indexOf(':');
+            if (duePunti > 2) {
+                int idRicevuto = richiesta.substring(2, duePunti).toInt();
+                if (idRicevuto == config.indirizzo485) {
+                    int nuovoIp = richiesta.substring(duePunti + 1).toInt();
+                    if (nuovoIp > 0 && nuovoIp <= 30) {
+                        int oldIp = config.indirizzo485;
+                        config.indirizzo485 = nuovoIp;
+                        memoria.putInt("addr", config.indirizzo485);
+                        if (config.indirizzo485 > 0 && String(config.serialeID) != "NON_SET") {
+                            config.configurata = true;
+                            memoria.putBool("set", true);
+                        }
+                        modoTrasmissione();
+                        Serial1.printf("OK,CFG,IP,%d,%d!", oldIp, config.indirizzo485);
+                        modoRicezione();
+                        if (debugViewData) Serial.printf("IP aggiornato da Master: %d -> %d\n", oldIp, config.indirizzo485);
+                    }
                 }
             }
         }
     }
 }
-
 // Helper per convertire stringa Hex in byte array
 void hexToBytes(String hex, uint8_t* bytes, int len) {
     for (int i = 0; i < len; i++) {
@@ -406,16 +447,17 @@ void processOTACommand(String cmd) {
             return;
         }
 
-        // Non usiamo setMD5() integrato perché è case-sensitive e "nascosto".
-        // Faremo la verifica manuale alla fine per avere più dettagli.
+        // Non usiamo setMD5() integrato perchÃ© Ã¨ case-sensitive e "nascosto".
+        // Faremo la verifica manuale alla fine per avere piÃ¹ dettagli.
         otaInProgress = true;
         otaWrittenSize = 0;
+        otaExpectedOffset = 0;
         otaRunningMd5.begin();
         otaRunningMd5Active = true;
         
         // Pausa CRUCIALE: permette alla tensione di alimentazione di stabilizzarsi dopo la cancellazione della flash,
         // prima di attivare il transceiver RS485 che richiede corrente.
-        delay(1000); // Aumentato a 1 secondo per garantire stabilità alimentazione post-erase
+        delay(1000); // Aumentato a 1 secondo per garantire stabilitÃ  alimentazione post-erase
         
         // FIX: Re-inizializza la seriale per resettare eventuali glitch del clock UART post-erase
         Serial1.end();
@@ -462,9 +504,32 @@ void processOTACommand(String cmd) {
             return;
         }
         
+        // Validazioni frame per evitare overflow/corruzione OTA.
+        if (hexData.length() == 0 || (hexData.length() % 2) != 0) {
+            Serial.println("[OTA] Frame DATA non valido (hex length). Ignoro.");
+            return;
+        }
         int offset = offsetStr.toInt();
         int len = hexData.length() / 2;
         uint8_t buff[128]; 
+        if (len <= 0 || len > (int)sizeof(buff)) {
+            Serial.printf("[OTA] Frame DATA fuori range (len=%d). Ignoro.\n", len);
+            return;
+        }
+
+        // Gestione robusta offset:
+        // - offset < scritto: ritrasmissione chunk già scritto (ACK senza riscrivere)
+        // - offset > scritto: chunk fuori sequenza (ignora, il master ritenterà)
+        if ((size_t)offset < otaWrittenSize) {
+            modoTrasmissione();
+            Serial1.printf("OK,OTA,ACK,%d,%d!", config.indirizzo485, offset);
+            modoRicezione();
+            return;
+        }
+        if ((size_t)offset != otaWrittenSize) {
+            Serial.printf("[OTA] Offset inatteso. Rx=%d Atteso=%u\n", offset, (unsigned)otaWrittenSize);
+            return;
+        }
         
         hexToBytes(hexData, buff, len);
         
@@ -472,6 +537,7 @@ void processOTACommand(String cmd) {
              Serial.println("[OTA] Errore Scrittura");
         } else {
              otaWrittenSize += len;
+             otaExpectedOffset = otaWrittenSize;
              if (otaRunningMd5Active) otaRunningMd5.add(buff, len);
              modoTrasmissione();
              Serial1.printf("OK,OTA,ACK,%d,%d!", config.indirizzo485, offset);
@@ -557,3 +623,9 @@ void processOTACommand(String cmd) {
         }
     }
 }
+
+// Alias neutro mantenuto in parallelo alla nomenclatura RS485 legacy.
+void RS485_Peripheral_Loop() {
+    RS485_Slave_Loop();
+}
+

@@ -1,0 +1,26 @@
+[
+  {
+    "contains": ["pressure", "temperatura", "termometro", "barometro"],
+    "icon": "Icone 100X100 Elettrovalvola/Barometro Termometro.png"
+  },
+  {
+    "contains": ["filtro elettrostatico", "electrostatic", "filtro"],
+    "icon": "Icone 100X100 Elettrovalvola/Filtro Elettrostatico Acceso.png"
+  },
+  {
+    "contains": ["uvc", "lampada uvc"],
+    "icon": "Icone 100X100 Elettrovalvola/Lampada UVC accesa.png"
+  },
+  {
+    "contains": ["aspirazione", "fan_in", "extract"],
+    "icon": "Icone 100X100 Elettrovalvola/Aspirazione Accesa.png"
+  },
+  {
+    "contains": ["immissione", "fan_out", "intake"],
+    "icon": "Icone 100X100 Elettrovalvola/Aspirazione Accesa (2).png"
+  },
+  {
+    "contains": ["luce", "light"],
+    "icon": "Icone 100X100 Elettrovalvola/Luce singola accesa.png"
+  }
+]

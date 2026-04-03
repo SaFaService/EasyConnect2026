@@ -3,6 +3,7 @@
 $lang = [
     // Navbar
     'navbar_dashboard' => 'Dashboard',
+    'navbar_deltap_tests' => 'DeltaP Tests',
     'navbar_address_book' => 'Address Book',
     'navbar_plant_management' => 'Plant Management',
     'navbar_user_management' => 'User Management',
@@ -14,11 +15,12 @@ $lang = [
     'navbar_user_profile' => 'User Profile',
     'navbar_my_profile' => 'My Profile',
     'navbar_logout' => 'Logout',
-    'navbar_title' => 'Antralux Cloud',
+    'navbar_title' => 'AntraluxCloud',
+    'deltap_tests_title' => 'DeltaP Sampling',
 
     // Login Page
-    'login_title' => 'Login - Antralux Cloud',
-    'login_header' => 'Antralux Cloud',
+    'login_title' => 'Login - AntraluxCloud',
+    'login_header' => 'AntraluxCloud',
     'login_error' => 'Invalid Email or Password.',
     'login_email_label' => 'Email',
     'login_password_label' => 'Password',
@@ -71,7 +73,7 @@ $lang = [
     'privacy_controller_title' => '1. Data Controller',
     'privacy_controller_text' => 'The data controller is <strong>SaFa Service srl</strong>, Via Galileo Ferraris 12, 56121 Pisa, Italy.',
     'privacy_data_title' => '2. Types of Data Collected',
-    'privacy_data_text' => 'This "Antralux Cloud" system collects exclusively technical and personal data necessary for the operation of the remote control service:',
+    'privacy_data_text' => 'This "AntraluxCloud" system collects exclusively technical and personal data necessary for the operation of the remote control service:',
     'privacy_data_nav' => 'Navigation Data',
     'privacy_data_nav_desc' => 'IP addresses, browser type, screen resolution, and other technical parameters for diagnostic and security purposes.',
     'privacy_data_user' => 'User Data',
@@ -117,6 +119,7 @@ $lang = [
     'settings_creator' => 'Creator',
     'settings_owner' => 'Owner',
     'settings_maintainer' => 'Maintainer',
+    'settings_builder' => 'Builder',
     'settings_unassigned' => 'Unassigned',
     'settings_api_key' => 'API Key',
     'settings_copy' => 'Copy',
@@ -124,6 +127,7 @@ $lang = [
     'settings_log_retention' => 'Log Retention (days)',
     'settings_assign_owner' => 'Assign to Owner (Client)',
     'settings_assign_maintainer' => 'Assign to Maintainer',
+    'settings_assign_builder' => 'Assign to Builder',
     'settings_none' => 'None',
     'settings_save_data' => 'Save Data',
     'settings_save_assign' => 'Save Assignments',
@@ -263,3 +267,4 @@ $lang = [
     // Footer
     'footer_portal_version' => 'Portal Version',
 ];
+

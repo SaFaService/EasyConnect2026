@@ -3,9 +3,12 @@
 #include <DNSServer.h>
 #include <Preferences.h>
 #include <ESPmDNS.h>
+#include <SPIFFS.h>
+#include <time.h>
 #include "GestioneMemoria.h"
 #include "Pins.h"
 #include "Calibration.h" // Inclusione modulo calibrazione
+#include "Serial_Manager.h"
 
 // Riferimenti esterni
 extern Preferences memoria;
@@ -14,7 +17,9 @@ extern bool listaPerifericheAttive[101];
 extern int statoInternet;
 extern bool scansioneInCorso;
 extern float currentDeltaP; // Variabile globale per DeltaP
+extern bool currentDeltaPValid; // True se il delta corrente e' valido
 extern DatiSlave databaseSlave[101];
+extern WebServer server;
 
 // Riferimento alla versione FW definita nel main
 extern const char* FW_VERSION;
@@ -28,16 +33,91 @@ bool apEnabled = true;
 int wifiRetryCount = 0; // Contatore tentativi riconnessione WiFi
 bool wifiForceOff = false; // Modalita' laboratorio: WiFi/AP forzati OFF
 bool mdnsStarted = false;
+unsigned long lastMdnsAttempt = 0;
+bool mdnsBoundToSta = false;
+IPAddress mdnsLastStaIp;
+static bool webServerConfigured = false;
+static bool standaloneWifiProfile = false;
+
+static bool isStandaloneWifiProfileActive() {
+    return standaloneWifiProfile || (config.modalitaMaster == 1);
+}
+
+static const char* wifiHostNameByProfile() {
+    return isStandaloneWifiProfileActive() ? "antraluxstandalone" : "antraluxrewamping";
+}
+
+static const char* wifiApSsidByProfile() {
+    return isStandaloneWifiProfileActive() ? "AntraluxStandalone" : "AntraluxRewamping";
+}
+
+static const char* wifiApPasswordByProfile() {
+    return isStandaloneWifiProfileActive() ? "Standalone1234!" : NULL;
+}
+
+static String escapeHtmlAttr(String value) {
+    value.replace("&", "&amp;");
+    value.replace("\"", "&quot;");
+    value.replace("<", "&lt;");
+    value.replace(">", "&gt;");
+    return value;
+}
+
+static void resetMdnsState(bool stopResponder) {
+    if (stopResponder && mdnsStarted) {
+        MDNS.end();
+    }
+    mdnsStarted = false;
+    mdnsBoundToSta = false;
+    mdnsLastStaIp = IPAddress((uint32_t)0);
+    lastMdnsAttempt = 0;
+}
+
+static bool startMdnsResponder(bool staConnected) {
+    const char* host = wifiHostNameByProfile();
+    WiFi.setHostname(host);
+    if (!MDNS.begin(host)) {
+        Serial.println("[WIFI] Errore avvio mDNS.");
+        return false;
+    }
+    MDNS.addService("http", "tcp", 80);
+    mdnsBoundToSta = staConnected;
+    mdnsLastStaIp = staConnected ? WiFi.localIP() : IPAddress((uint32_t)0);
+    Serial.printf("[WIFI] mDNS attivo: http://%s.local\n", host);
+    return true;
+}
 
 static void ensureMdnsService() {
-    if (!mdnsStarted) {
-        if (MDNS.begin("antraluxrewamping")) {
-            MDNS.addService("http", "tcp", 80);
-            mdnsStarted = true;
-            Serial.println("[WIFI] mDNS attivo: http://antraluxrewamping.local");
-        } else {
-            Serial.println("[WIFI] Errore avvio mDNS.");
+    if (WiFi.getMode() == WIFI_OFF) {
+        if (mdnsStarted) {
+            resetMdnsState(true);
+            Serial.println("[WIFI] mDNS disattivato (WiFi OFF).");
         }
+        return;
+    }
+
+    const bool staConnected = (WiFi.status() == WL_CONNECTED);
+    const IPAddress staIp = staConnected ? WiFi.localIP() : IPAddress((uint32_t)0);
+    unsigned long now = millis();
+
+    // Se mDNS era stato avviato prima che la STA ottenesse IP (o IP cambiato), riavvia.
+    const bool needRebindToSta = mdnsStarted && staConnected &&
+                                 (!mdnsBoundToSta || (staIp != mdnsLastStaIp));
+    if (needRebindToSta) {
+        resetMdnsState(true);
+    }
+
+    if (!mdnsStarted && (now - lastMdnsAttempt < 3000)) {
+        return;
+    }
+
+    if (!mdnsStarted) {
+        lastMdnsAttempt = now;
+        mdnsStarted = startMdnsResponder(staConnected);
+    } else {
+        // Manteniamo traccia del binding STA in caso di disconnessione successiva.
+        mdnsBoundToSta = staConnected;
+        mdnsLastStaIp = staIp;
     }
 }
 
@@ -53,6 +133,330 @@ const char* FAVICON_IMG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAA
 
 // Dichiarazione forward per checkThresholds se usata qui ma definita in Calibration.cpp
 extern String checkThresholds(float currentP);
+
+static const int TEST_CSV_LEVELS = 3;
+static bool webSpiffsReady = false;
+
+static bool ensureWebSpiffsMounted() {
+    if (webSpiffsReady) return true;
+    if (!SPIFFS.begin(true)) {
+        Serial.println("[WEB] Errore mount SPIFFS per download CSV.");
+        return false;
+    }
+    webSpiffsReady = true;
+    return true;
+}
+
+static String getTestCsvPathForLevel(int level) {
+    return "/deltap_test_sporco_" + String(level) + ".csv";
+}
+
+static String getTestCsvDownloadName(int level) {
+    return "deltap_test_sporco_" + String(level) + ".csv";
+}
+
+static String getTestCsvMetaPathForLevel(int level) {
+    return "/deltap_test_sporco_" + String(level) + ".meta";
+}
+
+static long long readLongLongFromMeta(const String &metaPath, const String &key) {
+    File f = SPIFFS.open(metaPath, "r");
+    if (!f) return 0;
+
+    const String prefix = key + "=";
+    long long out = 0;
+
+    while (f.available()) {
+        String line = f.readStringUntil('\n');
+        line.trim();
+        if (!line.startsWith(prefix)) continue;
+        const String value = line.substring(prefix.length());
+        out = atoll(value.c_str());
+        break;
+    }
+
+    f.close();
+    return out;
+}
+
+static String formatTimestampForDashboard(time_t ts) {
+    if (ts <= 0) return "";
+    struct tm tmInfo;
+    if (!localtime_r(&ts, &tmInfo)) return "";
+    char buf[32];
+    if (strftime(buf, sizeof(buf), "%d/%m/%Y %H:%M:%S", &tmInfo) == 0) return "";
+    return String(buf);
+}
+
+static String getTestCsvLastSaveInfo(int level, bool csvExists) {
+    if (!csvExists) return "";
+
+    const String metaPath = getTestCsvMetaPathForLevel(level);
+    if (!SPIFFS.exists(metaPath)) {
+        return "Ultimo salvataggio: metadati non disponibili";
+    }
+
+    const long long savedEpoch = readLongLongFromMeta(metaPath, "saved_epoch");
+    if (savedEpoch > 1000000000LL) {
+        const String stamp = formatTimestampForDashboard((time_t)savedEpoch);
+        if (stamp.length() > 0) {
+            return "Ultimo salvataggio: " + stamp;
+        }
+    }
+
+    const long long savedUptimeMs = readLongLongFromMeta(metaPath, "saved_uptime_ms");
+    if (savedUptimeMs > 0) {
+        return "Ultimo salvataggio: uptime " + String((unsigned long)(savedUptimeMs / 1000LL)) + " s";
+    }
+
+    return "Ultimo salvataggio: non disponibile";
+}
+
+static String normalizeSpiffsPath(const String &path) {
+    if (path.length() == 0) return path;
+    if (path[0] == '/') return path;
+    return "/" + path;
+}
+
+static bool removeSpiffsFileFlexible(const String &path) {
+    const String normalized = normalizeSpiffsPath(path);
+    if (SPIFFS.remove(normalized)) return true;
+    if (normalized.startsWith("/")) {
+        const String alt = normalized.substring(1);
+        if (alt.length() > 0 && SPIFFS.remove(alt)) return true;
+    }
+    return false;
+}
+
+static bool isTmpWizardPathForLevel(const String &path, int levelFilter) {
+    const String p = normalizeSpiffsPath(path);
+    if (levelFilter < 1) {
+        return p.startsWith("/tmp_dptest_l") || p.startsWith("/tmp_merge_l");
+    }
+    const String tmpPrefix = "/tmp_dptest_l" + String(levelFilter) + "_";
+    const String mergePrefix = "/tmp_merge_l" + String(levelFilter) + "_";
+    return p.startsWith(tmpPrefix) || p.startsWith(mergePrefix);
+}
+
+static int removeWizardTmpFilesFromSpiffs(int levelFilter) {
+    int removed = 0;
+    File root = SPIFFS.open("/");
+    if (!root || !root.isDirectory()) {
+        if (root) root.close();
+        return 0;
+    }
+
+    File f = root.openNextFile();
+    while (f) {
+        const String rawName = f.name();
+        f.close();
+        if (isTmpWizardPathForLevel(rawName, levelFilter)) {
+            if (removeSpiffsFileFlexible(rawName)) {
+                removed++;
+            }
+        }
+        f = root.openNextFile();
+    }
+    root.close();
+    return removed;
+}
+
+static String escapeJsonString(const String &input) {
+    String out;
+    out.reserve(input.length() + 8);
+    for (size_t i = 0; i < input.length(); i++) {
+        const char c = input[i];
+        if (c == '\\') out += "\\\\";
+        else if (c == '"') out += "\\\"";
+        else if (c == '\n') out += "\\n";
+        else if (c == '\r') out += "\\r";
+        else if (c == '\t') out += "\\t";
+        else out += c;
+    }
+    return out;
+}
+
+static bool computeLiveDeltaPForDashboard(float &outDeltaP) {
+    const unsigned long now = millis();
+    const unsigned long OFFLINE_TIMEOUT_MS = 30000UL;
+    bool grp1Found = false;
+    bool grp2Found = false;
+    float grp1Pressure = 0.0f;
+    float grp2Pressure = 0.0f;
+    bool firstOnlineFound = false;
+    bool secondOnlineFound = false;
+    float firstOnlinePressure = 0.0f;
+    float secondOnlinePressure = 0.0f;
+
+    for (int i = 1; i <= 100; i++) {
+        if (!listaPerifericheAttive[i]) continue;
+        const unsigned long last = databaseSlave[i].lastResponseTime;
+        const bool online = (last > 0) && ((now - last) <= OFFLINE_TIMEOUT_MS);
+        if (!online) continue;
+
+        if (!firstOnlineFound) {
+            firstOnlinePressure = databaseSlave[i].p;
+            firstOnlineFound = true;
+        } else if (!secondOnlineFound) {
+            secondOnlinePressure = databaseSlave[i].p;
+            secondOnlineFound = true;
+        }
+
+        if (!grp1Found && databaseSlave[i].grp == 1) {
+            grp1Pressure = databaseSlave[i].p;
+            grp1Found = true;
+        } else if (!grp2Found && databaseSlave[i].grp == 2) {
+            grp2Pressure = databaseSlave[i].p;
+            grp2Found = true;
+        }
+    }
+
+    if (grp1Found && grp2Found) {
+        outDeltaP = grp1Pressure - grp2Pressure;
+        return true;
+    }
+    if (firstOnlineFound && secondOnlineFound) {
+        outDeltaP = firstOnlinePressure - secondOnlinePressure;
+        return true;
+    }
+
+    outDeltaP = 0.0f;
+    return false;
+}
+
+void handleDownloadTestCsv() {
+    if (!server.hasArg("level")) {
+        server.send(400, "text/plain", "Parametro 'level' mancante.");
+        return;
+    }
+
+    const int level = server.arg("level").toInt();
+    if (level < 1 || level > TEST_CSV_LEVELS) {
+        server.send(400, "text/plain", "Parametro 'level' non valido (1..3).");
+        return;
+    }
+
+    if (!ensureWebSpiffsMounted()) {
+        server.send(500, "text/plain", "SPIFFS non disponibile.");
+        return;
+    }
+
+    const String path = getTestCsvPathForLevel(level);
+    if (!SPIFFS.exists(path)) {
+        server.send(404, "text/plain", "CSV non ancora disponibile per questo livello.");
+        return;
+    }
+
+    File f = SPIFFS.open(path, "r");
+    if (!f) {
+        server.send(500, "text/plain", "Errore apertura file CSV.");
+        return;
+    }
+
+    const String metaPath = getTestCsvMetaPathForLevel(level);
+    const long long savedEpoch = SPIFFS.exists(metaPath) ? readLongLongFromMeta(metaPath, "saved_epoch") : 0;
+    String downloadName = getTestCsvDownloadName(level);
+    if (savedEpoch > 1000000000LL) {
+        downloadName = "deltap_test_sporco_" + String(level) + "_" + String((unsigned long)savedEpoch) + ".csv";
+    }
+
+    String disposition = String("attachment; filename=\"") + downloadName + "\"";
+    server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    server.sendHeader("Pragma", "no-cache");
+    server.sendHeader("Expires", "0");
+    server.sendHeader("Content-Disposition", disposition);
+    server.sendHeader("Connection", "close");
+    server.streamFile(f, "text/csv");
+    f.close();
+}
+
+void handleDeleteTestCsv() {
+    if (webIsDeltaPTestWizardBusy()) {
+        server.send(409, "text/plain", "Impossibile cancellare durante wizard/test DeltaP attivo.");
+        return;
+    }
+
+    if (!ensureWebSpiffsMounted()) {
+        server.send(500, "text/plain", "SPIFFS non disponibile.");
+        return;
+    }
+
+    const bool deleteAll = server.hasArg("all") && server.arg("all") == "1";
+    int removedCsv = 0;
+    int removedTmp = 0;
+
+    if (deleteAll) {
+        for (int level = 1; level <= TEST_CSV_LEVELS; level++) {
+            const String path = getTestCsvPathForLevel(level);
+            const String metaPath = getTestCsvMetaPathForLevel(level);
+            if (SPIFFS.exists(path) && removeSpiffsFileFlexible(path)) {
+                removedCsv++;
+            }
+            if (SPIFFS.exists(metaPath)) {
+                removeSpiffsFileFlexible(metaPath);
+            }
+        }
+        removedTmp = removeWizardTmpFilesFromSpiffs(0);
+    } else {
+        if (!server.hasArg("level")) {
+            server.send(400, "text/plain", "Parametro 'level' mancante.");
+            return;
+        }
+        const int level = server.arg("level").toInt();
+        if (level < 1 || level > TEST_CSV_LEVELS) {
+            server.send(400, "text/plain", "Parametro 'level' non valido (1..3).");
+            return;
+        }
+
+        const String path = getTestCsvPathForLevel(level);
+        const String metaPath = getTestCsvMetaPathForLevel(level);
+        if (SPIFFS.exists(path) && removeSpiffsFileFlexible(path)) {
+            removedCsv = 1;
+        }
+        if (SPIFFS.exists(metaPath)) {
+            removeSpiffsFileFlexible(metaPath);
+        }
+        removedTmp = removeWizardTmpFilesFromSpiffs(level);
+    }
+
+    const uint32_t total = SPIFFS.totalBytes();
+    const uint32_t used = SPIFFS.usedBytes();
+    const uint32_t freeBytes = (used <= total) ? (total - used) : 0;
+
+    String msg = "OK: CSV rimossi=" + String(removedCsv) +
+                 ", tmp rimossi=" + String(removedTmp) +
+                 ", spazio libero=" + String(freeBytes) + " bytes.";
+    server.send(200, "text/plain", msg);
+}
+
+void handleTestWizardStatus() {
+    server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    server.sendHeader("Pragma", "no-cache");
+    server.send(200, "application/json", webGetDeltaPTestWizardStatusJson());
+}
+
+void handleTestWizardStart() {
+    const int totalSpeeds = server.hasArg("total_speeds") ? server.arg("total_speeds").toInt() : 0;
+    const int dirtLevel = server.hasArg("dirt_level") ? server.arg("dirt_level").toInt() : 0;
+    const int speedIndex = server.hasArg("speed_index") ? server.arg("speed_index").toInt() : 0;
+
+    String message = "";
+    const bool ok = webStartDeltaPTestWizard(totalSpeeds, dirtLevel, speedIndex, message);
+    String json = "{\"ok\":" + String(ok ? "true" : "false") +
+                  ",\"message\":\"" + escapeJsonString(message) + "\"}";
+    server.send(ok ? 200 : 400, "application/json", json);
+}
+
+void handleTestWizardStop() {
+    const String action = server.hasArg("action") ? server.arg("action") : "save";
+    const bool saveIfPossible = (action != "abort");
+
+    String message = "";
+    const bool ok = webStopDeltaPTestWizard(saveIfPossible, message);
+    String json = "{\"ok\":" + String(ok ? "true" : "false") +
+                  ",\"message\":\"" + escapeJsonString(message) + "\"}";
+    server.send(ok ? 200 : 409, "application/json", json);
+}
 
 // --- GENERAZIONE HTML DASHBOARD ---
 String getDashboardHTML() {
@@ -84,6 +488,19 @@ String getDashboardHTML() {
     html += ".btn-calib { background-color: #17a2b8; }";
     html += ".btn-wifi { background-color: #6c757d; }";
     html += ".btn:hover { opacity: 0.9; }";
+    html += ".icon-btn { border: 1px solid #d8d8d8; border-radius: 6px; background: #fff; cursor: pointer; padding: 4px 8px; font-size: 1em; }";
+    html += ".icon-btn:hover { background: #f3f3f3; }";
+    html += ".trash-btn { color: #b22222; }";
+    html += ".wiz-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap:10px; }";
+    html += ".wiz-input { width:100%; padding:8px; border:1px solid #ccc; border-radius:6px; box-sizing:border-box; margin-top:4px; }";
+    html += ".wiz-actions { display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; }";
+    html += ".wiz-btn { border:none; border-radius:6px; color:#fff; font-weight:bold; padding:10px 12px; cursor:pointer; }";
+    html += ".wiz-btn:disabled { opacity:0.5; cursor:not-allowed; }";
+    html += ".wiz-start { background:#17a2b8; }";
+    html += ".wiz-stop { background:#f0ad4e; }";
+    html += ".wiz-abort { background:#dc3545; }";
+    html += ".wiz-msg { margin-top:8px; font-size:0.9em; }";
+    html += ".wiz-status { margin-top:10px; font-size:0.95em; line-height:1.5; }";
     html += ".dot { height: 15px; width: 15px; background-color: #bbb; border-radius: 50%; display: inline-block; vertical-align: middle; }";
     html += ".dot-green { background-color: #28a745; }";
     html += ".dot-red { background-color: #dc3545; }";
@@ -98,46 +515,45 @@ String getDashboardHTML() {
 
     // --- CALCOLI DATI SISTEMA (SYSTEM DATA CALCULATIONS) ---
     int countPeriferiche = 0; // Contatore periferiche (Device counter)
-    float pressG1 = 0.0;      // Pressione Gruppo 1 (Pressure Group 1)
-    float pressG2 = 0.0;      // Pressione Gruppo 2 (Pressure Group 2)
-    bool foundG1 = false;     // Trovato Gruppo 1? (Found Group 1?)
-    bool foundG2 = false;     // Trovato Gruppo 2? (Found Group 2?)
-
     // Scansioniamo l'array per contare e trovare le pressioni
     // (Scan array to count and find pressures)
     for(int i=1; i<=100; i++) {
         if(listaPerifericheAttive[i]) {
             countPeriferiche++;
-            // Prendiamo la pressione del primo slave trovato per ogni gruppo
-            // (Take pressure of the first slave found for each group)
-            if (databaseSlave[i].grp == 1 && !foundG1) {
-                pressG1 = databaseSlave[i].p;
-                foundG1 = true;
-            }
-            else if (databaseSlave[i].grp == 2 && !foundG2) {
-                pressG2 = databaseSlave[i].p;
-                foundG2 = true;
-            }
         }
     }
     
-    // Calcolo Delta P = P1 - P2
-    String deltaPStr = "--";
-    if (foundG1 && foundG2) {
-        deltaPStr = String(pressG1 - pressG2, 0) + " Pa";
+    // Delta P visualizzato: valore filtrato/stabilizzato.
+    bool filteredValid = isFilteredDeltaPValid();
+    float filteredDelta = getFilteredDeltaP();
+    float dashboardDelta = 0.0f;
+    bool dashboardDeltaValid = false;
+
+    if (filteredValid) {
+        dashboardDelta = filteredDelta;
+        dashboardDeltaValid = true;
+    } else if (currentDeltaPValid) {
+        dashboardDelta = currentDeltaP;
+        dashboardDeltaValid = true;
     } else {
-        deltaPStr = "In attesa dati (Waiting data)";
+        dashboardDeltaValid = computeLiveDeltaPForDashboard(dashboardDelta);
     }
+
+    String deltaPStr = dashboardDeltaValid ? (String(dashboardDelta, 1) + " Pa") : "In attesa dati (Waiting data)";
     
     // --- CONTROLLO SOGLIE CALIBRAZIONE ---
-    String warningMsg = checkThresholds((foundG1 && foundG2) ? (pressG1 - pressG2) : 0.0);
-    String warningHtml = (warningMsg != "") ? "<div style='color:red; font-weight:bold; margin-top:5px;'>" + warningMsg + "</div>" : "";
+    String warningMsg = checkThresholds(filteredDelta);
+    String warningHtml = "";
+    warningHtml += "<div id='deltaPWarning' style='color:red; font-weight:bold; margin-top:5px;";
+    warningHtml += (warningMsg != "") ? "'" : " display:none;'";
+    warningHtml += ">" + warningMsg + "</div>";
 
     // --- DATI CONNESSIONE (CONNECTION DATA) ---
     String apClass = (WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA) ? "dot-green" : "dot-red";
     String internetClass = (statoInternet == 2) ? "dot-green" : "dot-red";
     String ssidName = (WiFi.status() == WL_CONNECTED) ? WiFi.SSID() : "Non connesso";
     String ipAddr = (WiFi.status() == WL_CONNECTED) ? WiFi.localIP().toString() : "--";
+    const bool csvFsReady = ensureWebSpiffsMounted();
 
     // --- RIQUADRO MASTER (MASTER CARD) ---
     html += "<div class='card'>";
@@ -195,13 +611,218 @@ String getDashboardHTML() {
     html += "<a href='/wifi' class='btn btn-wifi'>WIFI</a>";
     html += "</div>";
 
+    // --- DOWNLOAD CSV TEST DELTAP ---
+    html += "<div class='card'>";
+    html += "<h3>Registro Test DeltaP</h3>";
+    html += "<p style='margin-top:0;'>Download CSV per livello di sporco ";
+    html += "<button class='icon-btn trash-btn' onclick='deleteAllTestCsv()' title='Cancella tutti i CSV e file temporanei'>&#128465;</button>";
+    html += "</p>";
+    for (int level = 1; level <= TEST_CSV_LEVELS; level++) {
+        html += "<p>Livello sporco " + String(level) + ": ";
+        const String path = getTestCsvPathForLevel(level);
+        const bool exists = csvFsReady && SPIFFS.exists(path);
+        if (exists) {
+            html += "<a href='#' onclick='downloadTestCsv(" + String(level) + "); return false;'>Scarica CSV</a>";
+            html += " <button class='icon-btn trash-btn' onclick='deleteTestCsv(" + String(level) + ")' title='Cancella CSV livello " + String(level) + "'>&#128465;</button>";
+        } else {
+            html += "<span style='color:#888;'>non disponibile</span>";
+            html += " <button class='icon-btn trash-btn' onclick='deleteTestCsv(" + String(level) + ")' title='Cancella eventuali file temporanei livello " + String(level) + "'>&#128465;</button>";
+        }
+        html += "</p>";
+        if (csvFsReady) {
+            const String lastSaveInfo = getTestCsvLastSaveInfo(level, exists);
+            if (lastSaveInfo.length() > 0) {
+                html += "<p style='margin-top:-6px; color:#666; font-size:0.9em;'>" + lastSaveInfo + "</p>";
+            }
+        }
+    }
+    html += "</div>";
+
+    // --- WIZARD TEST DELTAP DA WEB ---
+    html += "<div class='card'>";
+    html += "<h3>Wizard Campionamento DeltaP</h3>";
+    html += "<p style='margin-top:0;'>Avvio test da pagina locale (equivalente a TESTWIZ) con stato live.</p>";
+    html += "<div class='wiz-grid'>";
+    html += "<div><label>Velocita' totali<input id='wizTotalSpeeds' class='wiz-input' type='number' min='1' max='10' value='5'></label></div>";
+    html += "<div><label>Livello sporco<input id='wizDirtLevel' class='wiz-input' type='number' min='1' max='3' value='1'></label></div>";
+    html += "<div><label>Velocita' test<input id='wizSpeedIndex' class='wiz-input' type='number' min='1' max='10' value='1'></label></div>";
+    html += "<div><label>Aggiornamento stato (s)<input id='wizPollSec' class='wiz-input' type='number' min='2' max='600' value='10'></label></div>";
+    html += "</div>";
+    html += "<div class='wiz-actions'>";
+    html += "<button id='wizStartBtn' class='wiz-btn wiz-start' onclick='startTestWizardFromWeb()'>Avvia Test</button>";
+    html += "<button id='wizStopBtn' class='wiz-btn wiz-stop' onclick=\"stopTestWizardFromWeb('save')\">Stop + Salva</button>";
+    html += "<button id='wizAbortBtn' class='wiz-btn wiz-abort' onclick=\"stopTestWizardFromWeb('abort')\">Annulla</button>";
+    html += "</div>";
+    html += "<div id='wizMessage' class='wiz-msg'></div>";
+    html += "<div class='wiz-status'>";
+    html += "<div><b>Stato:</b> <span id='wizState'>--</span></div>";
+    html += "<div><b>Stage:</b> <span id='wizStage'>--</span></div>";
+    html += "<div><b>Sessione:</b> <span id='wizSession'>--</span></div>";
+    html += "<div><b>Progresso:</b> <span id='wizProgress'>--</span></div>";
+    html += "<div><b>Campioni:</b> <span id='wizSamples'>--</span></div>";
+    html += "<div><b>Campionamento:</b> <span id='wizSampling'>--</span></div>";
+    html += "<div><b>DeltaP raw:</b> <span id='wizRaw'>--</span></div>";
+    html += "<div><b>DeltaP filtrato:</b> <span id='wizFiltered'>--</span></div>";
+    html += "<div><b>Feed live:</b> <span id='wizLive'>--</span></div>";
+    html += "<div><b>Soglia:</b> <span id='wizThreshold'>--</span></div>";
+    html += "<div><b>Sensori:</b> <span id='wizSensors'>--</span></div>";
+    html += "<div><b>SPIFFS:</b> <span id='wizSpiffs'>--</span></div>";
+    html += "<div><b>File temp:</b> <span id='wizTemp'>--</span></div>";
+    html += "<div><b>CSV finale:</b> <span id='wizFinal'>--</span></div>";
+    html += "<div><b>Ultimo esito:</b> <span id='wizLast'>--</span></div>";
+    html += "</div>";
+    html += "</div>";
+
     // --- SCRIPT PER AGGIORNAMENTO AUTOMATICO (AUTO-UPDATE SCRIPT) ---
     html += "<script>";
+    html += "function downloadTestCsv(level) {";
+    html += "  const url = '/download_test_csv?level=' + level + '&_ts=' + Date.now();";
+    html += "  window.location.href = url;";
+    html += "}";
+    html += "function deleteTestCsv(level) {";
+    html += "  if (!confirm('Confermi cancellazione CSV livello ' + level + '?')) return;";
+    html += "  fetch('/delete_test_csv?level=' + level, { method: 'POST' })";
+    html += "    .then(r => r.text().then(t => ({ ok: r.ok, text: t })))";
+    html += "    .then(res => { alert(res.text); if (res.ok) window.location.reload(); })";
+    html += "    .catch(() => alert('Errore durante cancellazione CSV.'));";
+    html += "}";
+    html += "function deleteAllTestCsv() {";
+    html += "  if (!confirm('Confermi cancellazione di tutti i CSV test e file temporanei?')) return;";
+    html += "  fetch('/delete_test_csv?all=1', { method: 'POST' })";
+    html += "    .then(r => r.text().then(t => ({ ok: r.ok, text: t })))";
+    html += "    .then(res => { alert(res.text); if (res.ok) window.location.reload(); })";
+    html += "    .catch(() => alert('Errore durante cancellazione CSV.'));";
+    html += "}";
+    html += "let wizTimer = null;";
+    html += "function wizPollMs(){";
+    html += "  const el = document.getElementById('wizPollSec');";
+    html += "  const v = el ? parseInt(el.value, 10) : 10;";
+    html += "  if (isNaN(v)) return 10000;";
+    html += "  return Math.max(2000, Math.min(600000, v * 1000));";
+    html += "}";
+    html += "function wizSetMessage(msg, isError){";
+    html += "  const el = document.getElementById('wizMessage');";
+    html += "  if (!el) return;";
+    html += "  el.style.color = isError ? '#b22222' : '#2f7a32';";
+    html += "  el.innerText = msg || ''; ";
+    html += "}";
+    html += "function wizScheduleNext(){";
+    html += "  if (wizTimer) clearTimeout(wizTimer);";
+    html += "  wizTimer = setTimeout(updateTestWizardStatus, wizPollMs());";
+    html += "}";
+    html += "function wizRenderStatus(data){";
+    html += "  const state = document.getElementById('wizState');";
+    html += "  const stage = document.getElementById('wizStage');";
+    html += "  const session = document.getElementById('wizSession');";
+    html += "  const progress = document.getElementById('wizProgress');";
+    html += "  const samples = document.getElementById('wizSamples');";
+    html += "  const sampling = document.getElementById('wizSampling');";
+    html += "  const raw = document.getElementById('wizRaw');";
+    html += "  const filtered = document.getElementById('wizFiltered');";
+    html += "  const live = document.getElementById('wizLive');";
+    html += "  const threshold = document.getElementById('wizThreshold');";
+    html += "  const sensors = document.getElementById('wizSensors');";
+    html += "  const spiffs = document.getElementById('wizSpiffs');";
+    html += "  const temp = document.getElementById('wizTemp');";
+    html += "  const final = document.getElementById('wizFinal');";
+    html += "  const last = document.getElementById('wizLast');";
+    html += "  if (state) state.innerText = data.status_text || '--';";
+    html += "  if (stage) stage.innerText = data.stage || '--';";
+    html += "  if (session) session.innerText = (data.session_id || 0) + ' | livello ' + (data.dirt_level || 0) + ' | velocita ' + (data.speed_index || 0) + '/' + (data.total_speeds || 0);";
+    html += "  const dur = Number(data.duration_s || 0);";
+    html += "  const ela = Number(data.elapsed_s || 0);";
+    html += "  const rem = Number(data.remaining_s || 0);";
+    html += "  const exp = Number(data.expected_samples || 0);";
+    html += "  const miss = Number(data.missing_samples || 0);";
+    html += "  const pct = (dur > 0) ? Math.min(100, Math.round((ela * 100) / dur)) : 0;";
+    html += "  if (progress) progress.innerText = ela + 's / ' + dur + 's (restanti ' + rem + 's, ' + pct + '%, attesi ' + exp + ' campioni)';";
+    html += "  const s = Number(data.samples || 0);";
+    html += "  const rv = Number(data.raw_valid_samples || 0);";
+    html += "  const fv = Number(data.filtered_valid_samples || 0);";
+    html += "  const vp = Number(data.valid_pct || 0);";
+    html += "  if (samples) samples.innerText = s + ' totali, raw validi ' + rv + ' (' + vp + '%), filtrati validi ' + fv;";
+    html += "  const lastSample = Number(data.last_sample_uptime_ms || 0);";
+    html += "  const lag = Number(data.sample_lag_ms || 0);";
+    html += "  if (sampling) sampling.innerText = 'mancanti ' + miss + ', ultimo sample uptime ' + lastSample + ' ms, lag ' + lag + ' ms';";
+    html += "  if (raw) {";
+    html += "    if (data.raw_stats_ready) raw.innerText = data.raw_min + ' / ' + data.raw_avg + ' / ' + data.raw_max + ' Pa';";
+    html += "    else raw.innerText = 'non disponibile';";
+    html += "  }";
+    html += "  if (filtered) {";
+    html += "    if (data.filtered_stats_ready) filtered.innerText = data.filtered_min + ' / ' + data.filtered_avg + ' / ' + data.filtered_max + ' Pa';";
+    html += "    else filtered.innerText = 'non disponibile';";
+    html += "  }";
+    html += "  const rawLive = data.raw_live_valid ? (data.raw_live_pa + ' Pa') : 'N/D';";
+    html += "  const filtLive = data.filtered_live_valid ? (data.filtered_live_pa + ' Pa') : 'N/D';";
+    html += "  const fb = data.fallback_valid ? (data.fallback_pa + ' Pa') : 'N/D';";
+    html += "  if (live) live.innerText = 'raw ' + rawLive + ' | filtrato ' + filtLive + ' | fallback ' + fb;";
+    html += "  if (threshold) threshold.innerText = (data.threshold_msg && data.threshold_msg.length > 0) ? data.threshold_msg : 'OK';";
+    html += "  if (sensors) sensors.innerText = 'attivi ' + (data.active_slaves || 0) + ', recenti ' + (data.recent_slaves || 0) + ' (grp1=' + (data.grp1_recent || 0) + ', grp2=' + (data.grp2_recent || 0) + ')';";
+    html += "  if (spiffs) spiffs.innerText = 'libero ' + (data.spiffs_free_bytes || 0) + ' / ' + (data.spiffs_total_bytes || 0) + ' B, usato ' + (data.spiffs_used_bytes || 0) + ' B, stimato test ' + (data.estimated_temp_bytes || 0) + ' B, richiesto ' + (data.required_bytes || 0) + ' B';";
+    html += "  if (temp) temp.innerText = (data.temp_path || '--') + ' | open=' + (!!data.temp_open) + ', exists=' + (!!data.temp_exists) + ', size=' + (data.temp_size_bytes || 0) + ' B, writeErr=' + (data.temp_write_error || 0);";
+    html += "  if (final) final.innerText = (data.final_path || '--') + ' | exists=' + (!!data.final_exists) + ', size=' + (data.final_size_bytes || 0) + ' B';";
+    html += "  if (last) {";
+    html += "    if (data.last_available) {";
+    html += "      const ls = Number(data.last_samples || 0);";
+    html += "      const lrv = Number(data.last_raw_valid_samples || 0);";
+    html += "      const lfv = Number(data.last_filtered_valid_samples || 0);";
+    html += "      const lvp = Number(data.last_valid_pct || 0);";
+    html += "      let txt = (data.last_status || '--') + ' | origin=' + (data.last_origin || '--');";
+    html += "      txt += ' | sessione=' + (data.last_session_id || 0) + ' liv=' + (data.last_dirt_level || 0) + ' vel=' + (data.last_speed_index || 0) + '/' + (data.last_total_speeds || 0);";
+    html += "      txt += ' | campioni=' + ls + ' raw=' + lrv + ' (' + lvp + '%) filt=' + lfv;";
+    html += "      if (data.last_reason && data.last_reason.length > 0) txt += ' | motivo=' + data.last_reason;";
+    html += "      txt += ' | uptime=' + (data.last_end_uptime_ms || 0) + ' ms';";
+    html += "      last.innerText = txt;";
+    html += "    } else {";
+    html += "      last.innerText = 'nessun esito registrato';";
+    html += "    }";
+    html += "  }";
+    html += "  const startBtn = document.getElementById('wizStartBtn');";
+    html += "  const stopBtn = document.getElementById('wizStopBtn');";
+    html += "  const abortBtn = document.getElementById('wizAbortBtn');";
+    html += "  if (startBtn) startBtn.disabled = !data.can_start;";
+    html += "  if (stopBtn) stopBtn.disabled = !data.running;";
+    html += "  if (abortBtn) abortBtn.disabled = !(data.running || data.wizard_waiting);";
+    html += "}";
+    html += "function updateTestWizardStatus(){";
+    html += "  fetch('/testwiz_status?_ts=' + Date.now())";
+    html += "    .then(r => r.json())";
+    html += "    .then(data => wizRenderStatus(data))";
+    html += "    .catch(err => console.error('Errore stato wizard:', err))";
+    html += "    .finally(() => wizScheduleNext());";
+    html += "}";
+    html += "function startTestWizardFromWeb(){";
+    html += "  const total = parseInt(document.getElementById('wizTotalSpeeds').value, 10) || 0;";
+    html += "  const dirt = parseInt(document.getElementById('wizDirtLevel').value, 10) || 0;";
+    html += "  const speed = parseInt(document.getElementById('wizSpeedIndex').value, 10) || 0;";
+    html += "  const body = new URLSearchParams({ total_speeds: total, dirt_level: dirt, speed_index: speed }).toString();";
+    html += "  fetch('/testwiz_start', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body })";
+    html += "    .then(r => r.json())";
+    html += "    .then(res => { wizSetMessage(res.message || '', !res.ok); updateTestWizardStatus(); })";
+    html += "    .catch(() => wizSetMessage('Errore avvio wizard da web.', true));";
+    html += "}";
+    html += "function stopTestWizardFromWeb(action){";
+    html += "  const body = new URLSearchParams({ action: action }).toString();";
+    html += "  fetch('/testwiz_stop', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body })";
+    html += "    .then(r => r.json())";
+    html += "    .then(res => { wizSetMessage(res.message || '', !res.ok); updateTestWizardStatus(); })";
+    html += "    .catch(() => wizSetMessage('Errore stop wizard da web.', true));";
+    html += "}";
     html += "function updateData() {";
     html += "  fetch('/dashboard_data')";
     html += "    .then(response => response.json())";
     html += "    .then(data => {";
     html += "      document.getElementById('deltaP').innerHTML = data.deltaP;";
+    html += "      const w = document.getElementById('deltaPWarning');";
+    html += "      if (w) {";
+    html += "        if (data.warning && data.warning.length > 0) {";
+    html += "          w.innerText = data.warning;";
+    html += "          w.style.display = 'block';";
+    html += "        } else {";
+    html += "          w.innerText = '';";
+    html += "          w.style.display = 'none';";
+    html += "        }";
+    html += "      }";
     html += "      if (data.slaves) {";
     html += "        data.slaves.forEach(slave => {";
     html += "          const pressEl = document.getElementById('press-' + slave.id);";
@@ -219,7 +840,12 @@ String getDashboardHTML() {
     html += "    });";
     html += "}";
     // Avvia al caricamento della pagina
-    html += "document.addEventListener('DOMContentLoaded', updateData);";
+    html += "document.addEventListener('DOMContentLoaded', function(){";
+    html += "  updateData();";
+    html += "  updateTestWizardStatus();";
+    html += "  const pollEl = document.getElementById('wizPollSec');";
+    html += "  if (pollEl) pollEl.addEventListener('change', function(){ wizScheduleNext(); });";
+    html += "});";
     html += "</script>";
 
     html += "</div></body></html>";
@@ -228,6 +854,8 @@ String getDashboardHTML() {
 
 // --- GESTIONE WIFI (SCANSIONE E CONNESSIONE) ---
 void handleWifiPage() {    
+    const bool standaloneProfile = isStandaloneWifiProfileActive();
+    const String localHost = standaloneProfile ? "antraluxstandalone.local" : "antraluxrewamping.local";
     String html = "<html><head><meta name='viewport' content='width=device-width, initial-scale=1'>";
     html += "<link rel='icon' href='" + String(FAVICON_IMG) + "'>";
     html += "<style>body{font-family:'Segoe UI', sans-serif; background-color:#f0f2f5; padding:20px; color:#333;} ";
@@ -245,7 +873,7 @@ void handleWifiPage() {
     html += "<script>";
     html += "function selNet(ssid) { document.getElementById('ssid').value = ssid; document.getElementById('pass').focus(); }";
     html += "function toggleStatic() { var d = document.getElementById('static_div'); d.classList.toggle('hidden'); }";
-    html += "function toggleKey() { var x = document.getElementById('api_key'); x.type = (x.type === 'password') ? 'text' : 'password'; }";
+    html += "function toggleKey(id) { var x = document.getElementById(id); if(x){ x.type = (x.type === 'password') ? 'text' : 'password'; } }";
     html += "</script>";
     html += "</head><body><div class='container'>";
 
@@ -278,70 +906,103 @@ void handleWifiPage() {
     }
     html += "</div></div>";
 
-    // --- FORM CONFIGURAZIONE ---
-    html += "<form action='/connect' method='POST'>";
-    
-    // --- 3. CREDENZIALI & IP STATICO ---
+    // Recupero valori salvati
+    Preferences pref;
+    pref.begin("easy", true);
+    bool st = pref.getBool("static_ip", false);
+    String ip = pref.isKey("ip") ? pref.getString("ip") : "";
+    String sub = pref.isKey("sub") ? pref.getString("sub") : "255.255.255.0";
+    String gw = pref.isKey("gw") ? pref.getString("gw") : "";
+    bool apAlways = pref.getBool("ap_always", false);
+    bool standaloneWifiBoot = pref.getBool("st_wifi_boot", false);
+    String ssidSaved = pref.getString("ssid", "");
+    String passSaved = pref.getString("pass", "");
+    String api = pref.isKey("api_url") ? pref.getString("api_url") : "";
+    String key = pref.isKey("apiKey") ? pref.getString("apiKey") : "";
+    String custApi = pref.isKey("custApiUrl") ? pref.getString("custApiUrl") : "";
+    String custKey = pref.isKey("custApiKey") ? pref.getString("custApiKey") : "";
+    pref.end();
+
+    // --- 3. FORM RETE (separato dal salvataggio API) ---
+    html += "<form action='/save_wifi' method='POST'>";
     html += "<div class='card'>";
     html += "<h3>Configurazione Rete</h3>";
     html += "<label>SSID (Nome Rete)</label>";
-    html += "<input type='text' name='ssid' id='ssid' placeholder='Seleziona o scrivi...'>";
+    html += "<input type='text' name='ssid' id='ssid' value='" + ssidSaved + "' placeholder='Seleziona o scrivi...'>";
     html += "<label>Password</label>";
-    html += "<input type='password' name='pass' id='pass' placeholder='Password WiFi'>";
-    
-    // Recupero valori salvati per IP Statico
-    memoria.begin("easy", true);
-    bool st = memoria.getBool("static_ip", false);
-    // Usa isKey per evitare errori "NOT_FOUND" nel log
-    String ip = memoria.isKey("ip") ? memoria.getString("ip") : "";
-    String sub = memoria.isKey("sub") ? memoria.getString("sub") : "255.255.255.0";
-    String gw = memoria.isKey("gw") ? memoria.getString("gw") : "";
-    bool apAlways = memoria.getBool("ap_always", false);
-    String api = memoria.isKey("api_url") ? memoria.getString("api_url") : "";
-    String key = memoria.isKey("apiKey") ? memoria.getString("apiKey") : "";
-    memoria.end();
-
+    html += "<input type='password' name='pass' id='pass' value='" + passSaved + "' placeholder='Password WiFi'>";
     html += "<div style='margin-bottom:15px;'>";
     html += "<input type='checkbox' name='static_ip' onchange='toggleStatic()' " + String(st ? "checked" : "") + "> Usa Indirizzo IP Statico (Manuale)";
     html += "</div>";
-
     html += "<div id='static_div' class='" + String(st ? "" : "hidden") + "'>";
     html += "<label>Indirizzo IP</label><input type='text' name='ip' value='" + ip + "' placeholder='es. 192.168.1.100'>";
     html += "<label>Subnet Mask</label><input type='text' name='sub' value='" + sub + "' placeholder='es. 255.255.255.0'>";
     html += "<label>Gateway</label><input type='text' name='gw' value='" + gw + "' placeholder='es. 192.168.1.1'>";
     html += "</div>";
     html += "</div>";
-
-    // --- 4. GESTIONE ACCESS POINT ---
     html += "<div class='card'>";
     html += "<h3>Access Point Interno</h3>";
-    html += "<p style='font-size:0.9em; color:#666;'>Di default, l'AP si spegne se connesso al WiFi e si riaccende se disconnesso.</p>";
-    html += "<input type='checkbox' name='ap_always' " + String(apAlways ? "checked" : "") + "> <b>Mantieni AP Sempre Attivo</b>";
+    html += "<p style='font-size:0.9em; color:#666;'>mDNS " + localHost + " disponibile quando il WiFi e' attivo.</p>";
+    if (standaloneProfile) {
+        html += "<input type='checkbox' name='st_wifi_boot' " + String(standaloneWifiBoot ? "checked" : "") + "> <b>Mantieni WiFi attivo anche dopo riavvio</b>";
+    } else {
+        html += "<input type='checkbox' name='ap_always' " + String(apAlways ? "checked" : "") + "> <b>Mantieni AP Sempre Attivo</b>";
+    }
     html += "</div>";
-
-    // --- 5. CONFIGURAZIONE API ---
-    html += "<div class='card'>";
-    html += "<h3>Configurazione API Server</h3>";
-    html += "<label>URL Endpoint JSON</label>";
-    html += "<input type='text' name='api_url' value='" + api + "' placeholder='http://server.com/api/data'>";
-    html += "<label>API Key (Codice Sicurezza)</label>";
-    html += "<div style='position:relative'>";
-    html += "<input type='password' name='api_key' id='api_key' value='" + key + "' placeholder='Inserire codice a 64 caratteri' style='padding-right:40px;'>";
-    html += "<span onclick='toggleKey()' style='position:absolute; right:10px; top:15px; cursor:pointer; font-size:1.2em;'>&#128065;</span>";
-    html += "</div>";
-    html += "</div>";
-
-    // TASTI
-    html += "<input type='submit' value='SALVA E CONNETTI' class='btn'>";
+    html += "<input type='submit' value='SALVA SOLO WIFI/RETE' class='btn'>";
     html += "</form>";
-    
+
+    // --- 4. FORM API (separato dal WiFi) ---
+    if (standaloneProfile) {
+        String apiView = escapeHtmlAttr(api.length() > 0 ? api : "NON IMPOSTATO");
+        String keyView = escapeHtmlAttr(key.length() > 0 ? key : "NON IMPOSTATA");
+        String custApiView = escapeHtmlAttr(custApi.length() > 0 ? custApi : "NON IMPOSTATO");
+        String custKeyView = escapeHtmlAttr(custKey.length() > 0 ? custKey : "NON IMPOSTATA");
+        html += "<div class='card'>";
+        html += "<h3>Configurazione API Server</h3>";
+        html += "<p style='font-size:0.9em; color:#666;'>In modalita' Standalone le API sono impostate in produzione e non modificabili da questa pagina.</p>";
+        html += "<label>URL API Factory (sola lettura)</label>";
+        html += "<input type='text' value='" + apiView + "' readonly>";
+        html += "<label>API Key Factory (sola lettura)</label>";
+        html += "<input type='text' value='" + keyView + "' readonly>";
+        html += "<hr>";
+        html += "<label>URL API Cliente (sola lettura)</label>";
+        html += "<input type='text' value='" + custApiView + "' readonly>";
+        html += "<label>API Key Cliente (sola lettura)</label>";
+        html += "<input type='text' value='" + custKeyView + "' readonly>";
+        html += "</div>";
+    } else {
+        html += "<form action='/save_api' method='POST'>";
+        html += "<div class='card'>";
+        html += "<h3>Configurazione API Server</h3>";
+        html += "<label>URL API Factory (Antralux)</label>";
+        html += "<input type='text' name='api_url' value='" + api + "' placeholder='https://.../api.php'>";
+        html += "<label>API Key Factory</label>";
+        html += "<div style='position:relative'>";
+        html += "<input type='password' name='api_key' id='api_key_factory' value='" + key + "' placeholder='Chiave API Factory' style='padding-right:40px;'>";
+        html += "<span onclick=\"toggleKey('api_key_factory')\" style='position:absolute; right:10px; top:15px; cursor:pointer; font-size:1.2em;'>&#128065;</span>";
+        html += "</div>";
+        html += "<hr>";
+        html += "<label>URL API Cliente (opzionale)</label>";
+        html += "<input type='text' name='cust_api_url' value='" + custApi + "' placeholder='https://.../api.php'>";
+        html += "<label>API Key Cliente (opzionale)</label>";
+        html += "<div style='position:relative'>";
+        html += "<input type='password' name='cust_api_key' id='api_key_customer' value='" + custKey + "' placeholder='Chiave API Cliente' style='padding-right:40px;'>";
+        html += "<span onclick=\"toggleKey('api_key_customer')\" style='position:absolute; right:10px; top:15px; cursor:pointer; font-size:1.2em;'>&#128065;</span>";
+        html += "</div>";
+        html += "</div>";
+        html += "<input type='submit' value='SALVA SOLO API' class='btn'>";
+        html += "</form>";
+    }
+
     html += "<a href='/'><button class='btn btn-back'>TORNA ALLA DASHBOARD</button></a>";
     html += "</div></body></html>";
     
     server.send(200, "text/html", html);
 }
 
-void handleConnect() {
+void handleSaveWifi() {
+    const bool standaloneProfile = isStandaloneWifiProfileActive();
     String ssid = server.arg("ssid");
     String pass = server.arg("pass");
     
@@ -351,23 +1012,65 @@ void handleConnect() {
     String gw = server.arg("gw");
     
     bool apAlways = server.hasArg("ap_always");
-    String apiUrl = server.arg("api_url");
-    String apiKey = server.arg("api_key");
+    bool standaloneWifiBoot = server.hasArg("st_wifi_boot");
 
     // Salvataggio in NVS
-    memoria.begin("easy", false);
-    memoria.putString("ssid", ssid);
-    memoria.putString("pass", pass);
-    memoria.putBool("static_ip", staticIp);
-    if(staticIp) { memoria.putString("ip", ip); memoria.putString("sub", sub); memoria.putString("gw", gw); }
-    memoria.putBool("ap_always", apAlways);
-    memoria.putString("api_url", apiUrl);
-    memoria.putString("apiKey", apiKey);
-    memoria.end();
+    Preferences pref;
+    pref.begin("easy", false);
+    pref.putString("ssid", ssid);
+    pref.putString("pass", pass);
+    pref.putBool("static_ip", staticIp);
+    if (staticIp) {
+        pref.putString("ip", ip);
+        pref.putString("sub", sub);
+        pref.putString("gw", gw);
+    } else {
+        pref.remove("ip");
+        pref.remove("sub");
+        pref.remove("gw");
+    }
+    if (standaloneProfile) {
+        pref.putBool("st_wifi_boot", standaloneWifiBoot);
+    } else {
+        pref.putBool("ap_always", apAlways);
+    }
+    pref.end();
 
-    server.send(200, "text/html", "<html><body><h2>Dati salvati!</h2><p>Il Master si riavviera' per connettersi a " + ssid + ".</p></body></html>");
-    delay(2000);
+    server.send(200, "text/html", "<html><body><h2>WiFi salvato!</h2><p>Riavvio in corso per applicare la rete: " + ssid + ".</p></body></html>");
+    delay(1500);
     ESP.restart();
+}
+
+void handleSaveApi() {
+    if (isStandaloneWifiProfileActive()) {
+        server.send(403, "text/plain", "Configurazione API bloccata in modalita' Standalone.");
+        return;
+    }
+
+    String apiUrl = server.arg("api_url");
+    String apiKey = server.arg("api_key");
+    String custApiUrl = server.arg("cust_api_url");
+    String custApiKey = server.arg("cust_api_key");
+
+    Preferences pref;
+    pref.begin("easy", false);
+    pref.putString("api_url", apiUrl);
+    pref.putString("apiKey", apiKey);
+    pref.putString("custApiUrl", custApiUrl);
+    pref.putString("custApiKey", custApiKey);
+    pref.end();
+
+    apiUrl.toCharArray(config.apiUrl, sizeof(config.apiUrl));
+    apiKey.toCharArray(config.apiKey, sizeof(config.apiKey));
+    custApiUrl.toCharArray(config.customerApiUrl, sizeof(config.customerApiUrl));
+    custApiKey.toCharArray(config.customerApiKey, sizeof(config.customerApiKey));
+
+    server.send(200, "text/html", "<html><body><h2>API salvate!</h2><p>Configurazione aggiornata senza modificare la rete WiFi.</p><p><a href='/wifi'>Torna alla pagina WiFi</a></p></body></html>");
+}
+
+void handleConnect() {
+    // Compatibilita' con form legacy.
+    handleSaveWifi();
 }
 
 // --- INVIO DATI JSON ---
@@ -381,33 +1084,30 @@ void handleData() {
 
 // --- INVIO DATI JSON PER DASHBOARD ---
 void handleDashboardData() {
-    // Calcolo Delta Pressione (Pressure Delta Calculation)
-    float pressG1 = 0.0, pressG2 = 0.0;
-    bool foundG1 = false, foundG2 = false;
-
-    for(int i=1; i<=100; i++) {
-        if(listaPerifericheAttive[i]) {
-            if (databaseSlave[i].grp == 1 && !foundG1) {
-                pressG1 = databaseSlave[i].p;
-                foundG1 = true;
-            }
-            else if (databaseSlave[i].grp == 2 && !foundG2) {
-                pressG2 = databaseSlave[i].p;
-                foundG2 = true;
-            }
-        }
+    bool filteredValid = isFilteredDeltaPValid();
+    float filteredDelta = getFilteredDeltaP();
+    float dashboardDelta = 0.0f;
+    bool dashboardDeltaValid = false;
+    if (filteredValid) {
+        dashboardDelta = filteredDelta;
+        dashboardDeltaValid = true;
+    } else if (currentDeltaPValid) {
+        dashboardDelta = currentDeltaP;
+        dashboardDeltaValid = true;
+    } else {
+        dashboardDeltaValid = computeLiveDeltaPForDashboard(dashboardDelta);
     }
 
-    String deltaPStr = (foundG1 && foundG2) ? String(pressG1 - pressG2, 0) + " Pa" : "In attesa dati";
-    
-    // Aggiornamento variabile globale per calibrazione
-    if (foundG1 && foundG2) {
-        currentDeltaP = pressG1 - pressG2;
-    }
+    String deltaPStr = dashboardDeltaValid ? (String(dashboardDelta, 1) + " Pa") : "In attesa dati";
+    String warningMsg = checkThresholds(filteredDelta);
+    String warningEscaped = warningMsg;
+    warningEscaped.replace("\\", "\\\\");
+    warningEscaped.replace("\"", "\\\"");
 
     // Costruzione JSON (JSON Construction)
     String json = "{";
     json += "\"deltaP\":\"" + deltaPStr + "\",";
+    json += "\"warning\":\"" + warningEscaped + "\",";
     json += "\"slaves\":[";
 
     bool firstSlave = true;
@@ -434,19 +1134,29 @@ void handleDashboardData() {
 
 // --- SETUP SERVER ---
 void setupMasterWiFi() {
-    // Prova a connettersi come Client se c'è un SSID salvato
-    memoria.begin("easy", true);
-    String s = memoria.getString("ssid", "");
-    String p = memoria.getString("pass", "");
+    const bool standaloneProfile = isStandaloneWifiProfileActive();
+    const char* hostName = wifiHostNameByProfile();
+    const char* apSsid = wifiApSsidByProfile();
+    const char* apPass = wifiApPasswordByProfile();
+    resetMdnsState(true);
+
+    // Prova a connettersi come Client se e presente un SSID salvato
+    Preferences pref;
+    pref.begin("easy", true);
+    String s = pref.getString("ssid", "");
+    String p = pref.getString("pass", "");
     
-    bool staticIp = memoria.getBool("static_ip", false);
-    String ipStr = memoria.isKey("ip") ? memoria.getString("ip") : "";
-    String subStr = memoria.isKey("sub") ? memoria.getString("sub") : "";
-    String gwStr = memoria.isKey("gw") ? memoria.getString("gw") : "";
-    String k = memoria.isKey("apiKey") ? memoria.getString("apiKey") : "";
+    bool staticIp = pref.getBool("static_ip", false);
+    String ipStr = pref.isKey("ip") ? pref.getString("ip") : "";
+    String subStr = pref.isKey("sub") ? pref.getString("sub") : "";
+    String gwStr = pref.isKey("gw") ? pref.getString("gw") : "";
+    String k = pref.isKey("apiKey") ? pref.getString("apiKey") : "";
     k.toCharArray(config.apiKey, 65);
     
-    memoria.end();
+    pref.end();
+
+    // Imposta hostname prima della connessione STA (DHCP option 12).
+    WiFi.setHostname(hostName);
 
     if (s != "") {
         // Configurazione IP Statico se richiesto
@@ -464,40 +1174,73 @@ void setupMasterWiFi() {
 
     // Avvio Iniziale AP (Sempre attivo all'avvio per sicurezza, poi gestito dal loop)
     // Se non c'è rete configurata, resta attivo.
-    WiFi.softAP("AntraluxRewamping", NULL);
+    WiFi.softAP(apSsid, apPass);
     dnsServer.start(53, "*", WiFi.softAPIP());
     apEnabled = true;
-    Serial.println("[WIFI] Access Point Aperto: AntraluxRewamping");
+    Serial.printf("[WIFI] Access Point Aperto: %s\n", apSsid);
 
-    // Avvio mDNS
+    // mDNS disponibile in AP e STA (se WiFi non e' OFF).
     ensureMdnsService();
 
-    // Gestione Favicon per evitare errori nel log
-    server.on("/favicon.ico", []() { server.send(204); });
+    if (!webServerConfigured) {
+        // Gestione Favicon per evitare errori nel log
+        server.on("/favicon.ico", []() { server.send(204); });
 
-    // Gestione Root (Home Page)
-    server.on("/", []() {
-        server.send(200, "text/html", getDashboardHTML());
-    });
+        // Gestione Root (Home Page)
+        server.on("/", []() {
+            if (isStandaloneWifiProfileActive()) {
+                handleWifiPage();
+            } else {
+                server.send(200, "text/html", getDashboardHTML());
+            }
+        });
 
-    // Setup Calibrazione
-    setupCalibration();
+        // Setup Calibrazione solo in Rewamping
+        if (!standaloneProfile) {
+            setupCalibration();
+        }
 
-    server.on("/dashboard_data", handleDashboardData); // Nuovo endpoint per i dati (New endpoint for data)
-    server.on("/data", handleData);
-    server.on("/wifi", handleWifiPage);
-    server.on("/connect", HTTP_POST, handleConnect);
-    
-    // Captive Portal (Android/Windows/iOS)
-    server.on("/generate_204", []() { server.send(200, "text/html", getDashboardHTML()); });
-    server.on("/fwlink", []() { server.send(200, "text/html", getDashboardHTML()); });
-    
-    server.onNotFound([]() {
-        server.sendHeader("Location", "/", true);
-        server.send(302, "text/plain", "");
-    });
+        server.on("/dashboard_data", handleDashboardData); // Nuovo endpoint per i dati (New endpoint for data)
+        server.on("/data", handleData);
+        server.on("/download_test_csv", handleDownloadTestCsv);
+        server.on("/delete_test_csv", HTTP_POST, handleDeleteTestCsv);
+        server.on("/testwiz_status", handleTestWizardStatus);
+        server.on("/testwiz_start", HTTP_POST, handleTestWizardStart);
+        server.on("/testwiz_stop", HTTP_POST, handleTestWizardStop);
+        server.on("/wifi", handleWifiPage);
+        server.on("/connect", HTTP_POST, handleConnect);
+        server.on("/save_wifi", HTTP_POST, handleSaveWifi);
+        server.on("/save_api", HTTP_POST, handleSaveApi);
 
-    server.begin();
+        // Captive Portal (Android/Windows/iOS)
+        server.on("/generate_204", []() {
+            if (isStandaloneWifiProfileActive()) {
+                handleWifiPage();
+            } else {
+                server.send(200, "text/html", getDashboardHTML());
+            }
+        });
+        server.on("/fwlink", []() {
+            if (isStandaloneWifiProfileActive()) {
+                handleWifiPage();
+            } else {
+                server.send(200, "text/html", getDashboardHTML());
+            }
+        });
+
+        server.onNotFound([]() {
+            server.sendHeader("Location", "/", true);
+            server.send(302, "text/plain", "");
+        });
+
+        server.begin();
+        webServerConfigured = true;
+    }
+}
+
+void setupStandaloneWifiPortal() {
+    standaloneWifiProfile = true;
+    setupMasterWiFi();
 }
 
 void forceWifiOffForLab() {
@@ -507,32 +1250,36 @@ void forceWifiOffForLab() {
 
     WiFi.disconnect(true, true);
     WiFi.softAPdisconnect(true);
+    dnsServer.stop();
     WiFi.mode(WIFI_OFF);
-    if (mdnsStarted) {
-        MDNS.end();
-        mdnsStarted = false;
-    }
+    resetMdnsState(true);
 
     apEnabled = false;
     Serial.println("[WIFI] Modalita' LAB: WiFi e AP forzati OFF.");
 }
 
 void forceWifiOnForLab() {
+    const char* hostName = wifiHostNameByProfile();
+    const char* apSsid = wifiApSsidByProfile();
+    const char* apPass = wifiApPasswordByProfile();
+
     wifiForceOff = false;
     wifiRetryCount = 0;
     statoInternet = 0;
     lastWifiCheck = 0; // forza ciclo gestione immediato
 
-    memoria.begin("easy", true);
-    String ssid = memoria.getString("ssid", "");
-    String pass = memoria.getString("pass", "");
-    bool staticIp = memoria.getBool("static_ip", false);
-    String ipStr = memoria.isKey("ip") ? memoria.getString("ip") : "";
-    String subStr = memoria.isKey("sub") ? memoria.getString("sub") : "";
-    String gwStr = memoria.isKey("gw") ? memoria.getString("gw") : "";
-    memoria.end();
+    Preferences pref;
+    pref.begin("easy", true);
+    String ssid = pref.getString("ssid", "");
+    String pass = pref.getString("pass", "");
+    bool staticIp = pref.getBool("static_ip", false);
+    String ipStr = pref.isKey("ip") ? pref.getString("ip") : "";
+    String subStr = pref.isKey("sub") ? pref.getString("sub") : "";
+    String gwStr = pref.isKey("gw") ? pref.getString("gw") : "";
+    pref.end();
 
     WiFi.mode(WIFI_STA);
+    WiFi.setHostname(hostName);
     if (staticIp && ipStr.length() > 0) {
         IPAddress ip, sub, gw;
         if (ip.fromString(ipStr) && sub.fromString(subStr) && gw.fromString(gwStr)) {
@@ -548,11 +1295,12 @@ void forceWifiOnForLab() {
         Serial.println("[WIFI] Nessun SSID salvato: avvio solo AP locale.");
     }
 
-    WiFi.softAP("AntraluxRewamping", NULL);
+    WiFi.softAP(apSsid, apPass);
     dnsServer.start(53, "*", WiFi.softAPIP());
     apEnabled = true;
+    resetMdnsState(true);
     ensureMdnsService();
-    Serial.println("[WIFI] AP locale attivo.");
+    Serial.printf("[WIFI] AP locale attivo: %s\n", apSsid);
 }
 
 void gestisciWebEWiFi() {
@@ -563,15 +1311,21 @@ void gestisciWebEWiFi() {
 
     dnsServer.processNextRequest();
     server.handleClient();
+    ensureMdnsService();
 
     // --- LOGICA AUTOMATICA AP E RICONNESSIONE ---
     unsigned long now = millis();
     if (now - lastWifiCheck > 5000) { // Controllo ogni 5 secondi
         lastWifiCheck = now;
+        const char* apSsid = wifiApSsidByProfile();
+        const char* apPass = wifiApPasswordByProfile();
 
-        memoria.begin("easy", true);
-        bool apAlwaysOn = memoria.getBool("ap_always", false);
-        memoria.end();
+        Preferences pref;
+        pref.begin("easy", true);
+        bool apAlwaysOn = isStandaloneWifiProfileActive()
+                              ? pref.getBool("st_wifi_boot", false)
+                              : pref.getBool("ap_always", false);
+        pref.end();
 
         if (WiFi.status() == WL_CONNECTED) {
             statoInternet = 2; // Connesso
@@ -581,26 +1335,36 @@ void gestisciWebEWiFi() {
             // Se connesso, AP è attivo e NON deve essere sempre attivo -> Spegni AP
             if (!apAlwaysOn && apEnabled) {
                  WiFi.softAPdisconnect(true);
+                 dnsServer.stop();
+                 WiFi.mode(WIFI_STA);
                  apEnabled = false;
+                 resetMdnsState(true);
+                 ensureMdnsService();
                  Serial.println("[WIFI] Connesso a Internet. AP Disattivato (Auto).");
             }
             // Se connesso, l'utente vuole l'AP sempre attivo ma è spento -> Accendi AP
             else if (apAlwaysOn && !apEnabled) {
-                 WiFi.softAP("AntraluxRewamping", NULL);
+                 WiFi.mode(WIFI_AP_STA);
+                 WiFi.softAP(apSsid, apPass);
+                 dnsServer.start(53, "*", WiFi.softAPIP());
                  apEnabled = true;
+                 resetMdnsState(true);
+                 ensureMdnsService();
                  Serial.println("[WIFI] AP Riattivato (Impostazione Sempre Attivo).");
             }
         } else {
             statoInternet = 0; // Disconnesso
+            ensureMdnsService();
 
             // Se la modalità "Sempre Attivo" è disabilitata, gestiamo i tentativi
             if (!apAlwaysOn) {
                 // Se non sta già tentando di riconnettersi, avvia il processo
                 if (WiFi.getMode() != WIFI_STA) {
-                    memoria.begin("easy", true);
-                    String ssid = memoria.getString("ssid", "");
-                    String pass = memoria.getString("pass", "");
-                    memoria.end();
+                    Preferences reconnectPref;
+                    reconnectPref.begin("easy", true);
+                    String ssid = reconnectPref.getString("ssid", "");
+                    String pass = reconnectPref.getString("pass", "");
+                    reconnectPref.end();
                     if (ssid.length() > 0) {
                         WiFi.begin(ssid.c_str(), pass.c_str());
                     }
@@ -611,13 +1375,23 @@ void gestisciWebEWiFi() {
 
                 // Se superiamo i 10 tentativi e l'AP è spento, lo attiviamo come fallback
                 if (wifiRetryCount > 10 && !apEnabled) {
-                    String apName = "EasyConnect-" + String(config.serialeID);
-                    if (String(config.serialeID) == "NON_SET") apName = "EasyConnect-Recovery";
-                    WiFi.softAP(apName.c_str(), "12345678");
+                    if (isStandaloneWifiProfileActive()) {
+                        WiFi.mode(WIFI_AP_STA);
+                        WiFi.softAP(apSsid, apPass);
+                    } else {
+                        String apName = "EasyConnect-" + String(config.serialeID);
+                        if (String(config.serialeID) == "NON_SET") apName = "EasyConnect-Recovery";
+                        WiFi.mode(WIFI_AP_STA);
+                        WiFi.softAP(apName.c_str(), "12345678");
+                    }
+                    dnsServer.start(53, "*", WiFi.softAPIP());
                     apEnabled = true;
+                    resetMdnsState(true);
+                    ensureMdnsService();
                     Serial.println("[WIFI] Riconnessione fallita. AP Riattivato (Recovery).");
                 }
             }
         }
     }
 }
+

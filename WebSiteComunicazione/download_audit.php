@@ -26,9 +26,10 @@ if (!$master) {
 
 // Verifica Permessi: Admin, Costruttore (del proprio impianto) o Manutentore (assegnato)
 $canAccess = false;
+$builderAssigned = isset($master['builder_id']) && ((int)$master['builder_id'] === (int)$currentUserId);
 if ($userRole === 'admin') {
     $canAccess = true;
-} elseif ($userRole === 'builder' && $master['creator_id'] == $currentUserId) {
+} elseif ($userRole === 'builder' && ($master['creator_id'] == $currentUserId || $builderAssigned)) {
     $canAccess = true;
 } elseif ($userRole === 'maintainer' && $master['maintainer_id'] == $currentUserId) {
     $canAccess = true;

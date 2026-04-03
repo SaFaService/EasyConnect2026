@@ -2,16 +2,21 @@
 session_start();
 require 'config.php';
 require 'lang.php';
+require_once 'auth_common.php';
 
-// Pagina seriali disponibile per admin/builder/maintainer.
+// Pagina seriali: lettura disponibile ad admin/builder/maintainer.
+// Le operazioni avanzate sono abilitate da permessi granulari.
 if (!isset($_SESSION['user_id'])) {
     header("Location: index.php");
     exit;
 }
 $currentRole = (string)($_SESSION['user_role'] ?? '');
+$currentUserId = (int)($_SESSION['user_id'] ?? 0);
 $canAdmin = ($currentRole === 'admin');
-$canLifecycle = in_array($currentRole, ['admin', 'builder', 'maintainer'], true);
-if (!$canLifecycle) {
+$canReadSerials = in_array($currentRole, ['admin', 'builder', 'maintainer'], true);
+$canLifecycle = ecAuthCurrentUserCan($pdo, $currentUserId, 'serial_lifecycle');
+$canReserveSerials = ecAuthCurrentUserCan($pdo, $currentUserId, 'serial_reserve');
+if (!$canReadSerials) {
     header("Location: index.php");
     exit;
 }
@@ -39,6 +44,19 @@ function ecTableExists(PDO $pdo, string $tableName): bool {
     return (bool)$stmt->fetchColumn();
 }
 
+function ecColumnExists(PDO $pdo, string $tableName, string $columnName): bool {
+    $stmt = $pdo->prepare(
+        "SELECT 1
+         FROM information_schema.columns
+         WHERE table_schema = DATABASE()
+           AND table_name = ?
+           AND column_name = ?
+         LIMIT 1"
+    );
+    $stmt->execute([$tableName, $columnName]);
+    return (bool)$stmt->fetchColumn();
+}
+
 // Fallback statico tipi prodotto: usato se la tabella product_types non esiste ancora.
 $productTypes = [
     ['code' => '01', 'label' => 'Centralina Display'],
@@ -62,7 +80,24 @@ if (ecTableExists($pdo, 'product_types')) {
 $masters = [];
 if (ecTableExists($pdo, 'masters')) {
     try {
-        $masters = $pdo->query("SELECT id, nickname, serial_number FROM masters ORDER BY nickname ASC, id ASC")->fetchAll();
+        if ($canAdmin) {
+            $masters = $pdo->query("SELECT id, nickname, serial_number FROM masters ORDER BY nickname ASC, id ASC")->fetchAll();
+        } else {
+            $hasBuilderCol = ecColumnExists($pdo, 'masters', 'builder_id');
+            $sqlMasters = "
+                SELECT id, nickname, serial_number
+                FROM masters
+                WHERE (creator_id = ? OR owner_id = ? OR maintainer_id = ?" . ($hasBuilderCol ? " OR builder_id = ?" : "") . ")
+                ORDER BY nickname ASC, id ASC
+            ";
+            $paramsMasters = [$currentUserId, $currentUserId, $currentUserId];
+            if ($hasBuilderCol) {
+                $paramsMasters[] = $currentUserId;
+            }
+            $stmtMasters = $pdo->prepare($sqlMasters);
+            $stmtMasters->execute($paramsMasters);
+            $masters = $stmtMasters->fetchAll();
+        }
     } catch (Throwable $e) {
         $masters = [];
     }
@@ -124,17 +159,6 @@ if (ecTableExists($pdo, 'serial_status_reasons')) {
         .table td code {
             font-size: 0.82rem;
         }
-        .copyable-serial {
-            cursor: pointer;
-            text-decoration: underline dotted;
-        }
-        .copy-feedback {
-            position: fixed;
-            right: 16px;
-            bottom: 16px;
-            z-index: 2000;
-            display: none;
-        }
         .result-panel {
             border-left: 4px solid #0d6efd;
         }
@@ -152,7 +176,20 @@ if (ecTableExists($pdo, 'serial_status_reasons')) {
     </div>
     <?php if (!$canAdmin): ?>
     <div class="alert alert-info py-2">
-        <?php echo htmlspecialchars(ecLang('serials_limited_mode_info', 'Modalita limitata: puoi verificare seriali e gestire dismissione/annullamento. Riserva, inserimento manuale e assegnazione master restano riservati all\'admin.')); ?>
+        <?php
+            $limits = [];
+            if (!$canLifecycle) {
+                $limits[] = ecLang('serials_limited_lifecycle_info', 'assegnazione seriale a master e dismissione/annullamento');
+            }
+            if (!$canReserveSerials) {
+                $limits[] = ecLang('serials_limited_reserve_info', 'riserva seriali');
+            }
+            $baseInfo = ecLang('serials_limited_mode_read', 'Modalita operativa: puoi sempre verificare seriali e visualizzare gli ultimi seriali di tua competenza.');
+            if (!empty($limits)) {
+                $baseInfo .= ' ' . ecLang('serials_limited_mode_limits', 'Operazioni non abilitate per questo utente: ') . implode(', ', $limits) . '.';
+            }
+            echo htmlspecialchars($baseInfo);
+        ?>
     </div>
     <?php endif; ?>
 
@@ -189,8 +226,8 @@ if (ecTableExists($pdo, 'serial_status_reasons')) {
     </div>
 
     <div class="row g-3">
-        <?php if ($canAdmin): ?>
-        <div class="col-lg-6">
+        <?php if ($canReserveSerials): ?>
+        <div class="col-12">
             <div class="card shadow-sm h-100">
                 <div class="card-header d-flex justify-content-between align-items-center">
                     <span><?php echo htmlspecialchars(ecLang('serials_card_reserve', '1) Riserva seriale automatico')); ?></span>
@@ -213,13 +250,18 @@ if (ecTableExists($pdo, 'serial_status_reasons')) {
                     <form id="formReserve">
                         <div class="mb-2">
                             <label class="form-label"><?php echo htmlspecialchars(ecLang('serials_field_product_type', 'Tipo prodotto')); ?></label>
-                            <select class="form-select" name="product_type_code" required>
+                            <select class="form-select product-type-select" name="product_type_code" required>
                                 <?php foreach ($productTypes as $pt): ?>
                                     <option value="<?php echo htmlspecialchars((string)$pt['code']); ?>">
                                         <?php echo htmlspecialchars((string)$pt['code'] . ' - ' . (string)$pt['label']); ?>
                                     </option>
                                 <?php endforeach; ?>
                             </select>
+                        </div>
+                        <div class="mb-2 d-none" data-device-mode-wrap>
+                            <label class="form-label"><?php echo htmlspecialchars(ecLang('serials_field_device_mode', 'Modalita')); ?></label>
+                            <select class="form-select" name="device_mode" data-device-mode-select disabled></select>
+                            <div class="form-text" data-device-mode-help></div>
                         </div>
                         <div class="mb-2">
                             <label class="form-label"><?php echo htmlspecialchars(ecLang('serials_field_notes_optional', 'Note (opzionale)')); ?></label>
@@ -234,7 +276,7 @@ if (ecTableExists($pdo, 'serial_status_reasons')) {
         </div>
         <?php endif; ?>
 
-        <div class="col-lg-6">
+        <div class="col-12">
             <div class="card shadow-sm h-100">
                 <div class="card-header d-flex justify-content-between align-items-center">
                     <span><?php echo htmlspecialchars(ecLang('serials_card_check', '2) Verifica seriale')); ?></span>
@@ -253,7 +295,7 @@ if (ecTableExists($pdo, 'serial_status_reasons')) {
                                 onclick="openHelp(this)">?</button>
                     </div>
                 </div>
-                <div id="cardCheckBody" class="card-body collapse show">
+                <div id="cardCheckBody" class="card-body collapse">
                     <form id="formCheck">
                         <div class="mb-2">
                             <label class="form-label"><?php echo htmlspecialchars(ecLang('serials_field_serial', 'Seriale')); ?></label>
@@ -268,7 +310,7 @@ if (ecTableExists($pdo, 'serial_status_reasons')) {
         </div>
 
         <?php if ($canAdmin): ?>
-        <div class="col-lg-6">
+        <div class="col-12">
             <div class="card shadow-sm h-100">
                 <div class="card-header d-flex justify-content-between align-items-center">
                     <span><?php echo htmlspecialchars(ecLang('serials_card_manual', '3) Inserimento manuale seriale')); ?></span>
@@ -295,13 +337,18 @@ if (ecTableExists($pdo, 'serial_status_reasons')) {
                         </div>
                         <div class="mb-2">
                             <label class="form-label"><?php echo htmlspecialchars(ecLang('serials_field_product_type', 'Tipo prodotto')); ?></label>
-                            <select class="form-select" name="product_type_code" required>
+                            <select class="form-select product-type-select" name="product_type_code" required>
                                 <?php foreach ($productTypes as $pt): ?>
                                     <option value="<?php echo htmlspecialchars((string)$pt['code']); ?>">
                                         <?php echo htmlspecialchars((string)$pt['code'] . ' - ' . (string)$pt['label']); ?>
                                     </option>
                                 <?php endforeach; ?>
                             </select>
+                        </div>
+                        <div class="mb-2 d-none" data-device-mode-wrap>
+                            <label class="form-label"><?php echo htmlspecialchars(ecLang('serials_field_device_mode', 'Modalita')); ?></label>
+                            <select class="form-select" name="device_mode" data-device-mode-select disabled></select>
+                            <div class="form-text" data-device-mode-help></div>
                         </div>
                         <div class="mb-2">
                             <label class="form-label"><?php echo htmlspecialchars(ecLang('serials_field_notes', 'Note')); ?></label>
@@ -316,8 +363,8 @@ if (ecTableExists($pdo, 'serial_status_reasons')) {
         </div>
         <?php endif; ?>
 
-        <?php if ($canAdmin): ?>
-        <div class="col-lg-6">
+        <?php if ($canLifecycle): ?>
+        <div class="col-12">
             <div class="card shadow-sm h-100">
                 <div class="card-header d-flex justify-content-between align-items-center">
                     <span><?php echo htmlspecialchars(ecLang('serials_card_assign', '4) Assegna seriale a master')); ?></span>
@@ -348,19 +395,23 @@ if (ecTableExists($pdo, 'serial_status_reasons')) {
                         <div class="mb-2">
                             <label class="form-label"><?php echo htmlspecialchars(ecLang('serials_field_master_target', 'Master target')); ?></label>
                             <select class="form-select" name="master_id" required>
-                                <?php foreach ($masters as $m): ?>
-                                    <option value="<?php echo (int)$m['id']; ?>">
-                                        #<?php echo (int)$m['id']; ?> - <?php echo htmlspecialchars((string)$m['nickname']); ?>
-                                        (<?php echo htmlspecialchars((string)$m['serial_number']); ?>)
-                                    </option>
-                                <?php endforeach; ?>
+                                <?php if (empty($masters)): ?>
+                                    <option value="" selected disabled><?php echo htmlspecialchars(ecLang('serials_no_masters_available', 'Nessun impianto disponibile per questa utenza')); ?></option>
+                                <?php else: ?>
+                                    <?php foreach ($masters as $m): ?>
+                                        <option value="<?php echo (int)$m['id']; ?>">
+                                            #<?php echo (int)$m['id']; ?> - <?php echo htmlspecialchars((string)$m['nickname']); ?>
+                                            (<?php echo htmlspecialchars((string)$m['serial_number']); ?>)
+                                        </option>
+                                    <?php endforeach; ?>
+                                <?php endif; ?>
                             </select>
                         </div>
                         <div class="mb-2">
                             <label class="form-label"><?php echo htmlspecialchars(ecLang('serials_field_notes', 'Note')); ?></label>
                             <input type="text" class="form-control" name="notes" placeholder="<?php echo htmlspecialchars(ecLang('serials_placeholder_notes_assign', 'Es. allineamento installazione impianto')); ?>">
                         </div>
-                        <button type="submit" class="btn btn-success btn-sm">
+                        <button type="submit" class="btn btn-success btn-sm" <?php echo empty($masters) ? 'disabled' : ''; ?>>
                             <i class="fas fa-link"></i> <?php echo htmlspecialchars(ecLang('serials_btn_assign', 'Assegna a master')); ?>
                         </button>
                     </form>
@@ -369,7 +420,8 @@ if (ecTableExists($pdo, 'serial_status_reasons')) {
         </div>
         <?php endif; ?>
 
-        <div class="col-lg-6">
+        <?php if ($canLifecycle): ?>
+        <div class="col-12">
             <div class="card shadow-sm h-100 border-danger-subtle">
                 <div class="card-header d-flex justify-content-between align-items-center">
                     <span><?php echo htmlspecialchars(ecLang('serials_card_lifecycle', '5) Dismissione / annullamento seriale')); ?></span>
@@ -423,10 +475,11 @@ if (ecTableExists($pdo, 'serial_status_reasons')) {
                 </div>
             </div>
         </div>
+        <?php endif; ?>
     </div>
 
     <div class="row g-3 mt-1">
-        <div class="col-lg-6">
+        <div class="col-12">
             <div class="card shadow-sm">
                 <div class="card-header d-flex justify-content-between align-items-center">
                     <span><?php echo htmlspecialchars(ecLang('serials_table_recent_title', 'Ultimi seriali (max 20)')); ?></span>
@@ -445,12 +498,13 @@ if (ecTableExists($pdo, 'serial_status_reasons')) {
                                 onclick="openHelp(this)">?</button>
                     </div>
                 </div>
-                <div id="cardRecentBody" class="card-body table-responsive collapse show">
+                <div id="cardRecentBody" class="card-body table-responsive collapse">
                     <table class="table table-sm table-striped align-middle mb-0">
                         <thead>
                             <tr>
                                 <th><?php echo htmlspecialchars(ecLang('serials_col_serial', 'Seriale')); ?></th>
                                 <th><?php echo htmlspecialchars(ecLang('serials_col_type', 'Tipo')); ?></th>
+                                <th><?php echo htmlspecialchars(ecLang('serials_col_mode', 'Modalita')); ?></th>
                                 <th><?php echo htmlspecialchars(ecLang('serials_col_status', 'Stato')); ?></th>
                                 <th><?php echo htmlspecialchars(ecLang('serials_col_lock', 'Lock')); ?></th>
                                 <th><?php echo htmlspecialchars(ecLang('serials_col_master', 'Master')); ?></th>
@@ -458,50 +512,13 @@ if (ecTableExists($pdo, 'serial_status_reasons')) {
                             </tr>
                         </thead>
                         <tbody id="recentSerialsBody">
-                            <tr><td colspan="6" class="text-muted"><?php echo htmlspecialchars(ecLang('serials_no_data', 'Nessun dato disponibile.')); ?></td></tr>
+                            <tr><td colspan="7" class="text-muted"><?php echo htmlspecialchars(ecLang('serials_no_data', 'Nessun dato disponibile.')); ?></td></tr>
                         </tbody>
                     </table>
                 </div>
             </div>
         </div>
 
-        <div class="col-lg-6">
-            <div class="card shadow-sm">
-                <div class="card-header d-flex justify-content-between align-items-center">
-                    <span><?php echo htmlspecialchars(ecLang('serials_table_audit_title', 'Audit seriali (max 20)')); ?></span>
-                    <div class="d-flex gap-1">
-                        <button class="btn btn-outline-secondary btn-sm card-toggle-btn"
-                                type="button"
-                                data-bs-toggle="collapse"
-                                data-bs-target="#cardAuditBody"
-                                aria-expanded="false"
-                                aria-controls="cardAuditBody">
-                            <i class="fas fa-chevron-down"></i>
-                        </button>
-                        <button type="button" class="btn btn-outline-secondary btn-sm help-btn"
-                                data-help-title="<?php echo htmlspecialchars(ecLang('serials_help_audit_title', 'Audit seriali')); ?>"
-                                data-help-body="<?php echo htmlspecialchars(ecLang('serials_help_audit_body', 'Mostra le ultime operazioni seriali effettuate dagli utenti amministratori.')); ?>"
-                                onclick="openHelp(this)">?</button>
-                    </div>
-                </div>
-                <div id="cardAuditBody" class="card-body table-responsive collapse show">
-                    <table class="table table-sm table-striped align-middle mb-0">
-                        <thead>
-                            <tr>
-                                <th><?php echo htmlspecialchars(ecLang('serials_col_when', 'Quando')); ?></th>
-                                <th><?php echo htmlspecialchars(ecLang('serials_col_action', 'Azione')); ?></th>
-                                <th><?php echo htmlspecialchars(ecLang('serials_col_serial', 'Seriale')); ?></th>
-                                <th><?php echo htmlspecialchars(ecLang('serials_col_user', 'Utente')); ?></th>
-                                <th><?php echo htmlspecialchars(ecLang('serials_col_details', 'Dettagli')); ?></th>
-                            </tr>
-                        </thead>
-                        <tbody id="recentAuditBody">
-                            <tr><td colspan="5" class="text-muted"><?php echo htmlspecialchars(ecLang('serials_no_data', 'Nessun dato disponibile.')); ?></td></tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
     </div>
 </div>
 
@@ -517,8 +534,6 @@ if (ecTableExists($pdo, 'serial_status_reasons')) {
   </div>
 </div>
 
-<div id="copyFeedback" class="alert alert-success shadow copy-feedback py-2 px-3 mb-0"></div>
-
 <?php require 'footer.php'; ?>
 
 <script>
@@ -529,16 +544,31 @@ const TXT = {
     yes: <?php echo json_encode(ecLang('serials_yes', 'SI')); ?>,
     no: <?php echo json_encode(ecLang('serials_no', 'NO')); ?>,
     masterNone: <?php echo json_encode(ecLang('serials_master_none', 'Nessuno')); ?>,
-    copyHint: <?php echo json_encode(ecLang('serials_copy_hint', 'Clicca per copiare seriale')); ?>,
-    copyOk: <?php echo json_encode(ecLang('serials_copy_ok', 'Seriale copiato')); ?>,
-    copyErr: <?php echo json_encode(ecLang('serials_copy_err', 'Copia non riuscita')); ?>,
     noReasons: <?php echo json_encode(ecLang('serials_no_reasons', 'Nessuna motivazione disponibile')); ?>,
-    confirmLifecycle: <?php echo json_encode(ecLang('serials_confirm_lifecycle', 'Stai per dismettere/annullare una scheda. Verifica i dati prima di confermare.')); ?>
+    confirmLifecycle: <?php echo json_encode(ecLang('serials_confirm_lifecycle', 'Stai per dismettere/annullare una scheda. Verifica i dati prima di confermare.')); ?>,
+    noModeChange: <?php echo json_encode(ecLang('serials_mode_none', 'Nessuna modalita specifica')); ?>
 };
 const SERIAL_REASON_ITEMS = <?php echo json_encode($statusReasons, JSON_UNESCAPED_UNICODE); ?>;
+const DEVICE_MODE_OPTIONS = {
+    '02': [
+        { value: '1', label: '1 - Standalone' },
+        { value: '2', label: '2 - Rewamping' }
+    ],
+    '03': [
+        { value: '1', label: '1 - LUCE' },
+        { value: '2', label: '2 - UVC' },
+        { value: '3', label: '3 - ELETTROSTATICO' },
+        { value: '4', label: '4 - GAS' },
+        { value: '5', label: '5 - COMANDO' }
+    ],
+    '04': [
+        { value: '1', label: '1 - Temp/Humidity' },
+        { value: '2', label: '2 - Pressure' },
+        { value: '3', label: '3 - All' }
+    ]
+};
 
 let helpModal;
-let copyTimer;
 
 function openHelp(btn) {
     const title = btn.getAttribute('data-help-title') || 'Help';
@@ -589,18 +619,25 @@ function renderResult(actionName, payload, data, isError) {
     time.textContent = now;
 
     const keyParts = [];
-    if (data.serial) keyParts.push('serial=' + data.serial);
-    if (data.serial_number) keyParts.push('serial_number=' + data.serial_number);
-    if (data.master_id) keyParts.push('master_id=' + data.master_id);
-    if (typeof data.exists !== 'undefined') keyParts.push('exists=' + String(data.exists));
-    if (typeof data.assignable !== 'undefined') keyParts.push('assignable=' + String(data.assignable));
-    if (data.reason) keyParts.push('reason=' + data.reason);
-    if (data.conflict_serial) keyParts.push('conflict_serial=' + data.conflict_serial);
-    if (data.expected_next_seq) keyParts.push('expected_next_seq=' + data.expected_next_seq);
-    if (data.expected_next_serial_for_type) keyParts.push('expected_next_serial=' + data.expected_next_serial_for_type);
-    if (data.record && data.record.status) keyParts.push('record.status=' + data.record.status);
-    if (data.record && data.record.product_type_code) keyParts.push('record.type=' + data.record.product_type_code);
-    keyData.textContent = keyParts.length ? keyParts.join(' | ') : '-';
+    const serialCandidate = String(data.serial_number || data.serial || '').trim();
+    if (serialCandidate) {
+        const url = `serial_detail.php?serial=${encodeURIComponent(serialCandidate)}`;
+        keyParts.push(`serial=<a href="${url}" class="text-decoration-none"><code>${escHtml(serialCandidate)}</code></a>`);
+    }
+    if (data.master_id) keyParts.push(`master_id=${escHtml(data.master_id)}`);
+    if (typeof data.exists !== 'undefined') keyParts.push(`exists=${escHtml(String(data.exists))}`);
+    if (typeof data.assignable !== 'undefined') keyParts.push(`assignable=${escHtml(String(data.assignable))}`);
+    if (data.reason) keyParts.push(`reason=${escHtml(data.reason)}`);
+    if (data.conflict_serial) keyParts.push(`conflict_serial=${escHtml(data.conflict_serial)}`);
+    if (data.expected_next_seq) keyParts.push(`expected_next_seq=${escHtml(data.expected_next_seq)}`);
+    if (data.expected_next_serial_for_type) keyParts.push(`expected_next_serial=${escHtml(data.expected_next_serial_for_type)}`);
+    if (data.record && data.record.status) keyParts.push(`record.status=${escHtml(data.record.status)}`);
+    if (data.record && data.record.product_type_code) keyParts.push(`record.type=${escHtml(data.record.product_type_code)}`);
+    if (typeof data.device_mode !== 'undefined' && data.device_mode !== null && data.device_mode !== '') keyParts.push(`device_mode=${escHtml(String(data.device_mode))}`);
+    if (data.device_mode_label) keyParts.push(`mode_label=${escHtml(data.device_mode_label)}`);
+    if (data.record && typeof data.record.device_mode !== 'undefined' && data.record.device_mode !== null && data.record.device_mode !== '') keyParts.push(`record.mode=${escHtml(String(data.record.device_mode))}`);
+    if (data.record && data.record.device_mode_label) keyParts.push(`record.mode_label=${escHtml(data.record.device_mode_label)}`);
+    keyData.innerHTML = keyParts.length ? keyParts.join(' | ') : '-';
 
     rawJson.textContent = JSON.stringify({ payload, response: data }, null, 2);
 
@@ -660,67 +697,29 @@ function populateReasonOptions() {
     reasonSelect.value = valid[0].reason_code;
 }
 
-function showCopyFeedback(text, isError = false) {
-    const box = document.getElementById('copyFeedback');
-    box.className = isError
-        ? 'alert alert-danger shadow copy-feedback py-2 px-3 mb-0'
-        : 'alert alert-success shadow copy-feedback py-2 px-3 mb-0';
-    box.textContent = text;
-    box.style.display = 'block';
-    if (copyTimer) {
-        clearTimeout(copyTimer);
-    }
-    copyTimer = setTimeout(() => {
-        box.style.display = 'none';
-    }, 1400);
-}
-
-async function copyText(value) {
-    if (navigator.clipboard && window.isSecureContext) {
-        await navigator.clipboard.writeText(value);
-        return;
-    }
-    // Fallback per contesti non sicuri (HTTP): usa textarea temporanea.
-    const ta = document.createElement('textarea');
-    ta.value = value;
-    ta.style.position = 'fixed';
-    ta.style.opacity = '0';
-    document.body.appendChild(ta);
-    ta.focus();
-    ta.select();
-    const ok = document.execCommand('copy');
-    document.body.removeChild(ta);
-    if (!ok) {
-        throw new Error('copy_failed');
-    }
-}
-
 function buildRecentSerialRow(item) {
     const lockText = Number(item.serial_locked) === 1 ? TXT.yes : TXT.no;
     const masterText = item.master_label ? item.master_label : TXT.masterNone;
     const serial = String(item.serial_number || '');
+    const modeText = item.device_mode_label ? `${item.device_mode} - ${item.device_mode_label}` : (item.device_mode ? String(item.device_mode) : TXT.noModeChange);
     const reason = String(item.status_reason_code || '');
     const replaced = String(item.replaced_by_serial || '');
     const statusText = reason ? `${String(item.status || '')} (${reason})` : String(item.status || '');
     const statusHtml = replaced ? `${escHtml(statusText)}<br><small class="text-muted">replaced_by: ${escHtml(replaced)}</small>` : escHtml(statusText);
+    const detailLink = serial ? `serial_detail.php?serial=${encodeURIComponent(serial)}` : '#';
+    const serialHtml = serial
+        ? `<a href="${detailLink}" class="text-decoration-none"><code>${escHtml(serial)}</code></a>`
+        : '<code>-</code>';
     return `<tr>
-        <td><code class="copyable-serial copy-serial" title="${escHtml(TXT.copyHint)}" data-serial="${escHtml(serial)}">${escHtml(serial)}</code></td>
+        <td>
+            ${serialHtml}
+        </td>
         <td>${escHtml(item.product_type_code || '')}</td>
+        <td>${escHtml(modeText)}</td>
         <td>${statusHtml}</td>
         <td>${escHtml(lockText)}</td>
         <td>${escHtml(masterText)}</td>
         <td>${escHtml(item.created_at || '')}</td>
-    </tr>`;
-}
-
-function buildAuditRow(item) {
-    const serial = String(item.serial_number || '');
-    return `<tr>
-        <td>${escHtml(item.created_at || '')}</td>
-        <td>${escHtml(item.action || '')}</td>
-        <td><code class="copyable-serial copy-serial" title="${escHtml(TXT.copyHint)}" data-serial="${escHtml(serial)}">${escHtml(serial)}</code></td>
-        <td>${escHtml(item.actor_email || '')}</td>
-        <td title="${escHtml(item.details || '')}">${escHtml(item.details_short || '')}</td>
     </tr>`;
 }
 
@@ -729,18 +728,11 @@ async function refreshOverview() {
         const data = await callJsonApi('api_serial_overview.php', { action: 'overview' });
 
         const serialsBody = document.getElementById('recentSerialsBody');
-        const auditBody = document.getElementById('recentAuditBody');
 
         if (!data.serials || !data.serials.length) {
-            serialsBody.innerHTML = `<tr><td colspan="6" class="text-muted">${escHtml(TXT.noData)}</td></tr>`;
+            serialsBody.innerHTML = `<tr><td colspan="7" class="text-muted">${escHtml(TXT.noData)}</td></tr>`;
         } else {
             serialsBody.innerHTML = data.serials.map(buildRecentSerialRow).join('');
-        }
-
-        if (!data.audit || !data.audit.length) {
-            auditBody.innerHTML = `<tr><td colspan="5" class="text-muted">${escHtml(TXT.noData)}</td></tr>`;
-        } else {
-            auditBody.innerHTML = data.audit.map(buildAuditRow).join('');
         }
     } catch (err) {
         // Se la API overview fallisce, non blocchiamo la pagina: lasciamo l'ultima vista disponibile.
@@ -762,9 +754,11 @@ const formReserve = document.getElementById('formReserve');
 if (formReserve) {
     formReserve.addEventListener('submit', async (e) => {
         e.preventDefault();
+        const modeEl = e.target.querySelector('[name="device_mode"]');
         await submitAction('reserve_next_serial', {
             action: 'reserve_next_serial',
             product_type_code: e.target.product_type_code.value,
+            device_mode: String(modeEl ? modeEl.value : '').trim(),
             notes: e.target.notes.value
         });
     });
@@ -785,13 +779,54 @@ const formManual = document.getElementById('formManual');
 if (formManual) {
     formManual.addEventListener('submit', async (e) => {
         e.preventDefault();
+        const modeEl = e.target.querySelector('[name="device_mode"]');
         await submitAction('register_manual_serial', {
             action: 'register_manual_serial',
             serial_number: e.target.serial_number.value.trim(),
             product_type_code: e.target.product_type_code.value,
+            device_mode: String(modeEl ? modeEl.value : '').trim(),
             notes: e.target.notes.value
         });
     });
+}
+
+function syncDeviceModeForm(formEl) {
+    if (!formEl) return;
+    const productTypeSelect = formEl.querySelector('.product-type-select');
+    const wrap = formEl.querySelector('[data-device-mode-wrap]');
+    const modeSelect = formEl.querySelector('[data-device-mode-select]');
+    const help = formEl.querySelector('[data-device-mode-help]');
+    if (!productTypeSelect || !wrap || !modeSelect || !help) return;
+
+    const productType = String(productTypeSelect.value || '').trim();
+    const options = DEVICE_MODE_OPTIONS[productType] || [];
+    modeSelect.innerHTML = '';
+
+    if (!options.length) {
+        wrap.classList.add('d-none');
+        modeSelect.disabled = true;
+        help.textContent = '';
+        return;
+    }
+
+    wrap.classList.remove('d-none');
+    modeSelect.disabled = false;
+
+    const blankOpt = document.createElement('option');
+    blankOpt.value = '';
+    blankOpt.textContent = TXT.noModeChange;
+    modeSelect.appendChild(blankOpt);
+
+    options.forEach((item) => {
+        const opt = document.createElement('option');
+        opt.value = item.value;
+        opt.textContent = item.label;
+        modeSelect.appendChild(opt);
+    });
+
+    help.textContent = productType === '03'
+        ? 'Per Relay la modalita 2 corrisponde a UVC.'
+        : '';
 }
 
 const formAssign = document.getElementById('formAssign');
@@ -825,19 +860,6 @@ if (formLifecycle) {
     });
 }
 
-document.addEventListener('click', async (e) => {
-    const el = e.target.closest('.copy-serial');
-    if (!el) return;
-    const serial = (el.getAttribute('data-serial') || '').trim();
-    if (!serial) return;
-    try {
-        await copyText(serial);
-        showCopyFeedback(`${TXT.copyOk}: ${serial}`, false);
-    } catch (err) {
-        showCopyFeedback(TXT.copyErr, true);
-    }
-});
-
 document.addEventListener('DOMContentLoaded', () => {
     helpModal = new bootstrap.Modal(document.getElementById('helpModal'));
     populateReasonOptions();
@@ -845,6 +867,14 @@ document.addEventListener('DOMContentLoaded', () => {
     if (targetStatusSelect) {
         targetStatusSelect.addEventListener('change', populateReasonOptions);
     }
+    [formReserve, formManual].forEach((formEl) => {
+        if (!formEl) return;
+        syncDeviceModeForm(formEl);
+        const productTypeSelect = formEl.querySelector('.product-type-select');
+        if (productTypeSelect) {
+            productTypeSelect.addEventListener('change', () => syncDeviceModeForm(formEl));
+        }
+    });
     refreshOverview();
     setInterval(refreshOverview, 7000);
 });

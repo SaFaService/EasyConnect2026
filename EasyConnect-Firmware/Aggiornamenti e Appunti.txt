@@ -1,15 +1,17 @@
 Aggiornamenti da fare:
-x impostare wifi da seriale
-x Visualizzazione comandi seriale durante l'inserimento
+- miglioramento Pagina locale antralux
+- Cryptare firmware con sistema Seriale
+- capire reazione ai primi test
+-Se comunica superata soglia, deve esseere in tempo reale senza bisogno di aggiornamento
 
-x le utenze diverse da administrator danno errore http 500
-- verificare le eliminazioni delle schede e degli impianti per provarne il funzionamento nei vari ruoli
-- creazione scheda seriale visualizzabile solo da admin che faccia vedere la scheda Seriale:
--- se la scheda è connessa deve far visualizzare i dati ricevuti
--- se la scheda è disconnessa deve far visualizzare i dati inseriti e permettere eventualmente di inserirli
--- cliccando sul seriale degli ultimi seriali e Audit seriali, si deve aprire la scheda seriale
 
 Test utenze:
 - utente cliente
-- utenter costruttore
+- utente costruttore
 - utente manutentore
+
+
+
+SETAPIKEY 298099133d06ce811963c8f4908a702a577c7fd9af7bedb0dadcae6b85a3d9f0
+SETCUSTURL https://www.antralux.com/impianti/api.php
+SETCUSTKEY 298099133d06ce811963c8f4908a702a577c7fd9af7bedb0dadcae6b85a3d9f0

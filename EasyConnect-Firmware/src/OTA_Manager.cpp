@@ -9,9 +9,11 @@
 #include "GestioneMemoria.h"  // Per accedere alla configurazione (API Key, URL)
 #include <SPIFFS.h>           // Per salvare il firmware dello slave
 #include <esp_task_wdt.h>     // Gestione Watchdog
+#include "RS485_Manager.h"
+#include "Serial_Manager.h"
 
 // --- VARIABILI ESTERNE ---
-// Queste variabili sono definite nel main_master.cpp, ma ci servono qui.
+// Queste variabili sono definite nel main_standalone_rewamping_controller.cpp, ma ci servono qui.
 // Usiamo 'extern' per dire al compilatore: "Fidati, esistono da un'altra parte".
 extern const char* FW_VERSION;
 extern Impostazioni config;
@@ -25,6 +27,7 @@ extern void modoRicezione();
 // Funzione definita in RS485_Master.cpp per avviare la procedura di aggiornamento slave
 extern void avviaAggiornamentoSlave(String slaveSn, String filePath);
 extern void reportSlaveProgressFor(String slaveSn, String status, String message);
+extern bool executePressureConfigCommand(const String& slaveSn, int newMode, int newGroup, int newIp, String& outMessage);
 
 // --- FUNZIONI DI SUPPORTO INTERNE ---
 
@@ -77,39 +80,136 @@ String convertGDriveUrl(String url) {
     return url; // Ritorna l'URL originale se non trova un formato noto
 }
 
-// Funzione per riportare al server il fallimento di un aggiornamento
-void reportUpdateFailure(String errorMessage) {
+// Costruisce l'URL api_ota_report.php a partire da config.apiUrl.
+static String buildOtaReportUrl() {
+    String reportUrl = String(config.apiUrl);
+    int lastSlash = reportUrl.lastIndexOf('/');
+    if (lastSlash != -1) {
+        reportUrl = reportUrl.substring(0, lastSlash + 1) + "api_ota_report.php";
+    } else {
+        reportUrl += "/api_ota_report.php";
+    }
+    return reportUrl;
+}
+
+static String buildCommandReportUrl() {
+    String reportUrl = String(config.apiUrl);
+    int lastSlash = reportUrl.lastIndexOf('/');
+    if (lastSlash != -1) {
+        reportUrl = reportUrl.substring(0, lastSlash + 1) + "api_command_report.php";
+    } else {
+        reportUrl += "/api_command_report.php";
+    }
+    return reportUrl;
+}
+
+static String jsonGetString(const String& src, const String& key) {
+    String tag = "\"" + key + "\":\"";
+    int p = src.indexOf(tag);
+    if (p < 0) return "";
+    p += tag.length();
+    int e = src.indexOf("\"", p);
+    if (e < 0) return "";
+    String v = src.substring(p, e);
+    v.replace("\\/", "/");
+    return v;
+}
+
+static int jsonGetInt(const String& src, const String& key, int defaultValue = -1) {
+    String tag = "\"" + key + "\":";
+    int p = src.indexOf(tag);
+    if (p < 0) return defaultValue;
+    p += tag.length();
+    while (p < src.length() && (src[p] == ' ' || src[p] == '\t')) p++;
+    int e = p;
+    while (e < src.length() && (isDigit(src[e]) || src[e] == '-')) e++;
+    if (e <= p) return defaultValue;
+    return src.substring(p, e).toInt();
+}
+
+static bool isControllerFirmwareType(const String& deviceType) {
+    return deviceType == "master" ||
+           deviceType == "controller" ||
+           deviceType == "controller_standalone_rewamping" ||
+           deviceType == "controller_display";
+}
+
+static bool isPeripheralFirmwareType(const String& deviceType) {
+    return deviceType == "slave_pressure" ||
+           deviceType == "slave_relay" ||
+           deviceType == "slave_motor" ||
+           deviceType == "peripheral_pressure" ||
+           deviceType == "peripheral_relay" ||
+           deviceType == "peripheral_motor" ||
+           deviceType == "slave";
+}
+
+static void reportCommandResult(int commandId, String status, String message, const String& resultJson = "") {
+    if (commandId <= 0) return;
+    if (WiFi.status() != WL_CONNECTED || String(config.apiUrl).length() < 5) return;
+
+    WiFiClientSecure client;
+    client.setInsecure();
+    HTTPClient http;
+
+    String url = buildCommandReportUrl();
+    http.begin(client, url);
+    http.addHeader("Content-Type", "application/json");
+
+    status.toLowerCase();
+    if (status != "success") status = "failed";
+    message.replace("\"", "'");
+
+    String payload = "{";
+    payload += "\"api_key\":\"" + String(config.apiKey) + "\",";
+    payload += "\"command_id\":" + String(commandId) + ",";
+    payload += "\"status\":\"" + status + "\",";
+    payload += "\"message\":\"" + message + "\"";
+    if (resultJson.length() > 0) {
+        payload += ",\"result\":" + resultJson;
+    }
+    payload += "}";
+
+    int code = http.POST(payload);
+    if (debugViewApi) {
+        Serial.printf("[API-CMD-REPORT] command_id=%d status=%s HTTP=%d\n", commandId, status.c_str(), code);
+    }
+    http.end();
+}
+
+// Report stato OTA verso portale (InProgress / Success / Failed).
+static void reportUpdateStatus(String status, String message) {
     if (WiFi.status() != WL_CONNECTED || String(config.apiUrl).length() < 5) {
-        return; // Non possiamo riportare l'errore se non siamo connessi
+        return; // Non possiamo riportare lo stato se non siamo connessi
     }
 
     WiFiClientSecure client;
     client.setInsecure();
     HTTPClient http;
 
-    // Costruisce l'URL per api_ota_report.php
-    String reportUrl = String(config.apiUrl);
-    int lastSlash = reportUrl.lastIndexOf('/');
-    if (lastSlash != -1) {
-        reportUrl = reportUrl.substring(0, lastSlash + 1) + "api_ota_report.php";
-    } else {
-        reportUrl += "/api_ota_report.php"; // Fallback se apiUrl non ha slash
-    }
+    String reportUrl = buildOtaReportUrl();
 
     http.begin(client, reportUrl);
     http.addHeader("Content-Type", "application/json");
 
-    // Pulisce il messaggio di errore da eventuali virgolette
-    errorMessage.replace("\"", "'");
+    status.trim();
+    if (status.length() == 0) {
+        status = "Failed";
+    }
+    message.replace("\"", "'");
 
-    // Crea il payload JSON
-    String jsonPayload = "{\"api_key\":\"" + String(config.apiKey) + "\",\"error_message\":\"" + errorMessage + "\"}";
+    String jsonPayload = "{\"api_key\":\"" + String(config.apiKey) + "\",\"status\":\"" + status + "\",\"message\":\"" + message + "\"}";
 
     int httpResponseCode = http.POST(jsonPayload);
     if (debugViewApi) {
-        Serial.printf("[API-OTA-REPORT] Inviato report di fallimento. Risposta server: %d\n", httpResponseCode);
+        Serial.printf("[API-OTA-REPORT] Stato '%s' inviato. Risposta server: %d\n", status.c_str(), httpResponseCode);
     }
     http.end();
+}
+
+// Wrapper compatibile col vecchio flusso.
+void reportUpdateFailure(String errorMessage) {
+    reportUpdateStatus("Failed", errorMessage);
 }
 
 // --- IMPLEMENTAZIONE FUNZIONI PUBBLICHE ---
@@ -156,6 +256,7 @@ void handleOTA() {
 void execHttpUpdate(String url, String md5) {
     Serial.println("[OTA] Rilevato comando di aggiornamento remoto.");
     Serial.println("[OTA] URL Firmware: " + url);
+    reportUpdateStatus("InProgress", "Download e installazione firmware master in corso.");
     
     // 1. PREPARAZIONE SISTEMA
     // Mette la RS485 in ascolto per evitare conflitti o trasmissioni parziali durante il flash
@@ -204,6 +305,8 @@ void execHttpUpdate(String url, String md5) {
             break;
         case HTTP_UPDATE_OK:
             Serial.println("[OTA] Aggiornamento completato con successo!");
+            reportUpdateStatus("Success", "Firmware aggiornato con successo. Riavvio dispositivo.");
+            delay(400);
             Serial.println("[OTA] Riavvio del sistema in corso...");
             delay(1000);
             ESP.restart();
@@ -320,7 +423,7 @@ void checkForFirmwareUpdates() {
 
         // Controllo se è un aggiornamento per il MASTER (la condizione ora è specifica e non causa più false-positive)
         if (response.indexOf("\"status\":\"update_ready\"") != -1) {
-            if (deviceType == "master") {
+            if (isControllerFirmwareType(deviceType)) {
                 int urlStart = response.indexOf("\"url\":\"");
                 if (urlStart != -1) {
                     urlStart += 7; // Lunghezza di "url":"
@@ -336,8 +439,8 @@ void checkForFirmwareUpdates() {
         } 
         // Controllo se è un aggiornamento per uno SLAVE (uso else if per mutua esclusione)
         else if (response.indexOf("\"status\":\"slave_update_ready\"") != -1) {
-            if (deviceType == "slave_pressure") {
-                Serial.println("[API-OTA] Rilevato aggiornamento per SLAVE.");
+            if (isPeripheralFirmwareType(deviceType)) {
+                Serial.println("[API-OTA] Rilevato aggiornamento periferica RS485. Tipo: " + deviceType);
                 
                 // Estrazione URL
                 int urlStart = response.indexOf("\"url\":\"") + 7;
@@ -351,16 +454,84 @@ void checkForFirmwareUpdates() {
                 String targetSn = response.substring(snStart, snEnd);
 
                 reportSlaveProgressFor(targetSn, "Pending", "Richiesta OTA ricevuta dalla piattaforma.");
-                reportSlaveProgressFor(targetSn, "Downloading", "Download firmware in corso sulla master...");
+                reportSlaveProgressFor(targetSn, "Downloading", "Download firmware in corso sul controller...");
                 if (downloadSlaveFirmware(fwUrl)) {
                     reportSlaveProgressFor(targetSn, "Downloaded", "Firmware scaricato. Avvio trasferimento RS485...");
                     avviaAggiornamentoSlave(targetSn, "/slave_update.bin");
                 } else {
-                    reportSlaveProgressFor(targetSn, "Failed", "Download firmware fallito sulla master.");
+                    reportSlaveProgressFor(targetSn, "Failed", "Download firmware fallito sul controller.");
                 }
             } else {
                 Serial.println("[OTA] ERRORE CRITICO: Ricevuto comando di aggiornamento SLAVE con firmware per '" + deviceType + "'. Aggiornamento annullato.");
                 // Qui dovremmo riportare l'errore dello slave
+            }
+        }
+        else if (response.indexOf("\"status\":\"command_ready\"") != -1) {
+            int commandId = jsonGetInt(response, "command_id", -1);
+            String commandType = jsonGetString(response, "command_type");
+            String targetSn = jsonGetString(response, "target_slave_sn");
+            int newMode = jsonGetInt(response, "new_mode", -1);
+            int newGroup = jsonGetInt(response, "new_group", -1);
+            int newIp = jsonGetInt(response, "new_ip", -1);
+            int totalSpeeds = jsonGetInt(response, "total_speeds", -1);
+            int dirtLevel = jsonGetInt(response, "dirt_level", -1);
+            int speedIndex = jsonGetInt(response, "speed_index", -1);
+            String stopAction = jsonGetString(response, "stop_action");
+            int saveIfPossibleRaw = jsonGetInt(response, "save_if_possible", -1);
+
+            // Fallback: payload annidato (parsing semplificato su intera risposta).
+            if (newMode < 0) newMode = jsonGetInt(response, "new_mode", -1);
+            if (newGroup < 0) newGroup = jsonGetInt(response, "new_group", -1);
+            if (newIp < 0) newIp = jsonGetInt(response, "new_ip", -1);
+            if (totalSpeeds < 0) totalSpeeds = jsonGetInt(response, "total_speeds", -1);
+            if (dirtLevel < 0) dirtLevel = jsonGetInt(response, "dirt_level", -1);
+            if (speedIndex < 0) speedIndex = jsonGetInt(response, "speed_index", -1);
+            if (stopAction.length() == 0) stopAction = jsonGetString(response, "action");
+
+            const bool isMasterDeltaPCmd =
+                (commandType == "deltap_testwiz_start" || commandType == "deltap_testwiz_stop");
+
+            if (commandId <= 0 || commandType.length() == 0 || (!isMasterDeltaPCmd && targetSn.length() == 0)) {
+                Serial.println("[API-CMD] Payload comando non valido.");
+                reportCommandResult(commandId, "failed", "Payload comando non valido");
+            } else if (commandType == "pressure_config") {
+                Serial.printf("[API-CMD] Esecuzione pressure_config su SN %s (mode=%d grp=%d ip=%d)\n",
+                              targetSn.c_str(), newMode, newGroup, newIp);
+                String msg;
+                bool ok = executePressureConfigCommand(targetSn, newMode, newGroup, newIp, msg);
+                if (!ok && msg.length() == 0) msg = "Errore configurazione remota.";
+                if (ok && msg.length() == 0) msg = "Configurazione applicata.";
+                String resultJson = "{\"slave_sn\":\"" + targetSn + "\",\"new_mode\":" + String(newMode) +
+                                    ",\"new_group\":" + String(newGroup) + ",\"new_ip\":" + String(newIp) + "}";
+                reportCommandResult(commandId, ok ? "success" : "failed", msg, resultJson);
+            } else if (commandType == "deltap_testwiz_start") {
+                Serial.printf("[API-CMD] Esecuzione deltap_testwiz_start (speeds=%d dirt=%d speed=%d)\n",
+                              totalSpeeds, dirtLevel, speedIndex);
+                String msg;
+                bool ok = webStartDeltaPTestWizard(totalSpeeds, dirtLevel, speedIndex, msg);
+                if (!ok && msg.length() == 0) msg = "Errore avvio testwiz remoto.";
+                if (ok && msg.length() == 0) msg = "Testwiz avviato.";
+                String resultJson = "{\"total_speeds\":" + String(totalSpeeds) +
+                                    ",\"dirt_level\":" + String(dirtLevel) +
+                                    ",\"speed_index\":" + String(speedIndex) + "}";
+                reportCommandResult(commandId, ok ? "success" : "failed", msg, resultJson);
+            } else if (commandType == "deltap_testwiz_stop") {
+                bool saveIfPossible = true;
+                if (saveIfPossibleRaw == 0) saveIfPossible = false;
+                if (stopAction == "abort") saveIfPossible = false;
+
+                Serial.printf("[API-CMD] Esecuzione deltap_testwiz_stop (save=%s)\n",
+                              saveIfPossible ? "true" : "false");
+                String msg;
+                bool ok = webStopDeltaPTestWizard(saveIfPossible, msg);
+                if (!ok && msg.length() == 0) msg = "Errore stop testwiz remoto.";
+                if (ok && msg.length() == 0) msg = "Testwiz fermato.";
+                String resultJson = String("{\"save_if_possible\":") +
+                                    (saveIfPossible ? "true" : "false") + "}";
+                reportCommandResult(commandId, ok ? "success" : "failed", msg, resultJson);
+            } else {
+                Serial.println("[API-CMD] Tipo comando non supportato: " + commandType);
+                reportCommandResult(commandId, "failed", "Tipo comando non supportato: " + commandType);
             }
         }
     } else {

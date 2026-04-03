@@ -11,5 +11,8 @@ extern WebServer server;
 void setupCalibration();
 void calibrationLoop();
 String checkThresholds(float currentDeltaP);
+void updateDeltaPMonitoring(float rawDeltaP, bool isValidSample);
+float getFilteredDeltaP();
+bool isFilteredDeltaPValid();
 
 #endif

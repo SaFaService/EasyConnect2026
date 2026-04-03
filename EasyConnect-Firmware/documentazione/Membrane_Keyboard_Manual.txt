@@ -1,60 +1,138 @@
-MANUALE FUNZIONAMENTO TASTIERA A MEMBRANA - MODALITÀ REWAMPING
-==============================================================
+MANUALE TASTIERA A MEMBRANA - EASYCONNECT 2026
+==============================================
 
-Questo documento descrive il comportamento dei LED presenti sulla tastiera a membrana
-collegata tramite connettore FFC alla scheda Master in modalità Rewamping.
+Questo documento descrive il comportamento dei LED della tastiera a membrana
+collegata al controller Standalone/Rewamping.
 
-MAPPATURA PIN (Connettore Tastiera a Membrana)
-----------------------------------------------
-Pin 1: LED AUX 1 (BAL4 - Futuro)
-Pin 2: LED SCHEDA SENSORE 2 (BAL3)
-Pin 3: LED SCHEDA SENSORE 1 (BAL2)
-Pin 4: LED WIFI (BAL1)
-Pin 5: LED AUX 2 (ExpLifeTime - Futuro)
-Pin 6: PULSANTE (PULS ResetLifeTime - Input)
-Pin 7: LED SICUREZZA (SaftyAlarm)
-Pin 8: Comune di Alimentazione (GND o VCC a seconda dello schema)
+MAPPATURA PIN (Connettore Tastiera)
+-----------------------------------
+Pin 1: LED AUX1 (usato come BAL4 in Standalone)
+Pin 2: LED SENS2 (usato come BAL3 in Standalone)
+Pin 3: LED SENS1 (usato come BAL2 in Standalone)
+Pin 4: LED WIFI (usato come BAL1 in Standalone)
+Pin 5: LED AUX2 (usato come ExpLifeTime in Standalone)
+Pin 6: Pulsante ResetLifeTime (input)
+Pin 7: LED SafetyAlarm
+Pin 8: Comune alimentazione (GND/VCC in base allo schema)
 
-
-LOGICA DI FUNZIONAMENTO LED
----------------------------
-
-1. LED WIFI (Pin 4)
-   - ACCESO FISSO: Wifi Connesso e funzionante.
-   - SPENTO: AP Disattivato e Wifi Disconnesso.
-   - LAMPEGGIANTE VELOCE: Wifi Disconnesso ma Access Point (AP) della scheda Attivo.
-   - LAMPEGGIANTE LENTO: Non utilizzato (Futuro).
-
-2. LED SCHEDA SENSORE 1 (Pin 3)
-   - ACCESO FISSO: Scheda Sensore del Gruppo 1 trovata sulla rete RS485 e funzionante.
-   - SPENTO: La scheda del Gruppo 1 ha un Allarme di Sicurezza attivo (o non è presente).
-   - LAMPEGGIANTE VELOCE: La scheda è configurata ma non risponde alle richieste RS485.
-   - LAMPEGGIANTE LENTO: La scheda risponde ma invia valori di pressione pari a 0.
-
-3. LED SCHEDA SENSORE 2 (Pin 2)
-   - ACCESO FISSO: Scheda Sensore del Gruppo 2 trovata sulla rete RS485 e funzionante.
-   - SPENTO: La scheda del Gruppo 2 ha un Allarme di Sicurezza attivo (o non è presente).
-   - LAMPEGGIANTE VELOCE: La scheda è configurata ma non risponde alle richieste RS485.
-   - LAMPEGGIANTE LENTO: La scheda risponde ma invia valori di pressione pari a 0.
-
-4. LED AUX 1 (Pin 1)
-   - SPENTO: Riservato per utilizzi futuri.
-
-5. LED SICUREZZA (Pin 7)
-   - ACCESO FISSO: Allarme Totale. Tutte le sicurezze del sistema (Master + Slave attivi) sono in allarme.
-   - LAMPEGGIANTE VELOCE: Allarme Master. L'ingresso di sicurezza locale della scheda Master è attivo.
-   - LAMPEGGIANTE LENTO: Allarme Parziale. Almeno una scheda (Master o Slave) è in allarme.
-   - SPENTO: Nessun allarme di sicurezza attivo.
-
-6. LED AUX 2 (Pin 5)
-   - SPENTO: Riservato per utilizzi futuri.
-
-
-NOTE TECNICHE
--------------
-Il Pin 6 del connettore è un ingresso digitale collegato a un pulsante sulla membrana.
-Attualmente non è assegnata alcuna funzione logica a questo pulsante nel firmware Rewamping.
-
-Definizioni Lampeggi:
+Definizioni lampeggi:
 - Veloce: 250ms ON / 250ms OFF
 - Lento: 200ms ON / 800ms OFF
+
+
+MODALITA REWAMPING (SETMODE 2)
+------------------------------
+
+1) LED WIFI (Pin 4)
+- Acceso fisso: WiFi connesso.
+- Spento: AP disattivato e WiFi disconnesso.
+- Lampeggiante veloce: WiFi disconnesso ma AP attivo.
+- Lampeggiante lento: WiFi connesso ma API cliente non configurata o respinta.
+
+2) LED SENS1 (Pin 3, gruppo 1)
+- Acceso fisso: sensore gruppo 1 trovato e funzionante.
+- Spento: sensore non presente oppure allarme sicurezza.
+- Lampeggiante veloce: sensore non risponde.
+- Lampeggiante lento: sensore risponde ma pressione circa zero.
+
+3) LED SENS2 (Pin 2, gruppo 2)
+- Acceso fisso: sensore gruppo 2 trovato e funzionante.
+- Spento: sensore non presente oppure allarme sicurezza.
+- Lampeggiante veloce: sensore non risponde.
+- Lampeggiante lento: sensore risponde ma pressione circa zero.
+
+4) LED AUX1 (Pin 1)
+- Spento (riservato).
+
+5) LED SafetyAlarm (Pin 7)
+- Acceso fisso: allarme totale (master + tutti gli slave attivi in allarme).
+- Lampeggiante veloce: allarme sicurezza locale master.
+- Lampeggiante lento: allarme su almeno uno slave.
+- Spento: nessun allarme.
+
+6) LED AUX2 (Pin 5)
+- Spento (riservato).
+
+Pulsante Pin 6:
+- Nessuna funzione operativa in Rewamping.
+
+
+MODALITA STANDALONE (SETMODE 1)
+-------------------------------
+
+La modalita Standalone gestisce fino a 4 schede relay UVC (ID RS485 1..4).
+In avvio viene fatta scansione RS485 e vengono considerate valide solo le relay
+in mode UVC (2). Le altre schede sono ignorate.
+
+Mappatura BAL -> ID relay:
+- BAL1 (Pin 4) = Relay ID 1
+- BAL2 (Pin 3) = Relay ID 2
+- BAL3 (Pin 2) = Relay ID 3
+- BAL4 (Pin 1) = Relay ID 4
+
+Polling Standalone:
+- Interrogazione stato relay ogni 2 secondi.
+- Timeout offline relay: 10 secondi senza risposta.
+- La scheda continua comunque il polling anche se un relay e offline.
+- Gap minimo tra frame RS485: 8 ms (richieste sequenziali, nessuna sovrapposizione).
+
+Animazione avvio (Standalone):
+- Durante la ricerca RS485 i 4 LED BAL fanno effetto avanti/indietro per 4 cicli.
+- A scansione finita si accendono in sequenza solo i BAL realmente rilevati in rete.
+- Terminata l'animazione parte la logica LED di funzionamento normale.
+
+Logica LED BAL (Pin 1..4):
+- Acceso fisso: relay funzionante.
+- Spento: relay non rilevato in scansione iniziale (IP non presente).
+- Lampeggiante lento: relay presente ma fault lampada (feedback non valido a fine tentativi).
+- Lampeggiante veloce: problema relay:
+  - disconnessione RS485 oltre timeout
+  - safety aperta
+  - fine vita lampade (ore oltre soglia)
+  - relay non piu in mode UVC
+
+Logica LED ExpLifeTime (Pin 5):
+- Spento: nessun relay in allarme fine vita.
+- Lampeggiante lento: almeno un relay in allarme fine vita.
+- Acceso fisso: tutti i relay rilevati hanno allarme fine vita.
+
+Logica LED SafetyAlarm (Pin 7):
+- Spento: nessuna safety aperta.
+- Lampeggiante lento: almeno una safety aperta ma non tutte.
+- Acceso fisso: tutte le safety considerate aperte.
+- Nota: la safety locale della Standalone/Rewamping e considerata solo se `usaSicurezzaLocale=ON`.
+
+Interlock sicurezza globale (Standalone):
+- Se anche una sola safety e aperta (relay o locale se abilitata), il controller invia OFF a tutte le relay.
+- Finche l'interlock resta attivo non vengono inviati comandi ON.
+- Quando tutte le safety tornano chiuse, il controller riprende la logica normale di riaccensione.
+
+Portale WiFi locale (Standalone):
+- Tenere premuto il pulsante per 10 secondi per avviare il WiFi locale.
+- Durante la pressione lunga (>=10s) i BAL mostrano una sweep animation:
+  rilasciando il pulsante in questa fase si entra in gestione WiFi.
+- SSID: `AntraluxStandalone`
+- Password: `Standalone1234!`
+- mDNS: `http://antraluxstandalone.local`
+- La pagina locale consente la configurazione della rete WiFi esterna.
+- Le API in Standalone non sono modificabili da pagina web locale.
+- Con flag "Mantieni WiFi attivo anche dopo riavvio", il WiFi resta abilitato al reboot.
+- Senza flag, al reboot il WiFi viene disabilitato.
+
+Soglia ore ExpLifeTime:
+- La soglia e gestita sulla singola relay (default 10000h).
+- Comando seriale relay: `SETLIFEH <ore>` (0 = disabilita allarme ore).
+- Lettura relay: `READLIFEH`.
+- Lo stato di fine-vita viene riportato al controller via RS485.
+
+Pulsante Pin 6 - Reset ore lampade (Standalone):
+1. Tenere premuto 5 secondi per entrare in modalita reset ore.
+   Durante la pressione (>=5s e <10s) tutti i BAL lampeggiano 5 volte
+   con cadenza 500 ms: rilasciando il pulsante in questa fase si entra in reset ore.
+2. Tutti i LED BAL vengono spenti.
+3. Premere brevemente per scorrere la selezione:
+   BAL1 -> BAL2 -> BAL3 -> BAL4 -> TUTTI -> BAL1 ...
+4. Tenere premuto 3 secondi per confermare reset sulla selezione corrente.
+5. Il BAL selezionato (o tutti i BAL) e il LED ExpLifeTime lampeggiano 5 volte.
+6. Il controller invia comando RS485 `CNT<ID>:RESET!` alle relay selezionate.
+7. Se tutte le relay confermano il reset, il controller si riavvia.

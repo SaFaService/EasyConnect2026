@@ -1,31 +1,60 @@
 <?php
 session_start();
 require 'config.php';
+require 'auth_common.php';
 
 // Includi il gestore della lingua
 require 'lang.php';
 $error_key = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $email = $_POST['email'];
-    $password = $_POST['password'];
+    $email = trim((string)($_POST['email'] ?? ''));
+    $password = (string)($_POST['password'] ?? '');
+    $user = ecAuthFindUserByEmail($pdo, $email);
 
-    // Cerca l'utente nel DB
-    $stmt = $pdo->prepare("SELECT id, password_hash, force_password_change, role, google_auth_secret FROM users WHERE email = ?");
-    $stmt->execute([$email]);
-    $user = $stmt->fetch();
-
-    if ($user && password_verify($password, $user['password_hash'])) {
+    if ($user && password_verify($password, (string)$user['password_hash'])) {
+        if (!ecAuthPortalLoginAllowed((string)($user['portal_access_level'] ?? 'active'))) {
+            ecAuthWriteAccessLog(
+                $pdo,
+                (int)$user['id'],
+                (string)$user['email'],
+                (string)$user['role'],
+                'web',
+                'failed',
+                'Accesso portale bloccato per questo utente'
+            );
+            $error_key = 'login_error';
+        } else {
         // Se l'utente ha il 2FA attivo, andiamo alla verifica
         if (!empty($user['google_auth_secret'])) {
             $_SESSION['temp_user_id'] = $user['id'];
+            $_SESSION['temp_user_email'] = $user['email'];
+            ecAuthWriteAccessLog(
+                $pdo,
+                (int)$user['id'],
+                (string)$user['email'],
+                (string)$user['role'],
+                'web',
+                'pending_2fa',
+                'Password valida, in attesa verifica 2FA'
+            );
             header("Location: verify_2fa.php");
             exit;
         }
 
         // Login corretto, salva i dati in sessione
-        $_SESSION['user_id'] = $user['id'];
-        $_SESSION['user_email'] = $email;
+        session_regenerate_id(true);
+        $_SESSION['user_id'] = (int)$user['id'];
+        $_SESSION['user_email'] = (string)$user['email'];
         $_SESSION['user_role'] = $user['role'];
+        ecAuthWriteAccessLog(
+            $pdo,
+            (int)$user['id'],
+            (string)$user['email'],
+            (string)$user['role'],
+            'web',
+            'success',
+            'Login web completato'
+        );
 
         // Controlla se l'utente deve cambiare la password
         if ($user['force_password_change']) {
@@ -34,7 +63,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             header("Location: index.php");
         }
         exit;
+        }
     } else {
+        ecAuthWriteAccessLog(
+            $pdo,
+            null,
+            $email,
+            '',
+            'web',
+            'failed',
+            'Credenziali non valide'
+        );
         $error_key = 'login_error';
     }
 }
@@ -59,9 +98,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 <div class="login-card">
     <div class="text-center">
-        <!-- Logo aggiornato -->
-        <img src="assets/img/AntraluxLogo.png" alt="Antralux Logo" class="logo" onerror="this.style.display='none'">
-        <h4><?php echo $lang['login_header']; ?></h4>
+        <img src="assets/img/AntraluxCloud.png" alt="AntraluxCloud" class="logo" onerror="this.style.display='none'">
     </div>
     
     <?php if($error_key): ?>
@@ -104,3 +141,4 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 </script>
 </body>
 </html>
+
