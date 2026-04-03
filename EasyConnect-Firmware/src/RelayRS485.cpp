@@ -44,6 +44,7 @@ RelayRs485Interface::RelayRs485Interface()
       debug485_(nullptr),
       lastAnyActivityMs_(0),
       lastDirectedActivityMs_(0),
+      uvcRemoteActivation_(false),
       otaInProgress_(false),
       otaTotalSize_(0),
       otaExpectedMD5_(""),
@@ -819,6 +820,12 @@ void RelayRs485Interface::handleFrame(const String &frame) {
         payload += ",";
         payload += result;
         sendFrame(payload);
+
+        if (ok && controller_->isRelayOn()) {
+            uvcRemoteActivation_ = true;
+        } else if (action == "OFF" || !controller_->isRelayOn()) {
+            uvcRemoteActivation_ = false;
+        }
         return;
     }
 
@@ -849,4 +856,12 @@ unsigned long RelayRs485Interface::lastAnyActivityMs() const {
 
 unsigned long RelayRs485Interface::lastDirectedActivityMs() const {
     return lastDirectedActivityMs_;
+}
+
+bool RelayRs485Interface::hasUvcRemoteActivation() const {
+    return uvcRemoteActivation_;
+}
+
+void RelayRs485Interface::clearUvcRemoteActivation() {
+    uvcRemoteActivation_ = false;
 }

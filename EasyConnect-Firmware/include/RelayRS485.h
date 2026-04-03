@@ -21,6 +21,8 @@ public:
 
     unsigned long lastAnyActivityMs() const;
     unsigned long lastDirectedActivityMs() const;
+    bool hasUvcRemoteActivation() const;
+    void clearUvcRemoteActivation();
 
 private:
     const char *fwVersion_;
@@ -32,6 +34,7 @@ private:
     bool *debug485_;
     unsigned long lastAnyActivityMs_;
     unsigned long lastDirectedActivityMs_;
+    bool uvcRemoteActivation_;
 
     void setRxMode();
     void setTxMode();

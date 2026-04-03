@@ -1,0 +1,46 @@
+Centralina Display
+Versione base demo UI/gesture/font: 0.2.5
+Lo sviluppo del codice si deve muovere in queste diverse fasi:
+- Fase1 - Sviluppo e visualizzazione delle possibili feature del sistema, come piccole animazioni, funzionamento tasti e tendine dall'alto o dal basso. gestione dei colori e gestione dei font e dei pulsanti. eventuale meccanismo di zoom e touch multitocco.
+- Fase2 - Sviluppo e visualizzazione funzionamento periferiche 485
+- Fase 3 implementazione del sistema easyconnect
+
+Pagine della centralina:
+- Splash Screen
+- Home
+- Impostazioni
+-- Impostazioni Utente
+--- Template (Chiaro/Scuro)
+--- Barra Velocità Motore (Laterale DX / in basso)
+--- Lingua
+--- Luminosità
+--- Data/Ora
+--- Gradi (Celsius/Farenheit)
+--- Buzzer (on/off)
+--- WiFi
+---- On/off
+---- IP Statico
+---- API
+-- Setup Sistema
+--- Sistema REC - Visualizza le periferiche esistenti
+---- Scansione Periferiche (Richiesta PIN)
+---- Reset Indirizzi IP (Richeista PIN)
+---- Visualizzazione dati periferiche ad ogni pressione della relativa periferica
+---- Possibilità cambio IP/Gruppo (Richiesta PIN)
+-- Ventilazione
+-- Filtraggio
+-- Sensori
+
+- Notifiche
+--Pressione su notifiche che riporta a record Errori
+
+- Record errori
+--- Visualizzazione degli errori presenti
+--- Visualizzazione degli errori passati salvati nella memory
+
+
+
+Cosa deve fare la centralina:
+- Avvio (durante lo splash screen)
+Nella fase di avvio deve andare a leggere le impostazioni salvate nella memoria per mantenerle e fare un check sulla rete 485 confontando i dati salvati, per capire che non siano cambiate le periferiche collegate.
+- Se sono cambiate le periferiche collegate, nella barra in alto deve esserci la notifica (leggibile tirando giù la tendina) con scritto "Periferiche collegate al sistema modificate" premendo la notifica 

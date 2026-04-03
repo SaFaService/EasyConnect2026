@@ -36,6 +36,30 @@ Led g_ledGreen(PIN_RELAY_LED_GREEN);
 Led g_ledRed(PIN_RELAY_LED_RED, true);
 
 unsigned long g_lastCounterSaveMs = 0;
+static const unsigned long UVC_RS485_FAILSAFE_TIMEOUT_MS = 60000UL;
+
+static void enforceUvcRs485Failsafe() {
+    if (g_cfg.mode != RelayMode::UVC) {
+        g_rs485.clearUvcRemoteActivation();
+        return;
+    }
+
+    if (!g_rs485.hasUvcRemoteActivation()) return;
+
+    if (!g_controller.isRelayOn()) {
+        g_rs485.clearUvcRemoteActivation();
+        return;
+    }
+
+    const unsigned long lastDirected = g_rs485.lastDirectedActivityMs();
+    const unsigned long now = millis();
+    if (lastDirected > 0 && (now - lastDirected) < UVC_RS485_FAILSAFE_TIMEOUT_MS) return;
+
+    String result;
+    g_controller.commandRelay(false, "RS485_TIMEOUT", result);
+    g_rs485.clearUvcRemoteActivation();
+    Serial.printf("[SAFE] RS485 timeout UVC: relay OFF (%s)\n", result.c_str());
+}
 
 static void updateStatusLeds() {
     // LED VERDE: stessa logica della scheda pressione (stato comunicazione RS485).
@@ -106,6 +130,7 @@ void loop() {
     g_serialUi.update();
     g_rs485.update();
     g_controller.update();
+    enforceUvcRs485Failsafe();
 
     const String &event = g_controller.lastEvent();
     if (event.length() > 0) {
