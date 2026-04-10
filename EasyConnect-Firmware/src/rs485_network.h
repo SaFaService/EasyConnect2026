@@ -80,6 +80,9 @@ bool rs485_network_relay_command(uint8_t address, const char* action, String& ra
 // percent e' espresso 0-100 e viene validato lato controller.
 bool rs485_network_motor_speed_command(uint8_t address, uint8_t percent, String& raw_response);
 
+// Abilita/disabilita la scheda 0/10V (frame: ENA<id>:<0|1>!).
+bool rs485_network_motor_enable_command(uint8_t address, bool enable, String& raw_response);
+
 // Avvia una scansione asincrona degli indirizzi 1-200.
 // No-op se una scansione e' gia' in corso.
 void rs485_network_scan_start();

@@ -57,6 +57,8 @@ static bool        g_ui_pref_ready    = false;
 static bool        g_ui_loaded        = false;
 static UiTempUnit  g_temp_unit        = UI_TEMP_C;
 static int         g_ventilation_min_speed_pct = 20;
+static int         g_ventilation_max_speed_pct = 100;
+static int         g_ventilation_step_count = 0;
 
 // ─── Stato orologio (locale alla schermata home) ──────────────────────────────
 static lv_obj_t*   s_time_lbl    = NULL;
@@ -202,6 +204,24 @@ static int _sanitize_ventilation_min_speed(int pct) {
     return constrain(pct, 0, 90);
 }
 
+static int _sanitize_ventilation_max_speed(int pct) {
+    return constrain(pct, 10, 100);
+}
+
+static int _sanitize_ventilation_step_count(int steps) {
+    switch (steps) {
+        case 0:
+        case 2:
+        case 3:
+        case 5:
+        case 7:
+        case 10:
+            return steps;
+        default:
+            return 0;
+    }
+}
+
 static void _sanitize_plant_name(const char* raw, char* out, size_t out_size) {
     if (!out || out_size == 0) return;
 
@@ -227,6 +247,11 @@ static void _ensure_ui_settings_loaded() {
         g_idle_minutes = _sanitize_idle_minutes((int)g_ui_pref.getUChar("scr_min", IDLE_MIN_DEFAULT));
         g_temp_unit = _sanitize_temp_unit((int)g_ui_pref.getUChar("temp_u", (uint8_t)UI_TEMP_C));
         g_ventilation_min_speed_pct = _sanitize_ventilation_min_speed((int)g_ui_pref.getUChar("vent_min", 20));
+        g_ventilation_max_speed_pct = _sanitize_ventilation_max_speed((int)g_ui_pref.getUChar("vent_max", 100));
+        g_ventilation_step_count = _sanitize_ventilation_step_count((int)g_ui_pref.getUChar("vent_steps", 0));
+        if (g_ventilation_max_speed_pct < g_ventilation_min_speed_pct) {
+            g_ventilation_max_speed_pct = g_ventilation_min_speed_pct;
+        }
         _sanitize_plant_name(g_ui_pref.getString("plant_name", k_default_plant_name).c_str(),
                              g_plant_name, sizeof(g_plant_name));
     } else {
@@ -234,6 +259,8 @@ static void _ensure_ui_settings_loaded() {
         g_idle_minutes = IDLE_MIN_DEFAULT;
         g_temp_unit = UI_TEMP_C;
         g_ventilation_min_speed_pct = 20;
+        g_ventilation_max_speed_pct = 100;
+        g_ventilation_step_count = 0;
         _sanitize_plant_name(k_default_plant_name, g_plant_name, sizeof(g_plant_name));
     }
 
@@ -271,6 +298,10 @@ void ui_ventilation_min_speed_set(int pct) {
     if (g_ventilation_min_speed_pct == sanitized) return;
 
     g_ventilation_min_speed_pct = sanitized;
+    if (g_ventilation_max_speed_pct < g_ventilation_min_speed_pct) {
+        g_ventilation_max_speed_pct = g_ventilation_min_speed_pct;
+        if (g_ui_pref_ready) g_ui_pref.putUChar("vent_max", (uint8_t)g_ventilation_max_speed_pct);
+    }
     if (g_ui_pref_ready) {
         g_ui_pref.putUChar("vent_min", (uint8_t)g_ventilation_min_speed_pct);
     }
@@ -279,6 +310,39 @@ void ui_ventilation_min_speed_set(int pct) {
 int ui_ventilation_min_speed_get(void) {
     _ensure_ui_settings_loaded();
     return g_ventilation_min_speed_pct;
+}
+
+void ui_ventilation_max_speed_set(int pct) {
+    _ensure_ui_settings_loaded();
+    int sanitized = _sanitize_ventilation_max_speed(pct);
+    if (sanitized < g_ventilation_min_speed_pct) sanitized = g_ventilation_min_speed_pct;
+    if (g_ventilation_max_speed_pct == sanitized) return;
+
+    g_ventilation_max_speed_pct = sanitized;
+    if (g_ui_pref_ready) {
+        g_ui_pref.putUChar("vent_max", (uint8_t)g_ventilation_max_speed_pct);
+    }
+}
+
+int ui_ventilation_max_speed_get(void) {
+    _ensure_ui_settings_loaded();
+    return g_ventilation_max_speed_pct;
+}
+
+void ui_ventilation_step_count_set(int steps) {
+    _ensure_ui_settings_loaded();
+    const int sanitized = _sanitize_ventilation_step_count(steps);
+    if (g_ventilation_step_count == sanitized) return;
+
+    g_ventilation_step_count = sanitized;
+    if (g_ui_pref_ready) {
+        g_ui_pref.putUChar("vent_steps", (uint8_t)g_ventilation_step_count);
+    }
+}
+
+int ui_ventilation_step_count_get(void) {
+    _ensure_ui_settings_loaded();
+    return g_ventilation_step_count;
 }
 
 void ui_brightness_init(void) {
@@ -1137,15 +1201,41 @@ static uint8_t _sanitize_speed_pct(int pct) {
 static int _vent_slider_to_output_pct(int slider_pct) {
     slider_pct = constrain(slider_pct, 0, 100);
     const int min_pct = ui_ventilation_min_speed_get();
-    return min_pct + ((slider_pct * (100 - min_pct) + 50) / 100);
+    int max_pct = ui_ventilation_max_speed_get();
+    if (max_pct < min_pct) max_pct = min_pct;
+    return min_pct + ((slider_pct * (max_pct - min_pct) + 50) / 100);
 }
 
 static int _vent_output_to_slider_pct(int output_pct) {
     output_pct = constrain(output_pct, 0, 100);
     const int min_pct = ui_ventilation_min_speed_get();
+    int max_pct = ui_ventilation_max_speed_get();
+    if (max_pct < min_pct) max_pct = min_pct;
     if (output_pct <= min_pct) return 0;
-    if (min_pct >= 100) return 100;
-    return ((output_pct - min_pct) * 100 + ((100 - min_pct) / 2)) / (100 - min_pct);
+    if (output_pct >= max_pct) return 100;
+    if (max_pct == min_pct) return 100;
+    return ((output_pct - min_pct) * 100 + ((max_pct - min_pct) / 2)) / (max_pct - min_pct);
+}
+
+static int _vent_snap_slider_pct(int slider_pct) {
+    slider_pct = constrain(slider_pct, 0, 100);
+    const int steps = ui_ventilation_step_count_get();
+    if (steps < 2) return slider_pct;
+
+    const int intervals = steps - 1;
+    const int idx = ((slider_pct * intervals) + 50) / 100;
+    return (idx * 100 + (intervals / 2)) / intervals;
+}
+
+static int _vent_slider_next_step_pct(int slider_pct, int direction) {
+    slider_pct = _vent_snap_slider_pct(slider_pct);
+    const int steps = ui_ventilation_step_count_get();
+    if (steps < 2) return constrain(slider_pct + direction, 0, 100);
+
+    const int intervals = steps - 1;
+    int idx = ((slider_pct * intervals) + 50) / 100;
+    idx = constrain(idx + direction, 0, intervals);
+    return (idx * 100 + (intervals / 2)) / intervals;
 }
 
 static void _update_air_speed_label(HomeTile& tile, int output_pct) {
@@ -1391,6 +1481,25 @@ static void _home_tile_click_cb(lv_event_t* e) {
     if (idx < 0 || idx >= s_home_tile_count) return;
 
     HomeTile& tile = s_home_tiles[idx];
+    if (_is_air_010_tile(tile)) {
+        if (tile.addresses_count == 0) {
+            _open_network_cb(e);
+            return;
+        }
+
+        const bool target_on = (tile.on_count < tile.total_count);
+        int ok_count = 0;
+        for (uint8_t i = 0; i < tile.addresses_count; i++) {
+            String raw;
+            if (rs485_network_motor_enable_command(tile.addresses[i], target_on, raw)) ok_count++;
+        }
+        if (ok_count == tile.addresses_count) {
+            tile.on_count = target_on ? tile.total_count : 0;
+        }
+        _sync_home_tile_animation_state();
+        return;
+    }
+
     if (!tile.is_relay || tile.addresses_count == 0) {
         _open_network_cb(e);
         return;
@@ -1501,8 +1610,12 @@ static void _home_air_speed_slider_cb(lv_event_t* e) {
     if (!_is_air_010_tile(tile)) return;
 
     lv_obj_t* slider = lv_event_get_target(e);
-    const int output_pct = _vent_slider_to_output_pct((int)lv_slider_get_value(slider));
+    const int slider_pct = _vent_snap_slider_pct((int)lv_slider_get_value(slider));
+    const int output_pct = _vent_slider_to_output_pct(slider_pct);
     if (code == LV_EVENT_VALUE_CHANGED) {
+        if (ui_ventilation_step_count_get() >= 2) {
+            lv_slider_set_value(slider, slider_pct, LV_ANIM_OFF);
+        }
         _update_air_speed_label(tile, output_pct);
         return;
     }
@@ -1518,6 +1631,35 @@ static void _home_air_speed_slider_cb(lv_event_t* e) {
 
     if (ok_count > 0) {
         _set_air_speed_widgets(tile, output_pct, false);
+    }
+}
+
+static void _home_air_speed_step_cb(lv_event_t* e) {
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    const intptr_t raw = (intptr_t)lv_event_get_user_data(e);
+    const int idx = (int)(raw / 10);
+    const int direction = (raw % 10) == 1 ? 1 : -1;
+    if (idx < 0 || idx >= s_home_tile_count) return;
+
+    HomeTile& tile = s_home_tiles[idx];
+    if (!_is_air_010_tile(tile) || !tile.speed_slider) return;
+
+    const int current = (int)lv_slider_get_value(tile.speed_slider);
+    const int slider_pct = _vent_slider_next_step_pct(current, direction);
+    const int output_pct = _vent_slider_to_output_pct(slider_pct);
+    lv_slider_set_value(tile.speed_slider, slider_pct, LV_ANIM_OFF);
+
+    int ok_count = 0;
+    for (uint8_t i = 0; i < tile.addresses_count; i++) {
+        String raw_response;
+        if (rs485_network_motor_speed_command(tile.addresses[i], (uint8_t)output_pct, raw_response)) {
+            ok_count++;
+        }
+    }
+    if (ok_count > 0) {
+        _set_air_speed_widgets(tile, output_pct, false);
+    } else {
+        _update_air_speed_label(tile, output_pct);
     }
 }
 
@@ -1558,7 +1700,6 @@ static lv_obj_t* make_action_card(lv_obj_t*   parent,
 }
 
 static lv_obj_t* make_device_card(lv_obj_t* parent, int tile_idx, HomeTile& tile) {
-    const bool air_speed_card = _is_air_010_tile(tile);
     lv_obj_t* card = lv_obj_create(parent);
     lv_obj_set_size(card, 172, 188);
     lv_obj_set_style_bg_color(card, HM_WHITE, 0);
@@ -1612,33 +1753,7 @@ static lv_obj_t* make_device_card(lv_obj_t* parent, int tile_idx, HomeTile& tile
     lv_obj_set_style_text_color(sn_lbl, HM_TEXT, 0);
     lv_obj_set_style_text_align(sn_lbl, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_width(sn_lbl, 154);
-    lv_obj_align(sn_lbl, LV_ALIGN_TOP_MID, 0,
-                 air_speed_card ? (tile.show_group_label ? 116 : 106) :
-                                  (tile.show_group_label ? 124 : 114));
-
-    if (air_speed_card) {
-        lv_obj_t* speed_lbl = lv_label_create(card);
-        lv_obj_set_style_text_font(speed_lbl, &lv_font_montserrat_12, 0);
-        lv_obj_set_style_text_color(speed_lbl, HM_DIM, 0);
-        lv_obj_set_style_text_align(speed_lbl, LV_TEXT_ALIGN_CENTER, 0);
-        lv_obj_set_width(speed_lbl, 154);
-        lv_obj_align(speed_lbl, LV_ALIGN_BOTTOM_MID, 0, -26);
-        tile.speed_lbl = speed_lbl;
-        _update_air_speed_label(tile, tile.speed_pct);
-
-        lv_obj_t* slider = lv_slider_create(card);
-        lv_obj_set_size(slider, 132, 8);
-        lv_slider_set_range(slider, 0, 100);
-        lv_slider_set_value(slider, _vent_output_to_slider_pct(tile.speed_pct), LV_ANIM_OFF);
-        lv_obj_set_style_bg_color(slider, lv_color_hex(0xDDE5EE), LV_PART_MAIN);
-        lv_obj_set_style_bg_color(slider, HM_ORANGE, LV_PART_INDICATOR);
-        lv_obj_set_style_bg_color(slider, HM_ORANGE, LV_PART_KNOB);
-        lv_obj_align(slider, LV_ALIGN_BOTTOM_MID, 0, -12);
-        lv_obj_add_event_cb(slider, _home_air_speed_slider_cb, LV_EVENT_VALUE_CHANGED, (void*)(intptr_t)tile_idx);
-        lv_obj_add_event_cb(slider, _home_air_speed_slider_cb, LV_EVENT_RELEASED, (void*)(intptr_t)tile_idx);
-        lv_obj_add_event_cb(slider, _home_air_speed_slider_cb, LV_EVENT_PRESS_LOST, (void*)(intptr_t)tile_idx);
-        tile.speed_slider = slider;
-    }
+    lv_obj_align(sn_lbl, LV_ALIGN_TOP_MID, 0, tile.show_group_label ? 124 : 114);
 
     lv_obj_add_event_cb(card, _home_tile_click_cb, LV_EVENT_CLICKED, (void*)(intptr_t)tile_idx);
     return card;
@@ -1808,6 +1923,119 @@ static lv_obj_t* _make_pressure_panel(lv_obj_t* parent, lv_coord_t panel_w, lv_c
 }
 
 // ─── Costruzione Home ─────────────────────────────────────────────────────────
+static int _count_air_tiles() {
+    int count = 0;
+    for (int i = 0; i < s_home_tile_count; i++) {
+        if (_is_air_010_tile(s_home_tiles[i])) count++;
+    }
+    return count;
+}
+
+static lv_obj_t* _make_air_speed_control(lv_obj_t* parent, int tile_idx, lv_coord_t control_w, lv_coord_t control_h) {
+    HomeTile& tile = s_home_tiles[tile_idx];
+
+    lv_obj_t* row = lv_obj_create(parent);
+    lv_obj_set_size(row, control_w, control_h);
+    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(row, 0, 0);
+    lv_obj_set_style_pad_all(row, 0, 0);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t* name_lbl = lv_label_create(row);
+    lv_label_set_text(name_lbl, _tile_kind_text(tile.kind));
+    lv_obj_set_style_text_font(name_lbl, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(name_lbl, HM_TEXT, 0);
+    lv_obj_align(name_lbl, LV_ALIGN_LEFT_MID, 0, -15);
+
+    lv_obj_t* value_lbl = lv_label_create(row);
+    lv_obj_set_style_text_font(value_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(value_lbl, HM_ORANGE, 0);
+    lv_obj_set_style_text_align(value_lbl, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_set_width(value_lbl, 120);
+    lv_obj_align(value_lbl, LV_ALIGN_LEFT_MID, 0, 16);
+    tile.speed_lbl = value_lbl;
+    _update_air_speed_label(tile, tile.speed_pct);
+
+    lv_obj_t* minus_btn = lv_btn_create(row);
+    lv_obj_set_size(minus_btn, 54, 54);
+    lv_obj_set_style_radius(minus_btn, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(minus_btn, HM_WHITE, 0);
+    lv_obj_set_style_bg_color(minus_btn, lv_color_hex(0xE6EEF6), LV_STATE_PRESSED);
+    lv_obj_set_style_border_color(minus_btn, lv_color_hex(0xDDE5EE), 0);
+    lv_obj_set_style_border_width(minus_btn, 1, 0);
+    lv_obj_set_style_shadow_width(minus_btn, 0, 0);
+    lv_obj_align(minus_btn, LV_ALIGN_LEFT_MID, 150, 0);
+    lv_obj_t* minus_lbl = lv_label_create(minus_btn);
+    lv_label_set_text(minus_lbl, "-");
+    lv_obj_set_style_text_font(minus_lbl, &lv_font_montserrat_32, 0);
+    lv_obj_set_style_text_color(minus_lbl, HM_TEXT, 0);
+    lv_obj_center(minus_lbl);
+    lv_obj_add_event_cb(minus_btn, _home_air_speed_step_cb, LV_EVENT_CLICKED,
+                        (void*)(intptr_t)(tile_idx * 10));
+
+    lv_obj_t* plus_btn = lv_btn_create(row);
+    lv_obj_set_size(plus_btn, 54, 54);
+    lv_obj_set_style_radius(plus_btn, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(plus_btn, HM_ORANGE, 0);
+    lv_obj_set_style_bg_color(plus_btn, lv_color_hex(0xC93516), LV_STATE_PRESSED);
+    lv_obj_set_style_shadow_width(plus_btn, 0, 0);
+    lv_obj_align(plus_btn, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_t* plus_lbl = lv_label_create(plus_btn);
+    lv_label_set_text(plus_lbl, "+");
+    lv_obj_set_style_text_font(plus_lbl, &lv_font_montserrat_32, 0);
+    lv_obj_set_style_text_color(plus_lbl, lv_color_white(), 0);
+    lv_obj_center(plus_lbl);
+    lv_obj_add_event_cb(plus_btn, _home_air_speed_step_cb, LV_EVENT_CLICKED,
+                        (void*)(intptr_t)(tile_idx * 10 + 1));
+
+    lv_obj_t* slider = lv_slider_create(row);
+    lv_obj_set_size(slider, control_w - 310, 18);
+    lv_slider_set_range(slider, 0, 100);
+    lv_slider_set_value(slider, _vent_output_to_slider_pct(tile.speed_pct), LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(slider, lv_color_hex(0xDDE5EE), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(slider, HM_ORANGE, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(slider, HM_ORANGE, LV_PART_KNOB);
+    lv_obj_set_style_radius(slider, 9, LV_PART_MAIN);
+    lv_obj_set_style_radius(slider, 9, LV_PART_INDICATOR);
+    lv_obj_align(slider, LV_ALIGN_LEFT_MID, 222, 0);
+    lv_obj_add_event_cb(slider, _home_air_speed_slider_cb, LV_EVENT_VALUE_CHANGED, (void*)(intptr_t)tile_idx);
+    lv_obj_add_event_cb(slider, _home_air_speed_slider_cb, LV_EVENT_RELEASED, (void*)(intptr_t)tile_idx);
+    lv_obj_add_event_cb(slider, _home_air_speed_slider_cb, LV_EVENT_PRESS_LOST, (void*)(intptr_t)tile_idx);
+    tile.speed_slider = slider;
+    return row;
+}
+
+static lv_obj_t* _make_air_speed_panel(lv_obj_t* parent, lv_coord_t panel_w, lv_coord_t panel_h) {
+    const int air_count = _count_air_tiles();
+    if (air_count <= 0) return NULL;
+
+    lv_obj_t* panel = lv_obj_create(parent);
+    lv_obj_set_size(panel, panel_w, panel_h);
+    lv_obj_set_style_bg_color(panel, HM_WHITE, 0);
+    lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(panel, 24, 0);
+    lv_obj_set_style_border_width(panel, 0, 0);
+    lv_obj_set_style_shadow_color(panel, HM_SHADOW, 0);
+    lv_obj_set_style_shadow_width(panel, 20, 0);
+    lv_obj_set_style_shadow_ofs_y(panel, 5, 0);
+    lv_obj_set_style_pad_left(panel, 22, 0);
+    lv_obj_set_style_pad_right(panel, 22, 0);
+    lv_obj_set_style_pad_top(panel, 12, 0);
+    lv_obj_set_style_pad_bottom(panel, 12, 0);
+    lv_obj_set_style_pad_row(panel, 6, 0);
+    lv_obj_set_layout(panel, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(panel, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+
+    const lv_coord_t control_h = (air_count > 1) ? ((panel_h - 30) / air_count) : (panel_h - 24);
+    for (int i = 0; i < s_home_tile_count; i++) {
+        if (!_is_air_010_tile(s_home_tiles[i])) continue;
+        _make_air_speed_control(panel, i, panel_w - 44, control_h);
+    }
+    return panel;
+}
+
 lv_obj_t* ui_dc_home_create(void) {
     _ensure_ui_settings_loaded();
 
@@ -1906,6 +2134,7 @@ lv_obj_t* ui_dc_home_create(void) {
     const int pressure_group_count = _collect_pressure_groups(pressure_groups, k_max_pressure_groups);
     const bool has_pressure_panel = pressure_group_count > 0;
     const bool devices_found = rs485_network_device_count() > 0;
+    const bool has_air_speed_panel = _count_air_tiles() > 0;
     _refresh_plant_name_label(devices_found);
     if (tile_count > 0 || has_pressure_panel) {
         lv_obj_t* body = lv_obj_create(scr);
@@ -1920,11 +2149,13 @@ lv_obj_t* ui_dc_home_create(void) {
         const lv_coord_t right_w = 220;
         const lv_coord_t left_w = has_pressure_panel ? 448 : 768;
         const lv_coord_t pressure_w = has_pressure_panel ? ((tile_count > 0) ? 300 : 768) : 0;
+        const lv_coord_t content_h = has_air_speed_panel ? 400 : 500;
+        const lv_coord_t nav_card_h = has_air_speed_panel ? 116 : 150;
 
         if (tile_count > 0) {
             lv_obj_t* left = lv_obj_create(body);
-            lv_obj_set_size(left, left_w, 500);
-            lv_obj_align(left, LV_ALIGN_LEFT_MID, 12, 0);
+            lv_obj_set_size(left, left_w, content_h);
+            lv_obj_set_pos(left, 12, 0);
             lv_obj_set_style_bg_opa(left, LV_OPA_TRANSP, 0);
             lv_obj_set_style_border_width(left, 0, 0);
             lv_obj_set_style_pad_all(left, 8, 0);
@@ -1943,17 +2174,17 @@ lv_obj_t* ui_dc_home_create(void) {
         _sync_home_tile_animation_state();
 
         if (has_pressure_panel) {
-            lv_obj_t* center = _make_pressure_panel(body, pressure_w, 500);
+            lv_obj_t* center = _make_pressure_panel(body, pressure_w, content_h);
             if (tile_count > 0) {
-                lv_obj_align(center, LV_ALIGN_LEFT_MID, left_w + 20, 0);
+                lv_obj_set_pos(center, left_w + 20, 0);
             } else {
-                lv_obj_align(center, LV_ALIGN_LEFT_MID, 12, 0);
+                lv_obj_set_pos(center, 12, 0);
             }
         }
 
         lv_obj_t* right = lv_obj_create(body);
-        lv_obj_set_size(right, right_w, 500);
-        lv_obj_align(right, LV_ALIGN_RIGHT_MID, -12, 0);
+        lv_obj_set_size(right, right_w, content_h);
+        lv_obj_align(right, LV_ALIGN_TOP_RIGHT, -12, 0);
         lv_obj_set_style_bg_opa(right, LV_OPA_TRANSP, 0);
         lv_obj_set_style_border_width(right, 0, 0);
         lv_obj_set_style_pad_all(right, 8, 0);
@@ -1964,17 +2195,22 @@ lv_obj_t* ui_dc_home_create(void) {
         lv_obj_clear_flag(right, LV_OBJ_FLAG_SCROLLABLE);
 
         lv_obj_t* settings_card = make_action_card(right, LV_SYMBOL_SETTINGS, "Impostazioni",
-                                                   lv_color_hex(0x3A6BC8), 200, 150, true);
+                                                   lv_color_hex(0x3A6BC8), 200, nav_card_h, true);
         lv_obj_add_event_cb(settings_card, _open_settings_cb, LV_EVENT_CLICKED, NULL);
 
         lv_obj_t* stato_card = make_action_card(right, LV_SYMBOL_LIST, "Stato",
-                                                lv_color_hex(0x8C44B8), 200, 150, true);
+                                                lv_color_hex(0x8C44B8), 200, nav_card_h, true);
         lv_obj_add_event_cb(stato_card, _open_network_cb, LV_EVENT_CLICKED, NULL);
 
         lv_obj_t* notif_card = make_action_card(right, LV_SYMBOL_BELL, "Notifiche",
-                                                lv_color_hex(0x28A745), 200, 150, true,
+                                                lv_color_hex(0x28A745), 200, nav_card_h, true,
                                                 &s_notif_icon_lbl);
         lv_obj_add_event_cb(notif_card, _open_notifications_cb, LV_EVENT_CLICKED, NULL);
+
+        if (has_air_speed_panel) {
+            lv_obj_t* air_panel = _make_air_speed_panel(body, 1000, 112);
+            if (air_panel) lv_obj_set_pos(air_panel, 12, 416);
+        }
     } else {
         lv_obj_t* row = lv_obj_create(scr);
         lv_obj_set_size(row, 820, 260);

@@ -375,6 +375,40 @@ static void _vent_min_speed_cb(lv_event_t* e) {
     ui_ventilation_min_speed_set(val);
 }
 
+static void _vent_max_speed_cb(lv_event_t* e) {
+    lv_obj_t* sl = lv_event_get_target(e);
+    lv_obj_t* lbl = static_cast<lv_obj_t*>(lv_event_get_user_data(e));
+    const int val = (int)lv_slider_get_value(sl);
+    char buf[8];
+    lv_snprintf(buf, sizeof(buf), "%d%%", val);
+    lv_label_set_text(lbl, buf);
+    ui_ventilation_max_speed_set(val);
+}
+
+static int _vent_step_count_to_index(int steps) {
+    switch (steps) {
+        case 2: return 1;
+        case 3: return 2;
+        case 5: return 3;
+        case 7: return 4;
+        case 10: return 5;
+        default: return 0;
+    }
+}
+
+static int _vent_step_index_to_count(int idx) {
+    static const int k_steps[] = {0, 2, 3, 5, 7, 10};
+    if (idx < 0) idx = 0;
+    if (idx > 5) idx = 5;
+    return k_steps[idx];
+}
+
+static void _vent_step_mode_cb(lv_event_t* e) {
+    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) return;
+    lv_obj_t* dd = lv_event_get_target(e);
+    ui_ventilation_step_count_set(_vent_step_index_to_count((int)lv_dropdown_get_selected(dd)));
+}
+
 static int _screensaver_minutes_to_index(int minutes) {
     switch (minutes) {
         case 3: return 0;
@@ -443,6 +477,27 @@ static void make_vent_min_speed_row(lv_obj_t* parent, int val) {
     lv_obj_set_style_bg_color(sl, ST_ORANGE, LV_PART_KNOB);
     lv_obj_align(sl, LV_ALIGN_RIGHT_MID, -62, 0);
     lv_obj_add_event_cb(sl, _vent_min_speed_cb, LV_EVENT_VALUE_CHANGED, pct);
+}
+
+static void make_vent_max_speed_row(lv_obj_t* parent, int val) {
+    lv_obj_t* row = make_row(parent, "Velocita massima motore");
+
+    lv_obj_t* pct = lv_label_create(row);
+    char buf[8];
+    lv_snprintf(buf, sizeof(buf), "%d%%", val);
+    lv_label_set_text(pct, buf);
+    lv_obj_set_style_text_font(pct, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(pct, ST_ORANGE, 0);
+    lv_obj_align(pct, LV_ALIGN_RIGHT_MID, 0, 0);
+
+    lv_obj_t* sl = lv_slider_create(row);
+    lv_obj_set_size(sl, 210, 8);
+    lv_slider_set_range(sl, 10, 100);
+    lv_slider_set_value(sl, val, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(sl, ST_ORANGE, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(sl, ST_ORANGE, LV_PART_KNOB);
+    lv_obj_align(sl, LV_ALIGN_RIGHT_MID, -62, 0);
+    lv_obj_add_event_cb(sl, _vent_max_speed_cb, LV_EVENT_VALUE_CHANGED, pct);
 }
 
 static void make_screensaver_row(lv_obj_t* parent, int minutes) {
@@ -1515,8 +1570,12 @@ static void _build_ventilation_settings(lv_obj_t* parent) {
     lv_obj_t* list = make_scroll_list(parent);
 
     make_vent_min_speed_row(list, ui_ventilation_min_speed_get());
-    make_info_row(list, "Barra Home", "0% = minimo, 100% = massimo");
-    make_info_row(list, "Comando scheda", "SPD 0-100%");
+    make_vent_max_speed_row(list, ui_ventilation_max_speed_get());
+    lv_obj_t* step_dd = make_dropdown_row(list, "Regolazione velocita",
+                                          "Continua\n2 posizioni\n3 posizioni\n5 posizioni\n7 posizioni\n10 posizioni",
+                                          _vent_step_count_to_index(ui_ventilation_step_count_get()));
+    lv_obj_add_event_cb(step_dd, _vent_step_mode_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    make_info_row(list, "Barra Home", "minimo - massimo configurati");
 }
 
 static void _build_datetime_settings(lv_obj_t* parent) {

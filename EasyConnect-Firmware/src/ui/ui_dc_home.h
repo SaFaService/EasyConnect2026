@@ -44,6 +44,15 @@ void ui_plant_name_get(char* out, size_t out_size);
 /** Imposta/legge la velocita minima usata dalla barra ventilazione in Home. */
 void ui_ventilation_min_speed_set(int pct);
 int ui_ventilation_min_speed_get(void);
+void ui_ventilation_max_speed_set(int pct);
+int ui_ventilation_max_speed_get(void);
+
+/**
+ * 0 = regolazione continua; altrimenti numero posizioni fisse supportate:
+ * 2, 3, 5, 7, 10.
+ */
+void ui_ventilation_step_count_set(int steps);
+int ui_ventilation_step_count_get(void);
 
 /**
  * Aggiorna i valori ambientali mostrati nell'header della Home.

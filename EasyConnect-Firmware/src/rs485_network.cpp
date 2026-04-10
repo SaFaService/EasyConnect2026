@@ -1030,6 +1030,63 @@ bool rs485_network_motor_speed_command(uint8_t address, uint8_t percent, String&
     return ok;
 }
 
+bool rs485_network_motor_enable_command(uint8_t address, bool enable, String& raw_response) {
+    raw_response = "";
+    if (address < 1 || address > 200) {
+        raw_response = "ERR,ADDR";
+        return false;
+    }
+    if (s_scan_state == Rs485ScanState::RUNNING) {
+        raw_response = "BUSY_SCAN";
+        return false;
+    }
+
+    const int runtime_idx = _find_online_runtime_plant_by_address(address);
+    if (runtime_idx < 0) {
+        raw_response = "ERR,UNMANAGED";
+        return false;
+    }
+    if (s_devices[runtime_idx].type != Rs485DevType::SENSOR ||
+        s_devices[runtime_idx].sensor_profile != Rs485SensorProfile::AIR_010 ||
+        !s_devices[runtime_idx].data_valid) {
+        raw_response = "ERR,TYPE";
+        return false;
+    }
+    if (s_bus_mutex == nullptr) {
+        raw_response = "ERR,INIT";
+        return false;
+    }
+    if (xSemaphoreTake(s_bus_mutex, pdMS_TO_TICKS(200)) != pdTRUE) {
+        raw_response = "BUSY";
+        return false;
+    }
+
+    const String tx = "ENA" + String((int)address) + ":" + String(enable ? 1 : 0) + "!";
+    bool ok = false;
+    String last_raw = "";
+    for (uint8_t attempt = 0; attempt < k_relay_cmd_retries; attempt++) {
+        String rx;
+        const bool got = _exchange_raw_locked(tx, k_manual_response_timeout_ms, rx, false);
+        if (got) {
+            last_raw = rx;
+            if (rx.startsWith("OK,ENA")) {
+                ok = true;
+                break;
+            }
+        }
+        if (attempt + 1 < k_relay_cmd_retries) {
+            vTaskDelay(pdMS_TO_TICKS(k_manual_retry_gap_ms));
+        }
+    }
+
+    raw_response = last_raw;
+    if (ok) {
+        s_devices[runtime_idx].sensor_active = enable;
+    }
+    xSemaphoreGive(s_bus_mutex);
+    return ok;
+}
+
 void rs485_network_scan_start() {
     if (s_scan_state == Rs485ScanState::RUNNING) return;
     s_scan_state = Rs485ScanState::RUNNING;
