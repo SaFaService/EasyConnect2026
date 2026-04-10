@@ -13,7 +13,8 @@
  ******************************************************************************/
 #include "io_extension.h"  // Include IO_EXTENSION driver header for GPIO functions
  
-io_extension_obj_t IO_EXTENSION;  // Define the global IO_EXTENSION object
+// Istanza globale unica: sulla board e' presente un solo IO expander.
+io_extension_obj_t IO_EXTENSION;
 
 /**
  * @brief Set the IO mode for the specified pins.
@@ -37,12 +38,13 @@ void IO_EXTENSION_IO_Mode(uint8_t pin)
  */
 void IO_EXTENSION_Init()
 {
-    // Set the I2C slave address for the IO_EXTENSION device
+    // L'expander condivide il bus con il touch ma ha un indirizzo slave proprio.
     DEV_I2C_Set_Slave_Addr(&IO_EXTENSION.addr, IO_EXTENSION_ADDR);
 
+    // 0xFF => tutti i pin configurati come output.
     IO_EXTENSION_IO_Mode(0xff); // Set all pins to output mode
 
-    // Initialize control flags for IO output enable and open-drain output mode
+    // Mirror software iniziale dello stato uscite.
     IO_EXTENSION.Last_io_value = 0xFF; // All pins are initially set to high (output mode)
     IO_EXTENSION.Last_od_value = 0xFF; // All pins are initially set to high (open-drain mode)
 }
@@ -58,6 +60,7 @@ void IO_EXTENSION_Init()
  */
 void IO_EXTENSION_Output(uint8_t pin, uint8_t value) 
 {
+    // Aggiorniamo prima il mirror locale e poi inviamo l'intero byte al chip.
     // Update the output value based on the pin and value
     if (value == 1)
         IO_EXTENSION.Last_io_value |= (1 << pin); // Set the pin high
@@ -82,7 +85,7 @@ uint8_t IO_EXTENSION_Input(uint8_t pin)
 {
     uint8_t value = 0;
 
-    // Read the value of the input pins
+    // Per gli input leggiamo sempre il registro reale del chip.
     DEV_I2C_Read_Nbyte(IO_EXTENSION.addr, IO_EXTENSION_IO_INPUT_ADDR, &value, 1);
     // Return the value of the specific pin(s) by masking with the provided bit mask
     return ((value & (1 << pin)) > 0);
@@ -98,7 +101,7 @@ uint8_t IO_EXTENSION_Input(uint8_t pin)
  */
 void IO_EXTENSION_Pwm_Output(uint8_t Value)
 {
-    // Prevent the screen from completely turning off
+    // Clamp prudenziale ereditato dal codice vendor.
     if (Value >= 97)
     {
         Value = 97;
@@ -120,6 +123,6 @@ void IO_EXTENSION_Pwm_Output(uint8_t Value)
  */
 uint16_t IO_EXTENSION_Adc_Input()
 {
-    // Read the ADC input value from the IO_EXTENSION device
+    // Restituisce il valore raw; l'interpretazione resta al chiamante.
     return DEV_I2C_Read_Word(IO_EXTENSION.addr, IO_EXTENSION_ADC_ADDR);
 }

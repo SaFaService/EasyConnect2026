@@ -21,6 +21,13 @@
 
 static const char *TAG = "GT911";
 
+/*
+ * Questo file fa due lavori distinti:
+ * 1. implementa il driver concreto GT911 sopra il contratto generico `touch.h`;
+ * 2. contiene la sequenza hardware necessaria a far partire il controller
+ *    touch sulla board display (bootstrap I2C + strap/reset).
+ */
+
 /* GT911 registers */
 #define ESP_LCD_TOUCH_GT911_READ_KEY_REG    (0x8093)
 #define ESP_LCD_TOUCH_GT911_READ_XY_REG     (0x814E)
@@ -31,7 +38,8 @@ static const char *TAG = "GT911";
 /* GT911 support key num */
 #define ESP_GT911_TOUCH_MAX_BUTTONS         (4)
 
-esp_lcd_touch_handle_t tp_handle = NULL; // Declare a handle for the touch panel
+// Handle globale del controller touch usato dagli altri layer del display.
+esp_lcd_touch_handle_t tp_handle = NULL;
 /*******************************************************************************
 * Function definitions
 *******************************************************************************/
@@ -68,7 +76,8 @@ esp_err_t esp_lcd_touch_new_i2c_gt911(const esp_lcd_panel_io_handle_t io, const 
         return ESP_ERR_INVALID_ARG;
     }
 
-    // Dynamically allocate memory for the touch controller handle
+    // Allochiamo l'oggetto runtime definito in touch.h e gli colleghiamo
+    // le callback specifiche del GT911.
     esp_lcd_touch_handle_t esp_lcd_touch_gt911 = 
         (esp_lcd_touch_handle_t)heap_caps_calloc(1, sizeof(esp_lcd_touch_t), MALLOC_CAP_DEFAULT);
     if (!esp_lcd_touch_gt911) {
@@ -89,7 +98,8 @@ esp_err_t esp_lcd_touch_new_i2c_gt911(const esp_lcd_panel_io_handle_t io, const 
     esp_lcd_touch_gt911->data.lock.owner = portMUX_FREE_VAL;
     memcpy(&esp_lcd_touch_gt911->config, config, sizeof(esp_lcd_touch_config_t));
 
-    // Configure the reset GPIO pin if specified
+    // Se presenti, configuriamo i GPIO ausiliari; su questa board il reset e'
+    // NC, mentre INT viene usato anche nella sequenza di bootstrap.
     if (config->rst_gpio_num != GPIO_NUM_NC) {
         gpio_config_t rst_gpio_config = {
             .pin_bit_mask = BIT64(config->rst_gpio_num),
@@ -201,7 +211,14 @@ static esp_err_t esp_lcd_touch_gt911_read_data(esp_lcd_touch_handle_t tp)
     err = touch_gt911_i2c_read(tp, ESP_LCD_TOUCH_GT911_READ_XY_REG, buf, 1);
     ESP_RETURN_ON_ERROR(err, TAG, "I2C read error!");
 
-    /* Any touch data? */
+    /*
+     * Il registro XY del GT911 contiene:
+     * - bit di "data ready";
+     * - numero di punti rilevati.
+     *
+     * Dopo la lettura il registro va pulito, altrimenti il chip continua a
+     * considerare i dati come non consumati.
+     */
     if ((buf[0] & 0x80) == 0x00) {
         touch_gt911_i2c_write(tp, ESP_LCD_TOUCH_GT911_READ_XY_REG, clear);
 #if (ESP_LCD_TOUCH_MAX_BUTTONS > 0)
@@ -234,14 +251,14 @@ static esp_err_t esp_lcd_touch_gt911_read_data(esp_lcd_touch_handle_t tp)
         }
         portEXIT_CRITICAL(&tp->data.lock);
 #endif
-        /* Count of touched points */
+        // I 4 bit bassi riportano quanti punti touch sono presenti nel frame.
         touch_cnt = buf[0] & 0x0f;
         if (touch_cnt > 5 || touch_cnt == 0) {
             touch_gt911_i2c_write(tp, ESP_LCD_TOUCH_GT911_READ_XY_REG, clear);
             return ESP_OK;
         }
 
-        /* Read all points */
+        // Ogni punto occupa 8 byte consecutivi a partire da XY_REG + 1.
         err = touch_gt911_i2c_read(tp, ESP_LCD_TOUCH_GT911_READ_XY_REG + 1, &buf[1], touch_cnt * 8);
         ESP_RETURN_ON_ERROR(err, TAG, "I2C read error!");
 
@@ -255,7 +272,7 @@ static esp_err_t esp_lcd_touch_gt911_read_data(esp_lcd_touch_handle_t tp)
         touch_cnt = (touch_cnt > ESP_LCD_TOUCH_MAX_POINTS ? ESP_LCD_TOUCH_MAX_POINTS : touch_cnt);
         tp->data.points = touch_cnt;
 
-        /* Fill all coordinates */
+        // Trasformiamo il frame raw del GT911 nella struttura comune del framework.
         for (i = 0; i < touch_cnt; i++) {
             tp->data.coords[i].x = ((uint16_t)buf[(i * 8) + 3] << 8) + buf[(i * 8) + 2];
             tp->data.coords[i].y = (((uint16_t)buf[(i * 8) + 5] << 8) + buf[(i * 8) + 4]);
@@ -343,14 +360,24 @@ static esp_err_t esp_lcd_touch_gt911_del(esp_lcd_touch_handle_t tp)
     return ESP_OK;
 }
 
-// Function to initialize the GT911 touch controller
+// Bootstrap completo del controller touch sulla board display.
 esp_lcd_touch_handle_t touch_gt911_init()
 {
     esp_lcd_panel_io_handle_t tp_io_handle = NULL;  // Declare a handle for touch panel I/O
     // Configure the I2C communication settings for the GT911 touch controller
     const esp_lcd_panel_io_i2c_config_t tp_io_config = ESP_LCD_TOUCH_IO_I2C_GT911_CONFIG();
 
-    // Reset the touch screen before usage
+    /*
+     * Sequenza importante lato board:
+     * il GT911 sceglie anche il proprio indirizzo I2C osservando lo stato della
+     * linea INT durante la fase iniziale di reset/strap.
+     *
+     * Per questo il bootstrap pilota insieme:
+     * - GPIO4 (INT lato ESP32-S3);
+     * - IO expander, che abilita la linea di supporto sulla board.
+     *
+     * Se questa sequenza cambia, il chip puo' non comparire all'indirizzo atteso.
+     */
     DEV_I2C_Port port = DEV_I2C_Init();  // Initialize I2C port
     IO_EXTENSION_Init();  // Initialize the IO EXTENSION GPIO chip for backlight control
     vTaskDelay(pdMS_TO_TICKS(10));  // Wait for 100ms
@@ -367,6 +394,7 @@ esp_lcd_touch_handle_t touch_gt911_init()
     
     vTaskDelay(pdMS_TO_TICKS(200));  // Wait for 200ms to ensure the touch controller is ready
 
+    // Terminata la sequenza elettrica, registriamo il device nel framework esp_lcd.
     ESP_LOGI(TAG, "Initialize I2C panel IO");  // Log I2C panel I/O initialization
     // Create a new I2C panel I/O handle for the touch controller
     ESP_ERROR_CHECK(esp_lcd_new_panel_io_i2c(port.bus, &tp_io_config, &tp_io_handle));
@@ -395,15 +423,15 @@ esp_lcd_touch_handle_t touch_gt911_init()
     return tp_handle;  // Return the touch controller handle
 }
 
-// Function to read touch points from the GT911 touch controller
+// Helper ad alto livello usato dal progetto per ottenere i punti touch correnti.
 touch_gt911_point_t touch_gt911_read_point(uint8_t max_touch_cnt)
 {
     touch_gt911_point_t data;  // Declare a structure to hold touch point data
 
-    /* Read touch data from the touch controller */
+    // 1. aggiorna il buffer interno del driver leggendo il chip
     esp_lcd_touch_read_data(tp_handle);  // Read raw data from the touch controller
 
-    /* Get the touch coordinates and count of touch points */
+    // 2. estrae fino a max_touch_cnt coordinate gia' normalizzate dal framework
     esp_lcd_touch_get_coordinates(tp_handle, data.x, data.y, NULL, &data.cnt, max_touch_cnt);
 
     return data;  // Return the touch point data
@@ -437,6 +465,8 @@ static esp_err_t touch_gt911_read_cfg(esp_lcd_touch_handle_t tp)
     ESP_RETURN_ON_ERROR(touch_gt911_i2c_read(tp, ESP_LCD_TOUCH_GT911_PRODUCT_ID_REG, (uint8_t *)&buf[0], 3), TAG, "GT911 read error!");
     ESP_RETURN_ON_ERROR(touch_gt911_i2c_read(tp, ESP_LCD_TOUCH_GT911_CONFIG_REG, (uint8_t *)&buf[3], 1), TAG, "GT911 read error!");
 
+    // Logging utile in debug per capire se il chip ha risposto davvero e con
+    // quale versione configurazione.
     ESP_LOGI(TAG, "TouchPad_ID:0x%02x,0x%02x,0x%02x", buf[0], buf[1], buf[2]);
     ESP_LOGI(TAG, "TouchPad_Config_Version:%d", buf[3]);
 
@@ -448,7 +478,7 @@ static esp_err_t touch_gt911_i2c_read(esp_lcd_touch_handle_t tp, uint16_t reg, u
     assert(tp != NULL);
     assert(data != NULL);
 
-    /* Read data */
+    // Wrapper sottile: il panel I/O si occupa del framing I2C a registro 16 bit.
     return esp_lcd_panel_io_rx_param(tp->io, reg, data, len);
 }
 

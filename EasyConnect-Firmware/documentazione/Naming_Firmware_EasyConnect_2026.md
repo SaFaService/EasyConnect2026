@@ -14,7 +14,7 @@ Per il livello bus RS485 restano validi i nomi storici `RS485_Master` e `RS485_S
 | EasyConnect Display | Controller | `01` | `controller_display` | `src/main_display_controller.cpp` (placeholder) |
 | Pressione | Peripheral | `04` | `peripheral_pressure` | `src/main_pressure_peripheral.cpp` |
 | Relay | Peripheral | `03` | `peripheral_relay` | `src/main_relay_peripheral.cpp` |
-| Motore | Peripheral | `05` | `peripheral_motor` | `src/main_motor_peripheral.cpp` (placeholder) |
+| Inverter 0-10V | Peripheral | `05` | `peripheral_0v10v` | `src/main_0v10v_peripheral.cpp` |
 
 ## Regola seriali
 Formato unico per tutte le schede:
@@ -43,6 +43,7 @@ I nomi storici rimangono come alias:
 - `pressione`
 - `relay`
 - `motore`
+- `inverter`
 - `easyconnect`
 
 Quindi script e pipeline esistenti continuano a funzionare senza modifiche immediate.

@@ -8,9 +8,11 @@
  * @file
  * @brief ESP LCD touch: GT911
  *
- * This file contains the necessary functions and configurations to interact with
- * the GT911 touch controller via I2C. It provides initialization and touch data 
- * reading functions.
+ * Driver concreto del controller GT911.
+ *
+ * Questo header aggancia il layer touch generico (`touch.h`) al chip reale
+ * montato sulla scheda display. Qui troviamo costanti, tipi e API di bootstrap
+ * specifiche del GT911.
  */
 
 #ifndef GT911_H
@@ -28,8 +30,10 @@
 #define ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS          (0x5D)   // Default I2C address
 #define ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS_BACKUP   (0x14)   // Backup I2C address when interrupt GPIO is high
 
-#define EXAMPLE_PIN_NUM_TOUCH_RST       (GPIO_NUM_NC)            // Reset pin for the touch controller (set to -1 if not used)
-#define EXAMPLE_PIN_NUM_TOUCH_INT       (GPIO_NUM_4)    // Interrupt pin for the touch controller
+// Su questa board il reset dedicato non e' cablato direttamente all'S3, mentre
+// la linea INT del touch e' esposta su GPIO4.
+#define EXAMPLE_PIN_NUM_TOUCH_RST       (GPIO_NUM_NC)
+#define EXAMPLE_PIN_NUM_TOUCH_INT       (GPIO_NUM_4)
 
 /**
  * @brief GT911 Configuration Structure
@@ -73,8 +77,8 @@ esp_err_t esp_lcd_touch_new_i2c_gt911(const esp_lcd_panel_io_handle_t io, const 
 /**
  * @brief Initialize the GT911 touch controller
  *
- * This function initializes the GT911 touch controller by configuring the I2C 
- * interface and touch settings.
+ * Sequenza di bootstrap completa del GT911 sulla board attuale:
+ * prepara I2C, esegue la sequenza hardware di reset/strap e crea il driver.
  *
  * @return Touch handle for the initialized controller
  */

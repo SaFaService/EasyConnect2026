@@ -31,28 +31,66 @@ extern bool executePressureConfigCommand(const String& slaveSn, int newMode, int
 
 // --- FUNZIONI DI SUPPORTO INTERNE ---
 
+static bool isAssignedPin(int pin) {
+    return pin >= 0 && pin != PIN_NOT_ASSIGNED;
+}
+
+static const int* getUpdateAnimationPins(int& count) {
+    static const int ledPins[] = { PIN_LED_EXT_4, PIN_LED_EXT_3, PIN_LED_EXT_2, PIN_LED_EXT_1 };
+    count = sizeof(ledPins) / sizeof(ledPins[0]);
+    return ledPins;
+}
+
+static void clearUpdateAnimationPins() {
+    int count = 0;
+    const int* ledPins = getUpdateAnimationPins(count);
+    for (int i = 0; i < count; ++i) {
+        if (isAssignedPin(ledPins[i])) {
+            digitalWrite(ledPins[i], LOW);
+        }
+    }
+    if (isAssignedPin(PIN_LED_EXT_5)) {
+        digitalWrite(PIN_LED_EXT_5, LOW);
+    }
+}
+
 // Callback per l'animazione dei LED sulla tastiera durante l'aggiornamento HTTP.
 // Crea un effetto visivo "rotante" sui LED esterni per indicare che l'aggiornamento è in corso.
 void updateProgressCallback(int cur, int total) {
     static unsigned long lastStep = 0;
     static int ledIndex = 0;
-    
-    // Mappatura LED Tastiera per l'animazione (BAL1 -> BAL4)
-    const int ledPins[] = { PIN_LED_EXT_4, PIN_LED_EXT_3, PIN_LED_EXT_2, PIN_LED_EXT_1 };
-    const int numLeds = 4;
+
+    (void)cur;
+    (void)total;
+
+    int numLeds = 0;
+    const int* ledPins = getUpdateAnimationPins(numLeds);
 
     // Esegue lo switch dei LED ogni 250ms
     if (millis() - lastStep >= 250) { 
         lastStep = millis();
         
         // Spegni tutti i LED dell'animazione
-        for (int i = 0; i < numLeds; i++) digitalWrite(ledPins[i], LOW);
-        
-        // Accendi solo il LED corrente
-        digitalWrite(ledPins[ledIndex], HIGH);
-        
-        // Passa al prossimo LED (loop circolare 0->1->2->3->0...)
-        ledIndex = (ledIndex + 1) % numLeds;
+        for (int i = 0; i < numLeds; i++) {
+            if (isAssignedPin(ledPins[i])) {
+                digitalWrite(ledPins[i], LOW);
+            }
+        }
+
+        if (numLeds <= 0) {
+            return;
+        }
+
+        for (int attempts = 0; attempts < numLeds; ++attempts) {
+            const int index = (ledIndex + attempts) % numLeds;
+            if (isAssignedPin(ledPins[index])) {
+                digitalWrite(ledPins[index], HIGH);
+                ledIndex = (index + 1) % numLeds;
+                return;
+            }
+        }
+
+        ledIndex = 0;
     }
 }
 
@@ -137,10 +175,10 @@ static bool isControllerFirmwareType(const String& deviceType) {
 static bool isPeripheralFirmwareType(const String& deviceType) {
     return deviceType == "slave_pressure" ||
            deviceType == "slave_relay" ||
-           deviceType == "slave_motor" ||
+           deviceType == "slave_0v10v" ||
            deviceType == "peripheral_pressure" ||
            deviceType == "peripheral_relay" ||
-           deviceType == "peripheral_motor" ||
+           deviceType == "peripheral_0v10v" ||
            deviceType == "slave";
 }
 
@@ -265,9 +303,7 @@ void execHttpUpdate(String url, String md5) {
     // Spegne i LED di bordo e resetta quelli della tastiera per prepararsi all'animazione
     greenLed.setState(LED_OFF); greenLed.update();
     redLed.setState(LED_OFF); redLed.update();
-    digitalWrite(PIN_LED_EXT_1, LOW); digitalWrite(PIN_LED_EXT_2, LOW);
-    digitalWrite(PIN_LED_EXT_3, LOW); digitalWrite(PIN_LED_EXT_4, LOW);
-    digitalWrite(PIN_LED_EXT_5, LOW);
+    clearUpdateAnimationPins();
 
     // 2. CONFIGURAZIONE CLIENT SICURO
     WiFiClientSecure client;
@@ -297,8 +333,7 @@ void execHttpUpdate(String url, String md5) {
                 // Riporta il fallimento al server
                 reportUpdateFailure(errorString);
             }
-            digitalWrite(PIN_LED_EXT_1, LOW); digitalWrite(PIN_LED_EXT_2, LOW);
-            digitalWrite(PIN_LED_EXT_3, LOW); digitalWrite(PIN_LED_EXT_4, LOW);
+            clearUpdateAnimationPins();
             break;
         case HTTP_UPDATE_NO_UPDATES:
             Serial.println("[OTA] Nessun aggiornamento necessario (Versione già aggiornata).");

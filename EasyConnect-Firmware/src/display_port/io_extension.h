@@ -19,24 +19,28 @@
 
  #include "i2c.h"  // Include I2C header for I2C communication functions
  
- /* 
-  * IO EXTENSION GPIO control via I2C - Register and Command Definitions
+ /*
+  * Driver minimale dell'IO expander presente sulla scheda display.
   *
+  * Questo chip consente di pilotare alcune linee "di servizio" che non sono
+  * collegate direttamente all'ESP32-S3, ad esempio:
+  * - backlight;
+  * - linee di bootstrap/reset del touch;
+  * - eventuali I/O ausiliari della board.
   *
-  * Example usage:
-  * 1. Set the working mode by writing to the register at address 0x24
-  * 2. Send function commands to control the GPIO pins and modes
+  * Il driver mantiene un mirror software dello stato uscite per poter cambiare
+  * un singolo bit senza perdere il valore degli altri pin.
   */
  
  /* IO EXTENSION Function Register Addresses */
  #define IO_EXTENSION_ADDR          0x24  // Slave address for mode configuration register
  
- /* Mode control flags (from the chip manual) */
- #define IO_EXTENSION_Mode             0x02 // 
- #define IO_EXTENSION_IO_OUTPUT_ADDR   0x03 // 
- #define IO_EXTENSION_IO_INPUT_ADDR    0x04 // 
- #define IO_EXTENSION_PWM_ADDR         0x05 // 
- #define IO_EXTENSION_ADC_ADDR         0x06 // 
+ /* Registri del chip */
+ #define IO_EXTENSION_Mode             0x02 // Direzione pin
+ #define IO_EXTENSION_IO_OUTPUT_ADDR   0x03 // Stato uscite digitali
+ #define IO_EXTENSION_IO_INPUT_ADDR    0x04 // Stato ingressi digitali
+ #define IO_EXTENSION_PWM_ADDR         0x05 // Uscita PWM
+ #define IO_EXTENSION_ADC_ADDR         0x06 // Ingresso ADC
  
  /* Specific IO pin assignments */
  #define IO_EXTENSION_IO_0          0x00  // IO0 
@@ -48,11 +52,11 @@
  #define IO_EXTENSION_IO_6          0x06  // IO6
  #define IO_EXTENSION_IO_7          0x07  // IO7
  
- /* Structure to represent the IO EXTENSION device */
+ /* Stato runtime dell'expander lato firmware */
  typedef struct _io_extension_obj_t {
-     i2c_master_dev_handle_t addr;      // Handle for mode configuration
-     uint8_t Last_io_value;
-     uint8_t Last_od_value;
+     i2c_master_dev_handle_t addr;      // Handle I2C del chip
+     uint8_t Last_io_value;             // Ultimo byte scritto sulle uscite
+     uint8_t Last_od_value;             // Riservato per eventuale open-drain
  } io_extension_obj_t;
  
  

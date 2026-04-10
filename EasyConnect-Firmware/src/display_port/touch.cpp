@@ -49,6 +49,7 @@ esp_err_t esp_lcd_touch_read_data(esp_lcd_touch_handle_t tp)
     assert(tp != NULL);
     assert(tp->read_data != NULL);
 
+    // Deleghetta pura: il driver concreto legge il chip e aggiorna tp->data.
     return tp->read_data(tp);
 }
 
@@ -71,7 +72,11 @@ bool esp_lcd_touch_get_coordinates(esp_lcd_touch_handle_t tp, uint16_t *x, uint1
         tp->config.process_coordinates(tp, x, y, strength, point_num, max_point_num);
     }
 
-    /* Software coordinates adjustment needed */
+    /*
+     * Se il controller non supporta swap/mirror in hardware, il framework
+     * applica qui la trasformazione in software. In questo modo il resto del
+     * progetto usa sempre la stessa API, indipendentemente dal chip reale.
+     */
     bool sw_adj_needed = ((tp->config.flags.mirror_x && (tp->set_mirror_x == NULL)) ||
                           (tp->config.flags.mirror_y && (tp->set_mirror_y == NULL)) ||
                           (tp->config.flags.swap_xy && (tp->set_swap_xy == NULL)));
@@ -122,6 +127,7 @@ esp_err_t esp_lcd_touch_set_swap_xy(esp_lcd_touch_handle_t tp, bool swap)
 {
     assert(tp != NULL);
 
+    // Il flag viene sempre salvato nel config, anche se il chip non lo gestisce in HW.
     tp->config.flags.swap_xy = swap;
 
     /* Is swap supported by HW? */
@@ -151,6 +157,7 @@ esp_err_t esp_lcd_touch_set_mirror_x(esp_lcd_touch_handle_t tp, bool mirror)
 {
     assert(tp != NULL);
 
+    // Sorgente di verita' lato framework; eventuale fallback software in get_coordinates().
     tp->config.flags.mirror_x = mirror;
 
     /* Is mirror supported by HW? */
@@ -180,6 +187,7 @@ esp_err_t esp_lcd_touch_set_mirror_y(esp_lcd_touch_handle_t tp, bool mirror)
 {
     assert(tp != NULL);
 
+    // Se il driver concreto non lo implementa, verra' corretto in software.
     tp->config.flags.mirror_y = mirror;
 
     /* Is mirror supported by HW? */
@@ -229,6 +237,8 @@ esp_err_t esp_lcd_touch_register_interrupt_callback(esp_lcd_touch_handle_t tp, e
     tp->config.interrupt_callback = callback;
 
     if (callback != NULL) {
+        // Il servizio ISR GPIO e' globale: se esiste gia', ESP-IDF risponde con
+        // INVALID_STATE e lo consideriamo un caso tollerabile.
         ret = gpio_install_isr_service(0);
         /* ISR service can be installed from user before, then it returns invalid state */
         if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {

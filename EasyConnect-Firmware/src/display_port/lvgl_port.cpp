@@ -14,6 +14,18 @@ static const char *TAG = "lv_port";                      // Tag for logging
 static SemaphoreHandle_t lvgl_mux;                       // LVGL mutex for synchronization
 static TaskHandle_t lvgl_task_handle = NULL;             // Handle for the LVGL task
 
+/*
+ * Schema del file:
+ * - logica di flush verso il pannello RGB;
+ * - init display e input touch;
+ * - tick timer e task LVGL;
+ * - sincronizzazione tramite mutex e VSYNC.
+ *
+ * Il problema centrale e' coordinare due mondi:
+ * - LVGL che renderizza in memoria;
+ * - il controller RGB che sta gia' leggendo un framebuffer per il pannello.
+ */
+
 #if EXAMPLE_LVGL_PORT_ROTATION_DEGREE != 0
 // Function to get the next frame buffer for double buffering
 static void *get_next_frame_buffer(esp_lcd_panel_handle_t panel_handle)
@@ -94,6 +106,7 @@ static lv_port_dirty_area_t dirty_area;
 
 static void flush_dirty_save(lv_port_dirty_area_t *dirty_area)
 {
+    // Fotografiamo le aree invalidate del refresh LVGL corrente.
     lv_disp_t *disp = _lv_refr_get_disp_refreshing();
     dirty_area->inv_p = disp->inv_p;
     for (int i = 0; i < disp->inv_p; i++) {
@@ -139,7 +152,7 @@ static lv_port_flush_probe_t flush_copy_probe(lv_disp_drv_t *drv)
             break; // Exit the loop after finding the first unjoined area
         }
     }
-    /* Check if the current full screen refreshes */
+    // Se l'area invalida copre tutto il display, il comportamento equivale a un full refresh.
     cur_status = ((flush_ver == drv->ver_res) && (flush_hor == drv->hor_res)) ? (FLUSH_STATUS_FULL) : (FLUSH_STATUS_PART);
 
     // Determine the probe result based on previous and current status
@@ -180,7 +193,7 @@ static void flush_dirty_copy(void *dst, void *src, lv_port_dirty_area_t *dirty_a
             y_start = dirty_area->inv_areas[i].y1; // Start Y coordinate
             y_end = dirty_area->inv_areas[i].y2;   // End Y coordinate
 
-            // Rotate and copy pixel data from source to destination buffer
+            // Copia selettiva della sola regione sporca.
             rotate_copy_pixel(src, dst, x_start, y_start, x_end, y_end, LV_HOR_RES, LV_VER_RES, EXAMPLE_LVGL_PORT_ROTATION_DEGREE);
         }
     }
@@ -198,7 +211,10 @@ static void flush_callback(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t
     lv_port_flush_probe_t probe_result = FLUSH_PROBE_PART_COPY; // Default probe result
     lv_disp_t *disp = lv_disp_get_default(); // Get the default display
 
-    /* Action after last area refresh */
+    /*
+     * LVGL puo' dividere il refresh in piu' aree.
+     * Le operazioni di swap buffer e di attesa VSYNC vanno fatte solo sull'ultima.
+     */
     if (lv_disp_flush_is_last(drv)) {
         /* Check if the `full_refresh` flag has been triggered */
         if (drv->full_refresh) {
@@ -224,7 +240,8 @@ static void flush_callback(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t
             probe_result = flush_copy_probe(drv);
 
             if (probe_result == FLUSH_PROBE_FULL_COPY) {
-                /* Save current dirty area for the next frame buffer */
+                // In questo caso forziamo un full refresh pilotato invece di
+                // continuare con un semplice aggiornamento incrementale.
                 flush_dirty_save(&dirty_area);
 
                 /* Set LVGL full-refresh flag and set flush ready in advance */
@@ -235,7 +252,7 @@ static void flush_callback(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t
                 /* Force to refresh the whole screen, will invoke `flush_callback` recursively */
                 lv_refr_now(_lv_refr_get_disp_refreshing());
             } else {
-                /* Update current dirty area for the next frame buffer */
+                // Caso normale: copiamo nel prossimo framebuffer solo le aree sporche.
                 next_fb = flush_get_next_buf(panel_handle);
                 flush_dirty_save(&dirty_area);
                 flush_dirty_copy(next_fb, color_map, &dirty_area);
@@ -262,59 +279,25 @@ static void flush_callback(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t
 
 #else
 
-/**
- * @brief Copy dirty areas from source buffer to destination buffer (no rotation).
- *
- * Keeps both frame buffers in sync so that the buffer not currently displayed
- * contains the same pixel data as the one just rendered.  Without this copy the
- * "other" buffer keeps stale content from two frames ago, which produces
- * visible interference lines on static widgets after screen transitions.
- */
-static void flush_dirty_copy_no_rotate(void *dst, const void *src, lv_port_dirty_area_t *dirty_area)
-{
-    for (int i = 0; i < dirty_area->inv_p; i++) {
-        if (dirty_area->inv_area_joined[i] == 0) {
-            const lv_area_t *a = &dirty_area->inv_areas[i];
-            const int32_t w_bytes = (a->x2 - a->x1 + 1) * (int32_t)sizeof(uint16_t);
-            for (lv_coord_t y = a->y1; y <= a->y2; y++) {
-                memcpy(
-                    (uint8_t *)dst + (y * LV_HOR_RES + a->x1) * sizeof(uint16_t),
-                    (const uint8_t *)src + (y * LV_HOR_RES + a->x1) * sizeof(uint16_t),
-                    w_bytes
-                );
-            }
-        }
-    }
-}
-
 static void flush_callback(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_map)
 {
-    esp_lcd_panel_handle_t panel_handle = (esp_lcd_panel_handle_t) drv->user_data;
-    const int offsetx1 = area->x1;
-    const int offsetx2 = area->x2;
-    const int offsety1 = area->y1;
-    const int offsety2 = area->y2;
+    esp_lcd_panel_handle_t panel_handle = (esp_lcd_panel_handle_t) drv->user_data; // Get the panel handle from driver user data
+    const int offsetx1 = area->x1; // Start X coordinate of the area to flush
+    const int offsetx2 = area->x2; // End X coordinate of the area to flush
+    const int offsety1 = area->y1; // Start Y coordinate of the area to flush
+    const int offsety2 = area->y2; // End Y coordinate of the area to flush
 
     /* Action after last area refresh */
     if (lv_disp_flush_is_last(drv)) {
-        /* Save dirty area info before the buffer swap */
-        flush_dirty_save(&dirty_area);
-
         /* Switch the current RGB frame buffer to `color_map` */
         esp_lcd_panel_draw_bitmap(panel_handle, offsetx1, offsety1, offsetx2 + 1, offsety2 + 1, color_map);
 
-        /* Wait for the current frame buffer to complete transmission */
+        /* Wait for the last frame buffer to complete transmission */
         ulTaskNotifyValueClear(NULL, ULONG_MAX);
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-
-        /* Copy dirty areas to the other buffer to keep both buffers in sync */
-        void *other_buf = (color_map == drv->draw_buf->buf1)
-                         ? drv->draw_buf->buf2
-                         : drv->draw_buf->buf1;
-        flush_dirty_copy_no_rotate(other_buf, color_map, &dirty_area);
     }
 
-    lv_disp_flush_ready(drv);
+    lv_disp_flush_ready(drv); // Mark the display flush as complete
 }
 #endif /* EXAMPLE_LVGL_PORT_ROTATION_DEGREE */
 
@@ -409,6 +392,10 @@ static lv_disp_t *display_init(esp_lcd_panel_handle_t panel_handle)
 
     ESP_LOGD(TAG, "Malloc memory for LVGL buffer");
 #if LVGL_PORT_AVOID_TEAR_ENABLE
+    /*
+     * Con anti-tearing attivo i buffer sono preferibilmente quelli del driver RGB:
+     * in questo modo GUI e pannello lavorano sugli stessi framebuffer fisici.
+     */
     // To avoid tearing effect, at least two frame buffers are needed: one for LVGL rendering and another for RGB output
     buffer_size = LVGL_PORT_H_RES * LVGL_PORT_V_RES;
 #if (LVGL_PORT_LCD_RGB_BUFFER_NUMS == 3) && (EXAMPLE_LVGL_PORT_ROTATION_DEGREE == 0) && LVGL_PORT_FULL_REFRESH
@@ -432,7 +419,7 @@ static lv_disp_t *display_init(esp_lcd_panel_handle_t panel_handle)
     ESP_LOGI(TAG, "LVGL buffer size: %dKB", buffer_size * sizeof(lv_color_t) / 1024); // Log buffer size
 #endif /* LVGL_PORT_AVOID_TEAR_ENABLE */
 
-    // Initialize LVGL draw buffers
+    // Colleghiamo i buffer scelti sopra al draw buffer del core LVGL.
     lv_disp_draw_buf_init(&disp_buf, buf1, buf2, buffer_size); // Initialize the draw buffer
 
     ESP_LOGD(TAG, "Register display driver to LVGL");
@@ -464,10 +451,10 @@ static void touchpad_read(lv_indev_drv_t *indev_drv, lv_indev_data_t *data)
     uint16_t touchpad_y; // Variable for Y coordinate
     uint8_t touchpad_cnt = 0; // Variable for touch count
 
-    /* Read data from touch controller into memory */
+    // 1. aggiorna il buffer interno del driver touch
     esp_lcd_touch_read_data(tp); // Read data from touch controller
 
-    /* Read data from touch controller */
+    // 2. estrae un solo punto, sufficiente per il puntatore di LVGL
     bool touchpad_pressed = esp_lcd_touch_get_coordinates(tp, &touchpad_x, &touchpad_y, NULL, &touchpad_cnt, 1); // Get touch coordinates
     if (touchpad_pressed && touchpad_cnt > 0) {
         data->point.x = touchpad_x; // Set the X coordinate
@@ -502,7 +489,7 @@ static void tick_increment(void *arg)
 
 static esp_err_t tick_init(void)
 {
-    // Tick interface for LVGL (using esp_timer to generate 2ms periodic event)
+    // Timer periodico che mantiene aggiornato il tempo logico di LVGL.
     const esp_timer_create_args_t lvgl_tick_timer_args = {
         .callback = &tick_increment, // Set the callback function for the timer
         .name = "LVGL tick" // Name of the timer
@@ -516,6 +503,7 @@ static void lvgl_port_task(void *arg)
 {
     ESP_LOGD(TAG, "Starting LVGL task"); // Log the task start
 
+    // Loop cooperativo: lv_timer_handler() restituisce il prossimo deadline utile.
     uint32_t task_delay_ms = LVGL_PORT_TASK_MAX_DELAY_MS; // Set initial task delay
     while (1) {
         if (lvgl_port_lock(-1)) { // Try to lock the LVGL mutex
@@ -534,6 +522,7 @@ static void lvgl_port_task(void *arg)
 
 esp_err_t lvgl_port_init(esp_lcd_panel_handle_t lcd_handle, esp_lcd_touch_handle_t tp_handle)
 {
+    // Ordine importante: init core -> tick -> display -> touch -> mutex -> task.
     lv_init(); // Initialize LVGL
     ESP_ERROR_CHECK(tick_init()); // Initialize the tick timer
 
@@ -544,6 +533,7 @@ esp_err_t lvgl_port_init(esp_lcd_panel_handle_t lcd_handle, esp_lcd_touch_handle
         lv_indev_t *indev = indev_init(tp_handle); // Initialize the touchpad input device
         assert(indev); // Ensure the input device initialization was successful
 
+        // Manteniamo touch e display nello stesso sistema di riferimento.
         // Set touch panel orientation based on rotation
 #if EXAMPLE_LVGL_PORT_ROTATION_90
         esp_lcd_touch_set_swap_xy(tp_handle, true); // Swap X and Y coordinates
@@ -595,7 +585,8 @@ bool lvgl_port_notify_rgb_vsync(void)
         lvgl_port_rgb_last_buf = lvgl_port_rgb_next_buf; // Update the last buffer
     }
 #elif LVGL_PORT_AVOID_TEAR_ENABLE
-    // Notify that the current RGB frame buffer has been transmitted
+    // Siamo in ISR: notifichiamo al task LVGL che il framebuffer corrente e'
+    // stato trasmesso e che puo' procedere con il prossimo ciclo.
     xTaskNotifyFromISR(lvgl_task_handle, ULONG_MAX, eNoAction, &need_yield); // Notify the LVGL task
 #endif
     return (need_yield == pdTRUE); // Return whether a yield is needed

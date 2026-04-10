@@ -16,13 +16,13 @@
 
 const char *TAG = "example";
 
-#if DISPLAY_DRIVER_LOCK_ENABLED
-#if EXAMPLE_RGB_BOUNCE_BUFFER_SIZE > 0
-#define RGB_EVENT_CALLBACK_VSYNC_ONLY 1
-#else
-#define RGB_EVENT_CALLBACK_VSYNC_ONLY 1
-#endif
-#endif
+/*
+ * Livello piu' vicino al pannello LCD:
+ * - crea il driver RGB di ESP-IDF;
+ * - configura timing e GPIO;
+ * - registra i callback di fine frame;
+ * - espone utility per backlight, framebuffer e recovery del pannello.
+ */
 
 #if defined(LVGL_PORT_LCD_RGB_BUFFER_NUMS)
 #define RGB_PANEL_NUM_FBS LVGL_PORT_LCD_RGB_BUFFER_NUMS
@@ -33,7 +33,8 @@ const char *TAG = "example";
 // Handle for the RGB LCD panel
 static esp_lcd_panel_handle_t panel_handle = NULL; // Declare a handle for the LCD panel
 
-// VSYNC event callback function
+// Callback richiamata dal driver RGB quando un frame e' stato effettivamente
+// trasmesso. Qui non facciamo rendering: notifichiamo solo il layer LVGL.
 IRAM_ATTR static bool rgb_lcd_on_vsync_event(esp_lcd_panel_handle_t panel, const esp_lcd_rgb_panel_event_data_t *edata, void *user_ctx)
 {
     return lvgl_port_notify_rgb_vsync();
@@ -55,7 +56,8 @@ esp_lcd_panel_handle_t waveshare_esp32_s3_rgb_lcd_init()
     // Log the start of the RGB LCD panel driver installation
     ESP_LOGI(TAG, "Install RGB LCD panel driver");
 
-    // Configuration structure for the RGB LCD panel
+    // Timing e pinout specifici del pannello 1024x600 della board.
+    // Piccole variazioni qui possono produrre flicker, shift o tearing.
     esp_lcd_rgb_panel_config_t panel_config = {
         .clk_src = LCD_CLK_SRC_DEFAULT, // Use the default clock source
         .timings = {
@@ -74,7 +76,9 @@ esp_lcd_panel_handle_t waveshare_esp32_s3_rgb_lcd_init()
         },
         .data_width = EXAMPLE_RGB_DATA_WIDTH,                    // Data width for RGB signals
         .bits_per_pixel = EXAMPLE_RGB_BIT_PER_PIXEL,             // Number of bits per pixel (color depth)
-        .num_fbs = RGB_PANEL_NUM_FBS,                            // Keep RGB buffers aligned with LVGL tear mode
+        // Il numero frame buffer deve restare coerente con la strategia scelta
+        // nel layer LVGL, altrimenti pannello e GUI non ragionano sugli stessi buffer.
+        .num_fbs = RGB_PANEL_NUM_FBS,
         .bounce_buffer_size_px = EXAMPLE_RGB_BOUNCE_BUFFER_SIZE, // Bounce buffer size in pixels
         .sram_trans_align = 4,                                   // SRAM transaction alignment in bytes
         .psram_trans_align = 64,                                 // PSRAM transaction alignment in bytes
@@ -116,8 +120,14 @@ esp_lcd_panel_handle_t waveshare_esp32_s3_rgb_lcd_init()
     // Initialize the RGB LCD panel
     ESP_ERROR_CHECK(esp_lcd_panel_init(panel_handle));
 
+    // Con bounce buffer o senza bounce buffer cambia il punto di aggancio
+    // migliore dell'evento, ma semanticamente lo usiamo sempre come "fine frame".
     esp_lcd_rgb_panel_event_callbacks_t cbs = {
-        .on_vsync = rgb_lcd_on_vsync_event, // Always sync LVGL on true VSYNC
+#if EXAMPLE_RGB_BOUNCE_BUFFER_SIZE > 0
+        .on_bounce_frame_finish = rgb_lcd_on_vsync_event, // Vendor-proven path with bounce buffer
+#else
+        .on_vsync = rgb_lcd_on_vsync_event,
+#endif
     };
     ESP_ERROR_CHECK(esp_lcd_rgb_panel_register_event_callbacks(panel_handle, &cbs, NULL)); // Register event callbacks
 
@@ -195,7 +205,35 @@ void wavesahre_rgb_lcd_display(uint8_t *Image)
 
 void waveshare_get_frame_buffer(void **buf1, void **buf2)
 {
+    // Helper usato dal layer LVGL per lavorare direttamente sui framebuffer RGB.
     ESP_ERROR_CHECK(esp_lcd_rgb_panel_get_frame_buffer(panel_handle, 2, buf1, buf2));
+}
+
+void waveshare_rgb_lcd_set_pclk(uint32_t freq_hz)
+{
+    if (!panel_handle || freq_hz == 0) {
+        return;
+    }
+
+    // Ridurre il pixel clock puo' essere utile quando WiFi/PSRAM contendono banda.
+    esp_err_t err = esp_lcd_rgb_panel_set_pclk(panel_handle, freq_hz);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "esp_lcd_rgb_panel_set_pclk(%lu) failed: 0x%x",
+                 (unsigned long)freq_hz, (unsigned int)err);
+    }
+}
+
+void waveshare_rgb_lcd_request_restart()
+{
+    if (!panel_handle) {
+        return;
+    }
+
+    // Tenta un riallineamento del motore RGB quando il pannello si "sfasa".
+    esp_err_t err = esp_lcd_rgb_panel_restart(panel_handle);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "esp_lcd_rgb_panel_restart failed: 0x%x", (unsigned int)err);
+    }
 }
 /**
  * @brief Turn on the RGB LCD screen backlight.
@@ -209,6 +247,7 @@ void waveshare_get_frame_buffer(void **buf1, void **buf2)
  */
 void wavesahre_rgb_lcd_bl_on()
 {
+    // Il backlight non e' pilotato da un GPIO diretto dell'S3 ma dall'IO expander.
     IO_EXTENSION_Output(IO_EXTENSION_IO_2, 1);  // Backlight ON configuration
 }
 

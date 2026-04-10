@@ -10,9 +10,17 @@
 #include "rgb_lcd_port.h"    // Header for Waveshare RGB LCD driver
 #include "gt911.h"           // Header for touch screen operations (GT911)
 
-/**
- * LVGL related parameters, can be adjusted by users
+/*
+ * Porta di integrazione fra LVGL, driver RGB e driver touch.
  *
+ * Qui si definisce la strategia complessiva di rendering:
+ * - tick LVGL;
+ * - task dedicato;
+ * - allocazione buffer;
+ * - modalita' anti-tearing.
+ *
+ * Il comportamento effettivo dipende dai macro qui sotto, ma anche dal
+ * display lock che impedisce combinazioni note come instabili.
  */
 
 #define LVGL_PORT_TICK_PERIOD_MS    (2)
@@ -22,16 +30,18 @@
  * LVGL timer handle task related parameters, can be adjusted by users
  *
  */
-#define LVGL_PORT_TASK_MAX_DELAY_MS (500)    // The maximum delay of the LVGL timer task, in milliseconds
-#define LVGL_PORT_TASK_MIN_DELAY_MS (10)    // The minimum delay of the LVGL timer task, in milliseconds
-#define LVGL_PORT_TASK_STACK_SIZE   (6 * 1024) // The stack size of the LVGL timer task, in bytes
+#define LVGL_PORT_TASK_MAX_DELAY_MS (20)     // Keep touch/keyboard feedback responsive.
+#define LVGL_PORT_TASK_MIN_DELAY_MS (5)      // The minimum delay of the LVGL timer task, in milliseconds
+#define LVGL_PORT_TASK_STACK_SIZE   (8 * 1024) // Match vendor UI demo stack sizing under WiFi/LVGL concurrency
 #define LVGL_PORT_TASK_PRIORITY     (2)        // The priority of the LVGL timer task
 #define LVGL_PORT_TASK_CORE         (1)            // The core of the LVGL timer task,
 // `-1` means the don't specify the core
 /**
  *
- * LVGL buffer related parameters, can be adjusted by users:
- *  (These parameters will be useless if the avoid tearing function is enabled)
+ * Parametri dei buffer LVGL.
+ *
+ * Nota: con l'avoid tearing attivo, il rendering tende a lavorare direttamente
+ * sui framebuffer del driver RGB, quindi questi macro diventano meno centrali.
  *
  *  - Memory type for buffer allocation:
  *      - MALLOC_CAP_SPIRAM: Allocate LVGL buffer in PSRAM
@@ -51,7 +61,11 @@
 #define LVGL_PORT_BUFFER_HEIGHT         (100)
 
 /**
- * Avoid tering related configurations, can be adjusted by users.
+ * Configurazioni anti-tearing.
+ *
+ * Nel setup attuale la modalita' desiderata e':
+ * - avoid tearing attivo;
+ * - mode 3 = double buffer RGB + direct mode LVGL.
  *
  */
 #define LVGL_PORT_AVOID_TEAR_ENABLE     (DISPLAY_LOCK_AVOID_TEAR_ENABLE)
@@ -77,7 +91,7 @@
 #define EXAMPLE_LVGL_PORT_ROTATION_DEGREE  (0)
 
 /**
- * Below configurations are automatically set according to the above configurations, users do not need to modify them.
+ * I macro sottostanti derivano automaticamente dalla modalita' scelta sopra.
  *
  */
 #if LVGL_PORT_AVOID_TEAR_MODE == 0
@@ -120,6 +134,8 @@
 #endif /* LVGL_PORT_AVOID_TEAR_ENABLE */
 
 #if DISPLAY_DRIVER_LOCK_ENABLED
+// Con display lock attivo, una modifica a questi valori fallisce in build
+// invece di produrre regressioni difficili da capire solo a runtime.
 #if LVGL_PORT_AVOID_TEAR_ENABLE != 1
 #error "Display lock active: LVGL_PORT_AVOID_TEAR_ENABLE must stay 1"
 #endif

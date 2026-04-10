@@ -3,7 +3,14 @@
 
 /**
  * @file
- * @brief ESP LCD touch
+ * @brief Astrazione generica del sottosistema touch.
+ *
+ * Questo file non descrive un chip specifico: definisce il contratto comune
+ * che un driver concreto (ad esempio GT911) deve implementare.
+ *
+ * Strato logico:
+ * - `touch.h/.cpp` = API comune;
+ * - `gt911.h/.cpp` = implementazione concreta della board attuale.
  */
  
 #include <stdbool.h>
@@ -85,6 +92,15 @@ typedef struct {
 /**
  * @brief Declare of Touch Type
  *
+ */
+/*
+ * Oggetto runtime del touch.
+ *
+ * Contiene:
+ * - puntatori funzione del driver concreto;
+ * - configurazione logica;
+ * - handle I/O;
+ * - ultimo frame di punti touch letto dal controller.
  */
 struct esp_lcd_touch_s {
 

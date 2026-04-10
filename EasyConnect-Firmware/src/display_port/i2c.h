@@ -19,21 +19,41 @@
 #include "driver/i2c_master.h"    // ESP32 I2C master driver library
 #include "esp_log.h"        // ESP32 logging library for debugging
 
-// Define the SDA (data) and SCL (clock) pins for I2C communication
+/*
+ * Astrazione minima del bus I2C condiviso dalla cartella display_port.
+ *
+ * Su questo bus convivono almeno due dispositivi:
+ * - l'IO expander della scheda;
+ * - il controller touch GT911.
+ *
+ * L'obiettivo di questo layer e' centralizzare:
+ * - pin e frequenza del bus;
+ * - creazione del bus ESP-IDF;
+ * - helper read/write a registro.
+ */
+
+// Pin fisici SDA/SCL del bus I2C della scheda display.
 #define EXAMPLE_I2C_MASTER_SDA GPIO_NUM_8  // SDA pin
 #define EXAMPLE_I2C_MASTER_SCL GPIO_NUM_9  // SCL pin
 
-// Define the I2C frequency (400 kHz)
+// 400kHz: compromesso corretto per touch + IO expander.
 #define EXAMPLE_I2C_MASTER_FREQUENCY (400 * 1000)  // I2C speed
 
-// Define the I2C master port number (I2C_NUM_0 in this case)
+// Porta I2C hardware usata dal progetto.
 #define EXAMPLE_I2C_MASTER_NUM I2C_NUM_0
 
 
 typedef struct {
-    i2c_master_bus_handle_t bus;
-    i2c_master_dev_handle_t dev;
+    i2c_master_bus_handle_t bus; // Handle del bus I2C condiviso.
+    i2c_master_dev_handle_t dev; // Handle dell'ultimo device configurato sul bus.
 } DEV_I2C_Port;
+
+/**
+ * @brief Return the shared I2C master bus handle created by DEV_I2C_Init().
+ *
+ * @return Bus handle, or NULL if the bus has not been initialized yet.
+ */
+i2c_master_bus_handle_t DEV_I2C_Get_Bus(void);
 // Function prototypes for I2C communication
 
 /**
@@ -42,8 +62,9 @@ typedef struct {
  * This function sets up the I2C master interface, including the SDA/SCL pins,
  * clock frequency, and device address.
  * 
- * @param Addr The I2C address of the device to initialize.
- * @return A handle to the I2C device if initialization is successful, NULL if failure.
+ * Nota: oltre al bus, crea anche un primo device handle riutilizzabile.
+ *
+ * @return Struttura con handle bus + device correnti.
  */
 DEV_I2C_Port DEV_I2C_Init();
 

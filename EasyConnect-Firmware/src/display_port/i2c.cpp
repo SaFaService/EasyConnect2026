@@ -11,11 +11,10 @@
  *
  ******************************************************************************/
 
-#include "i2c.h"  // Include I2C driver header for I2C functions
+#include "i2c.h"  // Primitive I2C condivise per touch e IO expander.
 static const char *TAG = "i2c";  // Define a tag for logging
 
-// Global handle for the I2C master bus
-// i2c_master_bus_handle_t bus_handle = NULL;
+// Stato globale del bus I2C usato dall'intero sotto-sistema display_port.
 DEV_I2C_Port handle;
 /**
  * @brief Initialize the I2C master interface.
@@ -28,6 +27,8 @@ DEV_I2C_Port handle;
  */
 DEV_I2C_Port DEV_I2C_Init()
 {
+    // Questo init viene normalmente eseguito una sola volta nel bootstrap touch.
+    // Da qui in poi gli altri moduli lavorano sul bus gia' creato.
     // Define I2C bus configuration parameters
     i2c_master_bus_config_t i2c_bus_config = {
         .i2c_port = EXAMPLE_I2C_MASTER_NUM,     // I2C master port number
@@ -45,13 +46,18 @@ DEV_I2C_Port DEV_I2C_Init()
         .scl_speed_hz = EXAMPLE_I2C_MASTER_FREQUENCY,  // Set I2C communication speed
     };
     
-    // Add the I2C device to the bus
-    // i2c_master_dev_handle_t dev_handle = NULL;
+    // Primo device "placeholder": l'indirizzo reale viene di solito riassegnato
+    // subito dopo dal modulo specifico che parla con uno slave concreto.
     if (i2c_master_bus_add_device(handle.bus, &i2c_dev_conf, &handle.dev) != ESP_OK) {
         ESP_LOGE(TAG, "I2C device creation failed");  // Log error if device creation fails
     }
 
     return handle;  // Return the device handle if successful
+}
+
+i2c_master_bus_handle_t DEV_I2C_Get_Bus(void)
+{
+    return handle.bus;
 }
 
 /**
@@ -64,6 +70,8 @@ DEV_I2C_Port DEV_I2C_Init()
  */
 void DEV_I2C_Set_Slave_Addr(i2c_master_dev_handle_t *dev_handle, uint8_t Addr)
 {
+    // Il progetto cambia periferica I2C aggiungendo un nuovo device handle con
+    // indirizzo diverso, senza ricreare ogni volta il bus.
     // Configure the new device address
     i2c_device_config_t i2c_dev_conf = { 
         .device_address = Addr,                        // Set new device address
@@ -87,6 +95,7 @@ void DEV_I2C_Set_Slave_Addr(i2c_master_dev_handle_t *dev_handle, uint8_t Addr)
  */
 void DEV_I2C_Write_Byte(i2c_master_dev_handle_t dev_handle, uint8_t Cmd, uint8_t value)
 {
+    // Formato classico "registro + valore".
     uint8_t data[2] = {Cmd, value};  // Create an array with command and value
     ESP_ERROR_CHECK(i2c_master_transmit(dev_handle, data, sizeof(data), 100));  // Send the data to the device
 }
@@ -118,6 +127,7 @@ uint8_t DEV_I2C_Read_Byte(i2c_master_dev_handle_t dev_handle)
  */
 uint16_t DEV_I2C_Read_Word(i2c_master_dev_handle_t dev_handle, uint8_t Cmd)
 {
+    // Il dato rientra little-endian: low byte seguito da high byte.
     uint8_t data[2] = {Cmd};  // Create an array with the command byte
     ESP_ERROR_CHECK(i2c_master_transmit_receive(dev_handle, data, 1, data, 2, 100));  // Send command and receive two bytes
     return data[1] << 8 | data[0];  // Combine the two bytes into a word (16-bit)
@@ -150,5 +160,6 @@ void DEV_I2C_Write_Nbyte(i2c_master_dev_handle_t dev_handle, uint8_t *pdata, uin
  */
 void DEV_I2C_Read_Nbyte(i2c_master_dev_handle_t dev_handle, uint8_t Cmd, uint8_t *pdata, uint8_t len)
 {
+    // Lettura register-based: prima seleziono il registro, poi ricevo il payload.
     ESP_ERROR_CHECK(i2c_master_transmit_receive(dev_handle, &Cmd, 1, pdata, len, 100));  // Send command and receive data
 }

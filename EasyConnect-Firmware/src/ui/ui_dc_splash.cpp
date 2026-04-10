@@ -27,6 +27,7 @@
 #include "ui_dc_splash.h"
 #include "ui_dc_home.h"
 #include "DisplayLogoAsset.h"
+#include "rs485_network.h"
 #include "lvgl.h"
 
 // ─── Palette ──────────────────────────────────────────────────────────────────
@@ -75,18 +76,20 @@ static void _cb_bar(void* obj, int32_t v) {
 
 // ─── Ready callback barra → carica Home (via timer differito) ────────────────
 static void _load_home_timer(lv_timer_t* t) {
+    const Rs485BootProbeState st = rs485_network_boot_probe_state();
+    if (st == Rs485BootProbeState::RUNNING) return;
     lv_timer_del(t);
     lv_obj_t* home = ui_dc_home_create();
-    lv_scr_load_anim(home, LV_SCR_LOAD_ANIM_FADE_ON, 600, 0, true);
+    lv_scr_load_anim(home, LV_SCR_LOAD_ANIM_NONE, 0, 0, true);
 }
 
 static void _on_bar_done(lv_anim_t* /*a*/) {
-    lv_timer_t* t = lv_timer_create(_load_home_timer, 50, NULL);
-    lv_timer_set_repeat_count(t, 1);
+    lv_timer_create(_load_home_timer, 120, NULL);
 }
 
 // ─── Costruzione splash ───────────────────────────────────────────────────────
 void ui_dc_splash_create(void) {
+    rs485_network_boot_probe_start();
 
     // ── Schermata ─────────────────────────────────────────────────────────────
     lv_obj_t* scr = lv_obj_create(NULL);
@@ -130,7 +133,7 @@ void ui_dc_splash_create(void) {
 
     // ── Tagline ───────────────────────────────────────────────────────────────
     lv_obj_t* tagline = lv_label_create(scr);
-    lv_label_set_text(tagline, "Antralux Cloud System");
+    lv_label_set_text(tagline, "Easy Connect Cloud System");
     lv_obj_set_style_text_font(tagline, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(tagline, SP_TEXT_DIM, 0);
     lv_obj_set_style_opa(tagline, LV_OPA_TRANSP, 0);

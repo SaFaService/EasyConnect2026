@@ -24,9 +24,18 @@
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_rgb.h"
 
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//////////////////// Please update the following configuration according to your LCD spec //////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/*
+ * Parametri hardware del pannello RGB della board display.
+ *
+ * Questo file e' il riferimento locale per:
+ * - risoluzione;
+ * - pixel clock;
+ * - mapping GPIO del bus RGB;
+ * - numero di framebuffer lato pannello.
+ *
+ * Molti valori sono collegati al "display lock" per evitare che un refactor
+ * apparentemente innocuo rompa il timing reale del pannello.
+ */
 
 /**
  * @brief LCD Resolution and Timing
@@ -42,6 +51,8 @@
 #define EXAMPLE_RGB_BIT_PER_PIXEL       (16)   ///< RGB interface color depth
 #define EXAMPLE_RGB_DATA_WIDTH          (16)   ///< Data width for RGB interface
 #define EXAMPLE_LCD_RGB_BUFFER_NUMS     (2)    ///< Default number of frame buffers
+// Piccolo buffer intermedio che aiuta il driver RGB a reggere meglio le contese
+// di memoria/DMA, soprattutto quando il sistema e' sotto pressione.
 #define EXAMPLE_RGB_BOUNCE_BUFFER_SIZE  (EXAMPLE_LCD_H_RES * 10) ///< Bounce buffer to reduce DMA underflow artifacts
 
 #if DISPLAY_DRIVER_LOCK_ENABLED
@@ -124,11 +135,29 @@ void wavesahre_rgb_lcd_display_window(int16_t Xstart, int16_t Ystart, int16_t Xe
 void wavesahre_rgb_lcd_display(uint8_t *Image);
 
 /**
- * @brief Retrieve pointers to the frame buffers for double buffering.
+ * @brief Restituisce i framebuffer fisici del driver RGB.
+ *
+ * Serve soprattutto al layer LVGL quando deve coordinare rendering e VSYNC.
  *
  * @param buf1 Pointer to hold the address of the first frame buffer.
  * @param buf2 Pointer to hold the address of the second frame buffer.
  */
 void waveshare_get_frame_buffer(void **buf1, void **buf2);
+
+/**
+ * @brief Update LCD pixel clock at runtime.
+ *
+ * Useful to temporarily lower RGB bandwidth during heavy WiFi activity
+ * (scan/connect) to reduce bus contention glitches.
+ */
+void waveshare_rgb_lcd_set_pclk(uint32_t freq_hz);
+
+/**
+ * @brief Request a safe RGB DMA restart on next VSYNC.
+ *
+ * This helps recover panel shift when bandwidth contention (e.g. WiFi + PSRAM)
+ * temporarily desynchronizes LCD DMA.
+ */
+void waveshare_rgb_lcd_request_restart();
 
 #endif // _RGB_LCD_H_

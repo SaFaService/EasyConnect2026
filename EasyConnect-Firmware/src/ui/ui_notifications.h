@@ -1,26 +1,24 @@
 #pragma once
-/**
- * @file ui_notifications.h
- * @brief Pannello notifiche pull-down (Android-style notification shade)
- *
- * Attivazione : trascina verso il basso dall'header
- * Chiusura    : tap sul backdrop oppure trascina verso l'alto sull'handle
- * Dismiss     : swipe sinistro o destro sulla singola notifica
- */
 
+#include <stdint.h>
 #include "lvgl.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+enum UiNotifSeverity : uint8_t {
+    UI_NOTIF_NONE = 0,
+    UI_NOTIF_INFO = 1,
+    UI_NOTIF_ALERT = 2,
+};
 
-/**
- * @brief Inizializza il pannello notifiche su uno schermo esistente.
- * @param scr    La screen LVGL (da ui_home_create)
- * @param header L'header bar – vi aggancia il gesto pull-down
- */
 void ui_notif_panel_init(lv_obj_t* scr, lv_obj_t* header);
+void ui_notif_panel_open(void);
+void ui_notif_panel_close(void);
+void ui_notif_panel_toggle(void);
 
-#ifdef __cplusplus
-}
-#endif
+void ui_notif_push_or_update(const char* key, UiNotifSeverity severity,
+                             const char* title, const char* body);
+void ui_notif_clear(const char* key);
+void ui_notif_clear_prefix(const char* prefix);
+void ui_notif_clear_all(void);
+
+UiNotifSeverity ui_notif_highest_severity(void);
+int ui_notif_count(void);

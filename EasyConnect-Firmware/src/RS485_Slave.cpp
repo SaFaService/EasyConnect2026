@@ -67,9 +67,9 @@ void RS485_Slave_Loop() {
                 char buffer[150];
                 // ...prepara la stringa di risposta con tutti i dati richiesti.
                 // La pressione viene inviata in Pascal (il valore in mBar viene moltiplicato per 100).
-                snprintf(buffer, sizeof(buffer), "OK,%.2f,%.2f,%.2f,%d,%d,%s,%s!",
+                snprintf(buffer, sizeof(buffer), "OK,%.2f,%.2f,%.2f,%d,%d,%d,%s,%s!",
                          tempSHTC3, humSHTC3, pressioneMS * 100.0f, statoSicurezza,
-                         config.gruppo, config.serialeID, FW_VERSION);
+                         config.gruppo, config.modalitaSensore, config.serialeID, FW_VERSION);
 
                 // ...passa in modalità trasmissione, invia la risposta e torna in modalità ricezione.
                 modoTrasmissione();

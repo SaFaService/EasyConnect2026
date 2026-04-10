@@ -1,6 +1,17 @@
+/**
+ * ITA: Asset grafico statico (logo) usato dal firmware display.
+ * ENG: Static graphic asset (logo) used by the display firmware.
+ *
+ * ITA: Questo file contiene un grande array RGB565 auto-generato.
+ * ENG: This file contains a large auto-generated RGB565 array.
+ *
+ * ITA: Le righe numeriche non sono logica applicativa: sono solo pixel.
+ * ENG: Numeric rows are not application logic: they are pixel values only.
+ */
 #include "DisplayLogoAsset.h"
 
-// Generated from the project Antralux logo for the display controller demo.
+// ITA: Logo convertito in formato RGB565 e salvato in flash.
+// ENG: Logo converted to RGB565 format and stored in flash.
 const uint16_t kAntraluxLogo565[kAntraluxLogoWidth * kAntraluxLogoHeight] = {
     0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 
     0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 
