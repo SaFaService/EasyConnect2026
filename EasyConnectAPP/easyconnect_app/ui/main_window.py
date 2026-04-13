@@ -18,13 +18,16 @@ from PySide6.QtWidgets import (
 )
 
 from easyconnect_app.config import AppConfig
-from easyconnect_app.models import PlantDetail, SerialPortInfo, UserProfile, UserSession
+from easyconnect_app.models import BoardSnapshot, Plant, PlantDetail, SerialPortInfo, UserPermissions, UserProfile, UserSession
 from easyconnect_app.services.api_client import ApiClient
 from easyconnect_app.services.auth_service import AuthService
+from easyconnect_app.services.board_config_service import BoardConfigService
 from easyconnect_app.services.plants_service import PlantsService
 from easyconnect_app.services.profile_service import ProfileService
+from easyconnect_app.services.serial_provisioning_service import SerialProvisioningService
 from easyconnect_app.services.serial_service import SerialConsole
 from easyconnect_app.services.version_service import VersionInfo, VersionService
+from easyconnect_app.ui.board_config_page import BoardConfigPage
 from easyconnect_app.ui.home_page import HomePage
 from easyconnect_app.ui.login_page import LoginPage
 from easyconnect_app.ui.plants_page import PlantsPage
@@ -47,10 +50,14 @@ class MainWindow(QMainWindow):
         self.threadpool = QThreadPool.globalInstance()
         self._workers: set[Worker] = set()
         self.session: UserSession | None = None
+        self.user_profile: UserProfile | None = None
         self._otp_prompt_count = 0
         self._current_plant_id = 0
         self._available_ports: list[SerialPortInfo] = []
         self._selected_port = ""
+        self._plants_cache: list[Plant] = []
+        self._board_config_detail: PlantDetail | None = None
+        self._current_board_snapshot: BoardSnapshot | None = None
         self._appsettings_path = Path(__file__).resolve().parents[2] / "appsettings.json"
 
         self.api_client = ApiClient(config)
@@ -59,6 +66,8 @@ class MainWindow(QMainWindow):
         self.profile_service = ProfileService(self.api_client)
         self.version_service = VersionService(self.api_client)
         self.serial_console = SerialConsole()
+        self.serial_provisioning_service = SerialProvisioningService(self.api_client)
+        self.board_config_service = BoardConfigService(self.serial_console)
 
         self.stack = QStackedWidget()
         self.setCentralWidget(self.stack)
@@ -76,6 +85,7 @@ class MainWindow(QMainWindow):
         self.home_page.action_clicked.connect(self._handle_home_action)
         self.home_page.profile_requested.connect(self._open_profile_page)
         self.stack.addWidget(self.home_page)
+        self._apply_home_permissions(None)
 
         self.plants_page = PlantsPage()
         self.plants_page.refresh_requested.connect(self._load_plants)
@@ -96,6 +106,14 @@ class MainWindow(QMainWindow):
         self.settings_page.back_requested.connect(self._go_home)
         self.settings_page.save_requested.connect(self._save_settings)
         self.stack.addWidget(self.settings_page)
+
+        self.board_config_page = BoardConfigPage()
+        self.board_config_page.back_requested.connect(self._go_home)
+        self.board_config_page.refresh_plants_requested.connect(self._load_plants)
+        self.board_config_page.plant_selected.connect(self._load_board_config_detail)
+        self.board_config_page.read_requested.connect(self._read_connected_board)
+        self.board_config_page.save_requested.connect(self._save_board_configuration)
+        self.stack.addWidget(self.board_config_page)
 
         self._init_status_bar()
         self._probe_serial_ports()
@@ -227,10 +245,15 @@ class MainWindow(QMainWindow):
         self.home_page.set_session_text(session.username)
         self._set_status_user(session.username)
         self._set_status_state("login effettuato")
+        self._apply_home_permissions(None)
+        cached_profile = self._load_profile_cache()
+        if cached_profile is not None:
+            self._apply_home_permissions(cached_profile)
         self.showNormal()
         self.setWindowState(self.windowState() | Qt.WindowMaximized)
         self.stack.setCurrentWidget(self.home_page)
         self._probe_serial_ports()
+        self._load_profile_for_session()
 
     def _login_error(self, message: str, username: str, password: str, had_otp: bool) -> None:
         self._log.warning(
@@ -329,10 +352,25 @@ class MainWindow(QMainWindow):
         if action_key == "settings":
             self._open_settings_page()
             return
+        if action_key in {"board_config", "board_read"}:
+            self._open_board_config_page()
+            return
+        if action_key == "firmware_upload" and not self._can_access_action(action_key):
+            QMessageBox.warning(
+                self,
+                "Permesso richiesto",
+                "Il caricamento firmware non e' abilitato per questo utente.",
+            )
+            return
+        if action_key == "new_plant" and not self._can_access_action(action_key):
+            QMessageBox.warning(
+                self,
+                "Permesso richiesto",
+                "La creazione di un nuovo impianto non e' abilitata per questo utente.",
+            )
+            return
 
         labels = {
-            "board_config": "Configurazione scheda",
-            "board_read": "Leggi scheda",
             "firmware_upload": "Caricamento firmware",
             "new_plant": "Configurazione nuovo impianto",
         }
@@ -350,6 +388,18 @@ class MainWindow(QMainWindow):
     def _go_home(self) -> None:
         self.stack.setCurrentWidget(self.home_page)
         self._set_status_state("home")
+
+    def _open_board_config_page(self) -> None:
+        self.stack.setCurrentWidget(self.board_config_page)
+        self._set_status_state("configurazione scheda")
+        self.board_config_page.show_message("Seleziona un impianto e leggi la scheda collegata.")
+        if self._plants_cache:
+            self.board_config_page.set_plants(
+                self._plants_cache,
+                selected_plant_id=self.board_config_page.selected_plant_id(),
+            )
+        else:
+            self._load_plants()
 
     def _open_settings_page(self) -> None:
         self.stack.setCurrentWidget(self.settings_page)
@@ -371,34 +421,47 @@ class MainWindow(QMainWindow):
             on_finished=lambda: self.profile_page.set_busy(False),
         )
 
+    def _load_profile_for_session(self) -> None:
+        self._run_async(
+            self.profile_service.get_profile,
+            on_success=self._profile_loaded,
+            on_error=self._profile_error,
+        )
+
     def _profile_loaded(self, profile: UserProfile) -> None:
         profile = self._merge_profile_with_cache(profile)
+        self.user_profile = profile
         self.profile_page.set_profile(profile)
         self._save_profile_cache(profile)
+        self._apply_home_permissions(profile)
         self._set_status_state("profilo caricato")
 
     def _profile_error(self, message: str) -> None:
         cached = self._load_profile_cache()
         if cached:
+            self.user_profile = cached
             self.profile_page.set_profile(cached)
+            self._apply_home_permissions(cached)
             self.profile_page.show_error(
                 f"{message} | visualizzati dati profilo salvati localmente."
             )
             self._set_status_state("errore caricamento profilo")
             return
         if self.session:
-            self.profile_page.set_profile(
-                UserProfile(
-                    email=self.session.username,
-                    role=self.session.role,
-                    phone="",
-                    whatsapp="",
-                    telegram="",
-                    company="",
-                    name="",
-                    has_2fa=False,
-                )
+            fallback_profile = UserProfile(
+                email=self.session.username,
+                role=self.session.role,
+                phone="",
+                whatsapp="",
+                telegram="",
+                company="",
+                name="",
+                has_2fa=False,
+                permissions=UserPermissions(),
             )
+            self.user_profile = fallback_profile
+            self.profile_page.set_profile(fallback_profile)
+            self._apply_home_permissions(fallback_profile)
             self.profile_page.show_error(
                 f"{message} | profilo in modalita' base (API non disponibile)."
             )
@@ -427,6 +490,7 @@ class MainWindow(QMainWindow):
 
     def _profile_saved(self, result: tuple[UserProfile, dict[str, str]]) -> None:
         profile, payload = result
+        profile = self._merge_profile_with_cache(profile)
         if not profile.name.strip():
             profile.name = payload.get("name", "")
         if not profile.company.strip():
@@ -437,8 +501,10 @@ class MainWindow(QMainWindow):
             profile.whatsapp = payload.get("whatsapp", "")
         if not profile.telegram.strip():
             profile.telegram = payload.get("telegram", "")
+        self.user_profile = profile
         self._save_profile_cache(profile)
         self.profile_page.set_profile(profile)
+        self._apply_home_permissions(profile)
         self.profile_page.show_error("Profilo aggiornato")
         self._set_status_state("profilo aggiornato")
 
@@ -457,11 +523,16 @@ class MainWindow(QMainWindow):
         )
 
     def _plants_loaded(self, plants: list[Any]) -> None:
+        typed_plants = [p for p in plants if isinstance(p, Plant)]
+        self._plants_cache = typed_plants
         self.plants_page.set_plants(plants)
+        self.board_config_page.set_plants(typed_plants, selected_plant_id=self.board_config_page.selected_plant_id())
         self._set_status_state(f"impianti caricati ({len(plants)})")
         if not plants:
+            self._board_config_detail = None
             self._set_status_fw("-")
             self.plants_page.clear_detail()
+            self.board_config_page.show_message("Nessun impianto disponibile.")
 
     def _plants_error(self, message: str) -> None:
         self.plants_page.show_error(message)
@@ -507,6 +578,133 @@ class MainWindow(QMainWindow):
         self.plants_page.show_error(message)
         self._set_status_state("errore aggiornamento impianto")
 
+    def _load_board_config_detail(self, plant_id: int) -> None:
+        if plant_id <= 0:
+            return
+        self._board_config_detail = None
+        self.board_config_page.show_message("Caricamento dettaglio impianto...")
+        self._run_async(
+            lambda: self.plants_service.get_plant_detail(plant_id),
+            on_success=self._board_config_detail_loaded,
+            on_error=lambda message: self.board_config_page.show_message(message),
+        )
+
+    def _board_config_detail_loaded(self, detail: PlantDetail) -> None:
+        self._board_config_detail = detail
+        self.board_config_page.set_plant_detail(detail)
+        self._set_status_info(f"Impianto selezionato: #{detail.plant.plant_id}")
+
+    def _read_connected_board(self) -> None:
+        if not self._selected_port:
+            self.board_config_page.show_message("Seleziona prima una porta COM.")
+            return
+        plant_id = self.board_config_page.selected_plant_id()
+        if plant_id <= 0:
+            self.board_config_page.show_message("Seleziona un impianto.")
+            return
+        detail = self._selected_board_detail()
+        if detail is None:
+            self._load_board_config_detail(plant_id)
+            self.board_config_page.show_message("Attendi il caricamento del dettaglio impianto selezionato.")
+            return
+
+        self.board_config_page.set_busy(True)
+        self._set_status_state(f"lettura scheda su {self._selected_port}")
+        self._run_async(
+            lambda: self.board_config_service.read_board(self._selected_port),
+            on_success=self._board_snapshot_loaded,
+            on_error=self._board_read_error,
+            on_finished=lambda: self.board_config_page.set_busy(False),
+        )
+
+    def _board_snapshot_loaded(self, snapshot: BoardSnapshot) -> None:
+        self._current_board_snapshot = snapshot
+        warnings: list[str] = []
+        detail = self._selected_board_detail()
+        if detail is not None:
+            try:
+                warnings = self.board_config_service.validate_selection(detail, snapshot)
+            except Exception as exc:
+                warnings = [str(exc)]
+        self.board_config_page.set_read_result(snapshot, warnings)
+        self._set_status_fw(snapshot.firmware_version or "-")
+        self._set_status_info(f"Scheda letta: {snapshot.board_label}")
+
+    def _board_read_error(self, message: str) -> None:
+        self.board_config_page.show_message(message)
+        self._set_status_state("errore lettura scheda")
+
+    def _save_board_configuration(self, payload: dict[str, Any]) -> None:
+        snapshot = self._current_board_snapshot
+        detail = self._selected_board_detail()
+        if snapshot is None:
+            self.board_config_page.show_message("Leggi prima la scheda collegata.")
+            return
+        if detail is None:
+            self.board_config_page.show_message("Dettaglio impianto non disponibile o non ancora caricato.")
+            return
+
+        try:
+            self.board_config_service.validate_selection(detail, snapshot, payload)
+        except Exception as exc:
+            self.board_config_page.show_message(str(exc))
+            return
+
+        self.board_config_page.set_busy(True)
+        self._set_status_state("salvataggio configurazione scheda")
+        self._run_async(
+            lambda: self._apply_board_configuration(detail, snapshot, payload),
+            on_success=lambda result: self._board_configuration_saved(detail.plant.plant_id, result),
+            on_error=self._board_configuration_error,
+            on_finished=lambda: self.board_config_page.set_busy(False),
+        )
+
+    def _apply_board_configuration(
+        self,
+        detail: PlantDetail,
+        snapshot: BoardSnapshot,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        serial_number = str(payload.get("serial_number", snapshot.serial_number)).strip()
+        sync_message = ""
+
+        if snapshot.is_master:
+            check = self.serial_provisioning_service.check_serial(
+                serial_number,
+                snapshot.product_type_code or "02",
+            )
+            if not bool(check.get("exists", False)):
+                raise ValueError("Il seriale della centralina non risulta presente nel database portale.")
+
+        operation_log = self.board_config_service.apply_configuration(self._selected_port, snapshot, payload)
+
+        if snapshot.is_master:
+            assign = self.serial_provisioning_service.assign_serial_to_master(serial_number, detail.plant.plant_id)
+            sync_message = str(assign.get("message", "Centralina assegnata al master selezionato.")).strip()
+
+        return {
+            "operation_log": operation_log,
+            "sync_message": sync_message,
+            "serial_number": serial_number,
+        }
+
+    def _board_configuration_saved(self, plant_id: int, result: dict[str, Any]) -> None:
+        sync_message = str(result.get("sync_message", "")).strip()
+        serial_number = str(result.get("serial_number", "")).strip()
+        message = "Configurazione scheda completata."
+        if serial_number:
+            message += f" Seriale: {serial_number}."
+        if sync_message:
+            message += f" {sync_message}"
+        self.board_config_page.show_message(message)
+        self._set_status_state("configurazione scheda salvata")
+        self._load_plants()
+        self._load_board_config_detail(plant_id)
+
+    def _board_configuration_error(self, message: str) -> None:
+        self.board_config_page.show_message(message)
+        self._set_status_state("errore configurazione scheda")
+
     def _open_serial_detail(self, serial: str) -> None:
         serial = serial.strip()
         if not serial:
@@ -533,6 +731,34 @@ class MainWindow(QMainWindow):
         remember = self.login_page.remember_username()
         self._settings.setValue("remember_username", remember)
         self._settings.setValue("saved_username", username if remember else "")
+
+    def _apply_home_permissions(self, profile: UserProfile | None) -> None:
+        can_firmware = False
+        can_create_plant = False
+        if profile is not None:
+            can_firmware = bool(profile.permissions.firmware_update)
+            can_create_plant = bool(profile.permissions.plant_create)
+        self.home_page.set_action_visible("firmware_upload", can_firmware)
+        self.home_page.set_action_visible("new_plant", can_create_plant)
+
+    def _can_access_action(self, action_key: str) -> bool:
+        profile = self.user_profile
+        if profile is None:
+            return False
+        if action_key == "firmware_upload":
+            return bool(profile.permissions.firmware_update)
+        if action_key == "new_plant":
+            return bool(profile.permissions.plant_create)
+        return True
+
+    def _selected_board_detail(self) -> PlantDetail | None:
+        detail = self._board_config_detail
+        selected_plant_id = self.board_config_page.selected_plant_id()
+        if detail is None or selected_plant_id <= 0:
+            return None
+        if int(detail.plant.plant_id) != int(selected_plant_id):
+            return None
+        return detail
 
     def _check_app_version(self) -> None:
         if self.api_client.mock_mode:
@@ -605,6 +831,13 @@ class MainWindow(QMainWindow):
             "whatsapp": profile.whatsapp,
             "telegram": profile.telegram,
             "has_2fa": profile.has_2fa,
+            "permissions": {
+                "firmware_update": profile.permissions.firmware_update,
+                "plant_create": profile.permissions.plant_create,
+                "serial_lifecycle": profile.permissions.serial_lifecycle,
+                "serial_reserve": profile.permissions.serial_reserve,
+                "manual_peripheral": profile.permissions.manual_peripheral,
+            },
         }
         self._settings.setValue("profile_cache_json", json.dumps(data, ensure_ascii=True))
 
@@ -634,6 +867,14 @@ class MainWindow(QMainWindow):
             profile.whatsapp = cached.whatsapp
         if not profile.telegram.strip():
             profile.telegram = cached.telegram
+        if (
+            not profile.permissions.firmware_update
+            and not profile.permissions.plant_create
+            and not profile.permissions.serial_lifecycle
+            and not profile.permissions.serial_reserve
+            and not profile.permissions.manual_peripheral
+        ):
+            profile.permissions = cached.permissions
         return profile
 
     def _read_settings_payload(self) -> dict[str, Any]:

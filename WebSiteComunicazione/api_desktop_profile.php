@@ -1,6 +1,7 @@
 <?php
 session_start();
 require 'config.php';
+require_once 'auth_common.php';
 
 header('Content-Type: application/json');
 
@@ -33,6 +34,7 @@ $hasName = columnExists($pdo, 'users', 'name');
 $hasPhone = columnExists($pdo, 'users', 'phone');
 $hasWhatsapp = columnExists($pdo, 'users', 'whatsapp');
 $hasTelegram = columnExists($pdo, 'users', 'telegram');
+$permissions = ecAuthCurrentUserPermissions($pdo, $userId);
 
 try {
     $method = strtoupper((string)($_SERVER['REQUEST_METHOD'] ?? 'GET'));
@@ -111,9 +113,15 @@ try {
             'whatsapp' => (string)($user['whatsapp'] ?? ''),
             'telegram' => (string)($user['telegram'] ?? ''),
             'has_2fa' => !empty($user['google_auth_secret']),
+            'permissions' => [
+                'firmware_update' => !empty($permissions['firmware_update']),
+                'plant_create' => !empty($permissions['plant_create']),
+                'serial_lifecycle' => !empty($permissions['serial_lifecycle']),
+                'serial_reserve' => !empty($permissions['serial_reserve']),
+                'manual_peripheral' => !empty($permissions['manual_peripheral']),
+            ],
         ],
     ]);
 } catch (Throwable $e) {
     outJson(['status' => 'error', 'message' => 'Errore DB: ' . $e->getMessage()], 500);
 }
-

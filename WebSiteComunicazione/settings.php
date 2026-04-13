@@ -281,6 +281,34 @@ function ecSettingsUserOptionLabel(array $row, bool $hasUsersPortalAccessLevelCo
     return $base;
 }
 
+function ecSettingsUserInAddressBook(PDO $pdo, int $managerUserId, ?int $userId, ?array $allowedRoles = null): bool {
+    if ($userId === null || $userId <= 0) {
+        return true;
+    }
+
+    $sql = "
+        SELECT 1
+        FROM contacts c
+        JOIN users u ON u.id = c.linked_user_id
+        WHERE c.managed_by_user_id = ?
+          AND c.linked_user_id = ?
+    ";
+    $params = [$managerUserId, $userId];
+
+    if (is_array($allowedRoles) && !empty($allowedRoles)) {
+        $placeholders = implode(', ', array_fill(0, count($allowedRoles), '?'));
+        $sql .= " AND u.role IN ($placeholders)";
+        foreach ($allowedRoles as $role) {
+            $params[] = (string)$role;
+        }
+    }
+
+    $sql .= " LIMIT 1";
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($params);
+    return (bool)$stmt->fetchColumn();
+}
+
 $allLifecycleReasons = ecSettingsLifecycleReasons($pdo, false);
 $retiredReasons = array_values(array_filter($allLifecycleReasons, function ($r) {
     $applies = (string)($r['applies_to_status'] ?? 'any');
@@ -330,6 +358,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $message_type = 'danger';
             } elseif ($plantKind !== '' && $serialType === '02' && !in_array($plantKind, ['standalone', 'rewamping'], true)) {
                 $message = "Per un seriale master di tipo 02 il tipo impianto deve essere Standalone o Rewamping.";
+                $message_type = 'danger';
+            } elseif (!ecSettingsUserInAddressBook($pdo, (int)$currentUserId, $ownerIdInput, ['client', 'builder', 'maintainer'])) {
+                $message = "Il proprietario selezionato non e presente nella tua rubrica.";
+                $message_type = 'danger';
+            } elseif (!ecSettingsUserInAddressBook($pdo, (int)$currentUserId, $maintainerIdInput, ['maintainer'])) {
+                $message = "Il manutentore selezionato non e presente nella tua rubrica.";
+                $message_type = 'danger';
+            } elseif ($hasMasterBuilderColumn && !ecSettingsUserInAddressBook($pdo, (int)$currentUserId, $builderIdInput, ['builder'])) {
+                $message = "Il costruttore selezionato non e presente nella tua rubrica.";
                 $message_type = 'danger';
             } else {
                 // Verifica seriale master gia associato ad altro impianto attivo.
@@ -618,35 +655,50 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $owner_id = $_POST['owner_id'] ?: null; // Se vuoto, imposta a NULL
         $maintainer_id = $_POST['maintainer_id'] ?: null;
         $builder_id = ($hasMasterBuilderColumn && isset($_POST['builder_id']) && $_POST['builder_id'] !== '') ? $_POST['builder_id'] : null;
-        $currentAddress = '';
-        $stmtCurrentMaster = $pdo->prepare("SELECT address FROM masters WHERE id = ? LIMIT 1");
-        $stmtCurrentMaster->execute([$master_id]);
-        $currentAddress = trim((string)($stmtCurrentMaster->fetchColumn() ?: ''));
-        $resolvedAddress = $currentAddress !== ''
-            ? $currentAddress
-            : ecSettingsResolvedPlantAddress(
-                $pdo,
-                $owner_id !== null ? (int)$owner_id : null,
-                $maintainer_id !== null ? (int)$maintainer_id : null,
-                $builder_id !== null ? (int)$builder_id : null,
-                $hasUsersAddressColumn
-            );
+        $ownerIdInt = $owner_id !== null ? (int)$owner_id : null;
+        $maintainerIdInt = $maintainer_id !== null ? (int)$maintainer_id : null;
+        $builderIdInt = $builder_id !== null ? (int)$builder_id : null;
 
-        // Solo Admin e Costruttore (del proprio impianto) possono assegnare
-        $sql = "UPDATE masters SET owner_id = ?, maintainer_id = ?, address = ?";
-        $params = [$owner_id, $maintainer_id, $resolvedAddress];
-        if ($hasMasterBuilderColumn) {
-            $sql .= ", builder_id = ?";
-            $params[] = $builder_id;
+        if (!ecSettingsUserInAddressBook($pdo, (int)$currentUserId, $ownerIdInt, ['client', 'builder', 'maintainer'])) {
+            $message = "Il proprietario selezionato non e presente nella tua rubrica.";
+            $message_type = 'danger';
+        } elseif (!ecSettingsUserInAddressBook($pdo, (int)$currentUserId, $maintainerIdInt, ['maintainer'])) {
+            $message = "Il manutentore selezionato non e presente nella tua rubrica.";
+            $message_type = 'danger';
+        } elseif ($hasMasterBuilderColumn && !ecSettingsUserInAddressBook($pdo, (int)$currentUserId, $builderIdInt, ['builder'])) {
+            $message = "Il costruttore selezionato non e presente nella tua rubrica.";
+            $message_type = 'danger';
+        } else {
+            $currentAddress = '';
+            $stmtCurrentMaster = $pdo->prepare("SELECT address FROM masters WHERE id = ? LIMIT 1");
+            $stmtCurrentMaster->execute([$master_id]);
+            $currentAddress = trim((string)($stmtCurrentMaster->fetchColumn() ?: ''));
+            $resolvedAddress = $currentAddress !== ''
+                ? $currentAddress
+                : ecSettingsResolvedPlantAddress(
+                    $pdo,
+                    $ownerIdInt,
+                    $maintainerIdInt,
+                    $builderIdInt,
+                    $hasUsersAddressColumn
+                );
+
+            // Solo Admin e Costruttore (del proprio impianto) possono assegnare
+            $sql = "UPDATE masters SET owner_id = ?, maintainer_id = ?, address = ?";
+            $params = [$owner_id, $maintainer_id, $resolvedAddress];
+            if ($hasMasterBuilderColumn) {
+                $sql .= ", builder_id = ?";
+                $params[] = $builder_id;
+            }
+            $sql .= " WHERE id = ?";
+            $params[] = $master_id;
+            if (!$isAdmin) $sql .= " AND creator_id = ?";
+            if (!$isAdmin) $params[] = $currentUserId;
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute($params);
+            $message = "Assegnazioni impianto aggiornate.";
+            $message_type = 'success';
         }
-        $sql .= " WHERE id = ?";
-        $params[] = $master_id;
-        if (!$isAdmin) $sql .= " AND creator_id = ?";
-        if (!$isAdmin) $params[] = $currentUserId;
-        $stmt = $pdo->prepare($sql);
-        $stmt->execute($params);
-        $message = "Assegnazioni impianto aggiornate.";
-        $message_type = 'success';
     }
 
     // Azione: Ripristinare un impianto (solo Admin)
@@ -959,33 +1011,42 @@ $assignMaintainerOptions = [];
 $assignBuilderOptions = [];
 try {
     $contacts_stmt = $pdo->prepare("
-        SELECT u.id, c.name, u.email, " . ($hasUsersAddressColumn ? "u.address" : "NULL") . " AS address,
+        SELECT u.id, c.name, u.email, u.role,
+               " . ($hasUsersAddressColumn ? "u.address" : "NULL") . " AS address,
                " . ($hasUsersPortalAccessLevelColumn ? "u.portal_access_level" : "'active'") . " AS portal_access_level
         FROM contacts c
         JOIN users u ON c.linked_user_id = u.id
         WHERE c.managed_by_user_id = ?
-        ORDER BY c.name
+          AND c.linked_user_id IS NOT NULL
+        ORDER BY c.name ASC, u.email ASC
     ");
     $contacts_stmt->execute([$currentUserId]);
-    $assignOwnerOptions = $contacts_stmt->fetchAll();
+    $contactRows = $contacts_stmt->fetchAll();
+
+    $contactsByUserId = [];
+    foreach ($contactRows as $contactRow) {
+        $linkedId = (int)($contactRow['id'] ?? 0);
+        if ($linkedId <= 0 || isset($contactsByUserId[$linkedId])) {
+            continue;
+        }
+        $contactsByUserId[$linkedId] = $contactRow;
+    }
+
+    $assignOwnerOptions = array_values(array_filter($contactsByUserId, static function ($row) {
+        return in_array((string)($row['role'] ?? ''), ['client', 'builder', 'maintainer'], true);
+    }));
+    $assignMaintainerOptions = array_values(array_filter($contactsByUserId, static function ($row) {
+        return (string)($row['role'] ?? '') === 'maintainer';
+    }));
+    if ($hasMasterBuilderColumn) {
+        $assignBuilderOptions = array_values(array_filter($contactsByUserId, static function ($row) {
+            return (string)($row['role'] ?? '') === 'builder';
+        }));
+    }
 } catch (Throwable $e) {
     $assignOwnerOptions = [];
-}
-try {
-    $maintainerSql = "SELECT id, email, " . ($hasUsersAddressColumn ? "address" : "NULL") . " AS address, " . ($hasUsersPortalAccessLevelColumn ? "portal_access_level" : "'active'") . " AS portal_access_level FROM users WHERE role = 'maintainer'";
-    $maintainerSql .= " ORDER BY email ASC";
-    $assignMaintainerOptions = $pdo->query($maintainerSql)->fetchAll();
-} catch (Throwable $e) {
     $assignMaintainerOptions = [];
-}
-if ($hasMasterBuilderColumn) {
-    try {
-        $builderSql = "SELECT id, email, " . ($hasUsersAddressColumn ? "address" : "NULL") . " AS address, " . ($hasUsersPortalAccessLevelColumn ? "portal_access_level" : "'active'") . " AS portal_access_level FROM users WHERE role = 'builder'";
-        $builderSql .= " ORDER BY email ASC";
-        $assignBuilderOptions = $pdo->query($builderSql)->fetchAll();
-    } catch (Throwable $e) {
-        $assignBuilderOptions = [];
-    }
+    $assignBuilderOptions = [];
 }
 ?>
 <!DOCTYPE html>

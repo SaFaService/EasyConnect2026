@@ -73,6 +73,125 @@ function abAccessIconClass(string $accessLevel): string {
     return 'fa-ban text-danger';
 }
 
+function abNormalizeComparable(string $value): string {
+    $v = strtolower(trim($value));
+    if ($v === '') {
+        return '';
+    }
+    if (function_exists('iconv')) {
+        $iconv = @iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $v);
+        if ($iconv !== false) {
+            $v = strtolower($iconv);
+        }
+    }
+    $v = preg_replace('/[^a-z0-9]+/', ' ', $v) ?? $v;
+    $v = preg_replace('/\s+/', ' ', $v) ?? $v;
+    return trim($v);
+}
+
+function abSimilarityRatio(string $a, string $b): float {
+    if ($a === '' || $b === '') {
+        return 0.0;
+    }
+    if ($a === $b) {
+        return 1.0;
+    }
+    if (strpos($a, $b) !== false || strpos($b, $a) !== false) {
+        return 0.92;
+    }
+    $pct = 0.0;
+    similar_text($a, $b, $pct);
+    return max(0.0, min(1.0, $pct / 100.0));
+}
+
+function abFindPotentialDuplicateUsers(
+    PDO $pdo,
+    string $role,
+    string $company,
+    string $address,
+    bool $hasUsersCompany,
+    bool $hasUsersAddress,
+    bool $hasContactsCompany
+): array {
+    $companyNorm = abNormalizeComparable($company);
+    if ($companyNorm === '' || $role === '') {
+        return [];
+    }
+
+    $companySel = $hasUsersCompany ? "u.company" : "NULL";
+    $addressSel = $hasUsersAddress ? "u.address" : "NULL";
+    $contactCompanySel = $hasContactsCompany ? "c.company" : "NULL";
+
+    $sql = "
+        SELECT
+            u.id AS user_id,
+            u.email AS user_email,
+            u.role AS user_role,
+            {$companySel} AS user_company,
+            {$addressSel} AS user_address,
+            c.name AS contact_name,
+            {$contactCompanySel} AS contact_company
+        FROM users u
+        LEFT JOIN contacts c ON c.id = (
+            SELECT c2.id
+            FROM contacts c2
+            WHERE c2.linked_user_id = u.id
+            ORDER BY c2.id DESC
+            LIMIT 1
+        )
+        WHERE u.role = ?
+        ORDER BY u.id DESC
+        LIMIT 500
+    ";
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute([$role]);
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    $addressNorm = abNormalizeComparable($address);
+    $candidates = [];
+    foreach ($rows as $row) {
+        $candidateCompany = trim((string)($row['user_company'] ?? ''));
+        if ($candidateCompany === '') {
+            $candidateCompany = trim((string)($row['contact_company'] ?? ''));
+        }
+        $candidateAddress = trim((string)($row['user_address'] ?? ''));
+
+        $candidateCompanyNorm = abNormalizeComparable($candidateCompany);
+        if ($candidateCompanyNorm === '') {
+            continue;
+        }
+
+        $companyScore = abSimilarityRatio($companyNorm, $candidateCompanyNorm);
+        $addressScore = 0.0;
+        if ($addressNorm !== '') {
+            $addressScore = abSimilarityRatio($addressNorm, abNormalizeComparable($candidateAddress));
+        }
+        $totalScore = $addressNorm !== ''
+            ? ($companyScore * 0.80 + $addressScore * 0.20)
+            : $companyScore;
+
+        $isStrong = $companyScore >= 0.94 || $totalScore >= 0.88 || ($companyScore >= 0.85 && $addressScore >= 0.70);
+        if (!$isStrong) {
+            continue;
+        }
+
+        $candidates[] = [
+            'user_id' => (int)($row['user_id'] ?? 0),
+            'email' => (string)($row['user_email'] ?? ''),
+            'role' => (string)($row['user_role'] ?? ''),
+            'name' => trim((string)($row['contact_name'] ?? '')),
+            'company' => $candidateCompany,
+            'address' => $candidateAddress,
+            'score' => (int)round($totalScore * 100),
+        ];
+    }
+
+    usort($candidates, static function ($a, $b) {
+        return (int)($b['score'] ?? 0) <=> (int)($a['score'] ?? 0);
+    });
+    return array_slice($candidates, 0, 5);
+}
+
 function abCanDeleteRow(array $row, string $currentRole, int $currentUserId): bool {
     $role = (string)($row['user_role'] ?? '');
     $managerId = (int)($row['manager_id'] ?? 0);
@@ -160,6 +279,7 @@ function abRenderDirectoryTable(array $rows, bool $isAdmin, string $currentRole,
                                     <form method="POST" class="d-inline" onsubmit="return confirm('<?php echo htmlspecialchars(abTxt('Confermi eliminazione utente?', 'Confirm user deletion?'), ENT_QUOTES); ?>');">
                                         <input type="hidden" name="action" value="delete_user">
                                         <input type="hidden" name="target_user_id" value="<?php echo (int)$row['user_id']; ?>">
+                                        <input type="hidden" name="target_manager_id" value="<?php echo (int)($row['manager_id'] ?? 0); ?>">
                                         <button type="submit" class="btn btn-sm btn-outline-danger"><i class="fas fa-trash"></i></button>
                                     </form>
                                 <?php else: ?>
@@ -212,9 +332,24 @@ $accessLevelOptions = [
 
 $message = '';
 $messageType = 'info';
+$requestAction = (string)($_POST['action'] ?? '');
+$duplicateCandidates = [];
+$showDuplicatePrompt = false;
+$createFormState = [
+    'name' => '',
+    'email' => '',
+    'password' => '',
+    'role' => (string)($allowedCreateRoles[0] ?? ''),
+    'phone' => '',
+    'company' => '',
+    'address' => '',
+    'vat_number' => '',
+    'portal_access_level' => 'active',
+    'force_create_if_similar' => false,
+];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $action = (string)($_POST['action'] ?? '');
+    $action = $requestAction;
 
     if ($action === 'add_user') {
         if (!$canCreateUsers) {
@@ -230,6 +365,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $address = trim((string)($_POST['address'] ?? ''));
             $vatNumber = trim((string)($_POST['vat_number'] ?? ''));
             $accessLevel = ecAuthPortalAccessLevel((string)($_POST['portal_access_level'] ?? 'active'));
+            $forceCreateIfSimilar = !empty($_POST['force_create_if_similar']);
+
+            $createFormState = [
+                'name' => $name,
+                'email' => $email,
+                'password' => $password,
+                'role' => $role,
+                'phone' => $phone,
+                'company' => $company,
+                'address' => $address,
+                'vat_number' => $vatNumber,
+                'portal_access_level' => $accessLevel,
+                'force_create_if_similar' => $forceCreateIfSimilar,
+            ];
 
             if ($name === '' || $email === '' || $role === '' || $company === '') {
                 $message = abTxt('Compila tutti i campi obbligatori.', 'Please fill all required fields.');
@@ -237,79 +386,184 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } elseif (!in_array($role, $allowedCreateRoles, true)) {
                 $message = abTxt('Ruolo non consentito per la tua utenza.', 'Selected role is not allowed for your account.');
                 $messageType = 'danger';
-            } elseif ($accessLevel === 'active' && trim($password) === '') {
-                $message = abTxt('Per un utente attivo devi indicare una password iniziale.', 'An active user requires an initial password.');
-                $messageType = 'danger';
             } else {
                 try {
-                    $check = $pdo->prepare("SELECT id FROM users WHERE email = ? LIMIT 1");
+                    $check = $pdo->prepare("SELECT id, role FROM users WHERE email = ? LIMIT 1");
                     $check->execute([$email]);
-                    if ($check->fetchColumn()) {
-                        $message = abTxt('Email gia presente nel sistema.', 'Email already exists.');
-                        $messageType = 'danger';
-                    } else {
-                        $passwordHash = $accessLevel === 'active'
-                            ? password_hash($password, PASSWORD_DEFAULT)
-                            : ecAuthMakeUnusablePasswordHash();
-
-                        $insCols = ['email', 'password_hash', 'role'];
-                        $insVals = ['?', '?', '?'];
-                        $insParams = [$email, $passwordHash, $role];
-
-                        if ($hasUsersPhone) {
-                            $insCols[] = 'phone';
-                            $insVals[] = '?';
-                            $insParams[] = $phone !== '' ? $phone : null;
-                        }
-                        if ($hasUsersCompany) {
-                            $insCols[] = 'company';
-                            $insVals[] = '?';
-                            $insParams[] = $company;
-                        }
-                        if ($hasUsersAddress) {
-                            $insCols[] = 'address';
-                            $insVals[] = '?';
-                            $insParams[] = $address !== '' ? $address : null;
-                        }
-                        if ($hasUsersVatNumber) {
-                            $insCols[] = 'vat_number';
-                            $insVals[] = '?';
-                            $insParams[] = $vatNumber !== '' ? $vatNumber : null;
-                        }
-                        if ($hasPortalAccessLevel) {
-                            $insCols[] = 'portal_access_level';
-                            $insVals[] = '?';
-                            $insParams[] = $accessLevel;
-                        }
-
-                        $stmtInsUser = $pdo->prepare("INSERT INTO users (" . implode(', ', $insCols) . ") VALUES (" . implode(', ', $insVals) . ")");
-                        $stmtInsUser->execute($insParams);
-                        $newUserId = (int)$pdo->lastInsertId();
-
-                        $stmtCkContact = $pdo->prepare("SELECT id FROM contacts WHERE managed_by_user_id = ? AND email = ? LIMIT 1");
-                        $stmtCkContact->execute([$currentUserId, $email]);
-                        $contactId = (int)($stmtCkContact->fetchColumn() ?: 0);
-
-                        if ($contactId > 0) {
-                            if ($hasContactsCompany) {
-                                $stmtUpdContact = $pdo->prepare("UPDATE contacts SET linked_user_id = ?, name = ?, phone = ?, company = ? WHERE id = ?");
-                                $stmtUpdContact->execute([$newUserId, $name, $phone !== '' ? $phone : null, $company, $contactId]);
-                            } else {
-                                $stmtUpdContact = $pdo->prepare("UPDATE contacts SET linked_user_id = ?, name = ?, phone = ? WHERE id = ?");
-                                $stmtUpdContact->execute([$newUserId, $name, $phone !== '' ? $phone : null, $contactId]);
-                            }
+                    $existingUser = $check->fetch(PDO::FETCH_ASSOC) ?: null;
+                    if ($existingUser) {
+                        $existingUserId = (int)($existingUser['id'] ?? 0);
+                        $existingUserRole = (string)($existingUser['role'] ?? '');
+                        if (!in_array($existingUserRole, $allowedCreateRoles, true)) {
+                            $message = abTxt(
+                                'Email gia presente ma con un ruolo non gestibile dalla tua utenza.',
+                                'Email already exists with a role your account cannot manage.'
+                            );
+                            $messageType = 'danger';
                         } else {
-                            if ($hasContactsCompany) {
-                                $stmtInsContact = $pdo->prepare("INSERT INTO contacts (managed_by_user_id, linked_user_id, name, email, phone, company) VALUES (?, ?, ?, ?, ?, ?)");
-                                $stmtInsContact->execute([$currentUserId, $newUserId, $name, $email, $phone !== '' ? $phone : null, $company]);
+                            $stmtCkContact = $pdo->prepare("
+                                SELECT id
+                                FROM contacts
+                                WHERE managed_by_user_id = ?
+                                  AND (linked_user_id = ? OR email = ?)
+                                ORDER BY id DESC
+                                LIMIT 1
+                            ");
+                            $stmtCkContact->execute([$currentUserId, $existingUserId, $email]);
+                            $contactId = (int)($stmtCkContact->fetchColumn() ?: 0);
+
+                            if ($contactId > 0) {
+                                if ($hasContactsCompany) {
+                                    $stmtUpdContact = $pdo->prepare("UPDATE contacts SET linked_user_id = ?, name = ?, email = ?, phone = ?, company = ? WHERE id = ?");
+                                    $stmtUpdContact->execute([$existingUserId, $name, $email, $phone !== '' ? $phone : null, $company, $contactId]);
+                                } else {
+                                    $stmtUpdContact = $pdo->prepare("UPDATE contacts SET linked_user_id = ?, name = ?, email = ?, phone = ? WHERE id = ?");
+                                    $stmtUpdContact->execute([$existingUserId, $name, $email, $phone !== '' ? $phone : null, $contactId]);
+                                }
+                                $message = abTxt(
+                                    'Email gia presente: utente gia in rubrica, dati aggiornati.',
+                                    'Email already exists: user already in your address book, details updated.'
+                                );
+                                $messageType = 'success';
                             } else {
-                                $stmtInsContact = $pdo->prepare("INSERT INTO contacts (managed_by_user_id, linked_user_id, name, email, phone) VALUES (?, ?, ?, ?, ?)");
-                                $stmtInsContact->execute([$currentUserId, $newUserId, $name, $email, $phone !== '' ? $phone : null]);
+                                if ($hasContactsCompany) {
+                                    $stmtInsContact = $pdo->prepare("INSERT INTO contacts (managed_by_user_id, linked_user_id, name, email, phone, company) VALUES (?, ?, ?, ?, ?, ?)");
+                                    $stmtInsContact->execute([$currentUserId, $existingUserId, $name, $email, $phone !== '' ? $phone : null, $company]);
+                                } else {
+                                    $stmtInsContact = $pdo->prepare("INSERT INTO contacts (managed_by_user_id, linked_user_id, name, email, phone) VALUES (?, ?, ?, ?, ?)");
+                                    $stmtInsContact->execute([$currentUserId, $existingUserId, $name, $email, $phone !== '' ? $phone : null]);
+                                }
+                                $message = abTxt(
+                                    'Email gia presente: utente esistente collegato alla tua rubrica.',
+                                    'Email already exists: existing user linked to your address book.'
+                                );
+                                $messageType = 'success';
+                            }
+
+                            $createFormState = [
+                                'name' => '',
+                                'email' => '',
+                                'password' => '',
+                                'role' => (string)($allowedCreateRoles[0] ?? ''),
+                                'phone' => '',
+                                'company' => '',
+                                'address' => '',
+                                'vat_number' => '',
+                                'portal_access_level' => 'active',
+                                'force_create_if_similar' => false,
+                            ];
+                            $duplicateCandidates = [];
+                            $showDuplicatePrompt = false;
+                        }
+                    } else {
+                        if ($accessLevel === 'active' && trim($password) === '') {
+                            $message = abTxt('Per un utente attivo devi indicare una password iniziale.', 'An active user requires an initial password.');
+                            $messageType = 'danger';
+                        } elseif (!$forceCreateIfSimilar) {
+                            $duplicateCandidates = abFindPotentialDuplicateUsers(
+                                $pdo,
+                                $role,
+                                $company,
+                                $address,
+                                $hasUsersCompany,
+                                $hasUsersAddress,
+                                $hasContactsCompany
+                            );
+                            if (!empty($duplicateCandidates)) {
+                                $showDuplicatePrompt = true;
+                                $message = abTxt(
+                                    'Possibile duplicato rilevato. Controlla i suggerimenti prima di creare un nuovo record.',
+                                    'Potential duplicate found. Review suggestions before creating a new record.'
+                                );
+                                $messageType = 'warning';
                             }
                         }
 
-                        $message = abTxt('Utente creato correttamente nella rubrica.', 'User created successfully in address book.');
-                        $messageType = 'success';
+                        if ($message === '') {
+                            $passwordHash = $accessLevel === 'active'
+                                ? password_hash($password, PASSWORD_DEFAULT)
+                                : ecAuthMakeUnusablePasswordHash();
+
+                            $insCols = ['email', 'password_hash', 'role'];
+                            $insVals = ['?', '?', '?'];
+                            $insParams = [$email, $passwordHash, $role];
+
+                            if ($hasUsersPhone) {
+                                $insCols[] = 'phone';
+                                $insVals[] = '?';
+                                $insParams[] = $phone !== '' ? $phone : null;
+                            }
+                            if ($hasUsersCompany) {
+                                $insCols[] = 'company';
+                                $insVals[] = '?';
+                                $insParams[] = $company;
+                            }
+                            if ($hasUsersAddress) {
+                                $insCols[] = 'address';
+                                $insVals[] = '?';
+                                $insParams[] = $address !== '' ? $address : null;
+                            }
+                            if ($hasUsersVatNumber) {
+                                $insCols[] = 'vat_number';
+                                $insVals[] = '?';
+                                $insParams[] = $vatNumber !== '' ? $vatNumber : null;
+                            }
+                            if ($hasPortalAccessLevel) {
+                                $insCols[] = 'portal_access_level';
+                                $insVals[] = '?';
+                                $insParams[] = $accessLevel;
+                            }
+
+                            $stmtInsUser = $pdo->prepare("INSERT INTO users (" . implode(', ', $insCols) . ") VALUES (" . implode(', ', $insVals) . ")");
+                            $stmtInsUser->execute($insParams);
+                            $newUserId = (int)$pdo->lastInsertId();
+
+                            $stmtCkContact = $pdo->prepare("
+                                SELECT id
+                                FROM contacts
+                                WHERE managed_by_user_id = ?
+                                  AND (linked_user_id = ? OR email = ?)
+                                ORDER BY id DESC
+                                LIMIT 1
+                            ");
+                            $stmtCkContact->execute([$currentUserId, $newUserId, $email]);
+                            $contactId = (int)($stmtCkContact->fetchColumn() ?: 0);
+
+                            if ($contactId > 0) {
+                                if ($hasContactsCompany) {
+                                    $stmtUpdContact = $pdo->prepare("UPDATE contacts SET linked_user_id = ?, name = ?, email = ?, phone = ?, company = ? WHERE id = ?");
+                                    $stmtUpdContact->execute([$newUserId, $name, $email, $phone !== '' ? $phone : null, $company, $contactId]);
+                                } else {
+                                    $stmtUpdContact = $pdo->prepare("UPDATE contacts SET linked_user_id = ?, name = ?, email = ?, phone = ? WHERE id = ?");
+                                    $stmtUpdContact->execute([$newUserId, $name, $email, $phone !== '' ? $phone : null, $contactId]);
+                                }
+                            } else {
+                                if ($hasContactsCompany) {
+                                    $stmtInsContact = $pdo->prepare("INSERT INTO contacts (managed_by_user_id, linked_user_id, name, email, phone, company) VALUES (?, ?, ?, ?, ?, ?)");
+                                    $stmtInsContact->execute([$currentUserId, $newUserId, $name, $email, $phone !== '' ? $phone : null, $company]);
+                                } else {
+                                    $stmtInsContact = $pdo->prepare("INSERT INTO contacts (managed_by_user_id, linked_user_id, name, email, phone) VALUES (?, ?, ?, ?, ?)");
+                                    $stmtInsContact->execute([$currentUserId, $newUserId, $name, $email, $phone !== '' ? $phone : null]);
+                                }
+                            }
+
+                            $message = abTxt('Utente creato correttamente nella rubrica.', 'User created successfully in address book.');
+                            $messageType = 'success';
+                            $createFormState = [
+                                'name' => '',
+                                'email' => '',
+                                'password' => '',
+                                'role' => (string)($allowedCreateRoles[0] ?? ''),
+                                'phone' => '',
+                                'company' => '',
+                                'address' => '',
+                                'vat_number' => '',
+                                'portal_access_level' => 'active',
+                                'force_create_if_similar' => false,
+                            ];
+                            $duplicateCandidates = [];
+                            $showDuplicatePrompt = false;
+                        }
                     }
                 } catch (Throwable $e) {
                     $message = abTxt('Errore durante la creazione utente: ', 'Error while creating user: ') . $e->getMessage();
@@ -321,6 +575,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($action === 'delete_user') {
         $targetUserId = (int)($_POST['target_user_id'] ?? 0);
+        $targetManagerId = (int)($_POST['target_manager_id'] ?? 0);
         if ($targetUserId <= 0) {
             $message = abTxt('Utente non valido.', 'Invalid user.');
             $messageType = 'danger';
@@ -350,12 +605,64 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $message = abTxt('Non hai i permessi per eliminare questo utente.', 'You do not have permission to delete this user.');
                     $messageType = 'danger';
                 } else {
-                    $pdo->prepare("DELETE FROM contacts WHERE linked_user_id = ?")->execute([$targetUserId]);
-                    $pdo->prepare("DELETE FROM users WHERE id = ?")->execute([$targetUserId]);
-                    $message = abTxt('Utente eliminato.', 'User deleted.');
-                    $messageType = 'warning';
+                    $pdo->beginTransaction();
+
+                    $deleteManagerId = $currentUserId;
+                    if ($currentRole === 'admin' && $targetManagerId > 0) {
+                        $deleteManagerId = $targetManagerId;
+                    }
+
+                    $stmtDelLink = $pdo->prepare("
+                        DELETE FROM contacts
+                        WHERE managed_by_user_id = ?
+                          AND linked_user_id = ?
+                    ");
+                    $stmtDelLink->execute([$deleteManagerId, $targetUserId]);
+                    $removedLinks = (int)$stmtDelLink->rowCount();
+
+                    $stmtCountLinks = $pdo->prepare("SELECT COUNT(*) FROM contacts WHERE linked_user_id = ?");
+                    $stmtCountLinks->execute([$targetUserId]);
+                    $remainingLinks = (int)$stmtCountLinks->fetchColumn();
+
+                    if ($removedLinks <= 0 && $remainingLinks > 0) {
+                        $pdo->rollBack();
+                        $message = abTxt(
+                            'Impossibile rimuovere: il contatto non risulta associato alla tua rubrica.',
+                            'Unable to remove: contact is not associated with your address book.'
+                        );
+                        $messageType = 'danger';
+                    } else {
+                        if ($remainingLinks <= 0) {
+                            try {
+                                $pdo->prepare("DELETE FROM users WHERE id = ?")->execute([$targetUserId]);
+                                $pdo->commit();
+                                $message = abTxt(
+                                    'Contatto rimosso dalla rubrica e cancellato definitivamente (nessun altro collegamento).',
+                                    'Contact removed from address book and permanently deleted (no other links).'
+                                );
+                                $messageType = 'warning';
+                            } catch (Throwable $deleteUserError) {
+                                $pdo->commit();
+                                $message = abTxt(
+                                    'Contatto rimosso dalla rubrica, ma non cancellabile definitivamente (probabile associazione a impianti).',
+                                    'Contact removed from address book, but cannot be permanently deleted (likely linked to plants).'
+                                );
+                                $messageType = 'warning';
+                            }
+                        } else {
+                            $pdo->commit();
+                            $message = abTxt(
+                                'Contatto rimosso solo dalla rubrica selezionata. Rimane disponibile nelle altre rubriche collegate.',
+                                'Contact removed only from the selected address book. It remains available in other linked address books.'
+                            );
+                            $messageType = 'info';
+                        }
+                    }
                 }
             } catch (Throwable $e) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
                 $message = abTxt('Impossibile eliminare utente (probabilmente associato a impianti).', 'Unable to delete user (likely linked to plants).');
                 $messageType = 'danger';
             }
@@ -499,11 +806,11 @@ foreach ($directoryRows as $row) {
         <div class="card shadow-sm mb-3">
             <div class="card-header d-flex justify-content-between align-items-center bg-primary text-white">
                 <strong><i class="fas fa-user-plus"></i> <?php echo htmlspecialchars(abTxt('Crea utente in Rubrica', 'Create user in Address Book')); ?></strong>
-                <button class="btn btn-sm btn-light toggle-btn" type="button" data-bs-toggle="collapse" data-bs-target="#createUserBody" aria-expanded="false" aria-controls="createUserBody">
+                <button class="btn btn-sm btn-light toggle-btn" type="button" data-bs-toggle="collapse" data-bs-target="#createUserBody" aria-expanded="<?php echo ($showDuplicatePrompt || ($requestAction === 'add_user' && $messageType !== 'success')) ? 'true' : 'false'; ?>" aria-controls="createUserBody">
                     <i class="fas fa-chevron-down"></i>
                 </button>
             </div>
-            <div id="createUserBody" class="collapse">
+            <div id="createUserBody" class="collapse<?php echo ($showDuplicatePrompt || ($requestAction === 'add_user' && $messageType !== 'success')) ? ' show' : ''; ?>">
                 <div class="card-body">
                     <div class="small text-muted mb-2">
                         <?php
@@ -518,14 +825,56 @@ foreach ($directoryRows as $row) {
                     </div>
                     <form method="POST">
                         <input type="hidden" name="action" value="add_user">
+                        <?php if ($showDuplicatePrompt && !empty($duplicateCandidates)): ?>
+                            <div class="alert alert-warning">
+                                <div class="fw-semibold mb-1"><?php echo htmlspecialchars(abTxt('Volevi inserire questo?', 'Did you mean one of these?')); ?></div>
+                                <div class="small mb-2"><?php echo htmlspecialchars(abTxt('Abbiamo trovato record simili nel sistema. Controlla prima di creare un nuovo utente.', 'We found similar records in the system. Please review before creating a new user.')); ?></div>
+                                <div class="table-responsive mb-2">
+                                    <table class="table table-sm table-bordered align-middle bg-white mb-0">
+                                        <thead class="table-light">
+                                            <tr>
+                                                <th><?php echo htmlspecialchars(abTxt('Somiglianza', 'Similarity')); ?></th>
+                                                <th><?php echo htmlspecialchars($lang['contacts_company'] ?? abTxt('Azienda', 'Company')); ?></th>
+                                                <th><?php echo htmlspecialchars($lang['contacts_name'] ?? abTxt('Nome', 'Name')); ?></th>
+                                                <th><?php echo htmlspecialchars($lang['contacts_email'] ?? 'Email'); ?></th>
+                                                <th><?php echo htmlspecialchars(abTxt('Indirizzo', 'Address')); ?></th>
+                                                <th><?php echo htmlspecialchars(abTxt('Dettaglio', 'Details')); ?></th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <?php foreach ($duplicateCandidates as $candidate): ?>
+                                                <tr>
+                                                    <td><span class="badge bg-warning text-dark"><?php echo (int)($candidate['score'] ?? 0); ?>%</span></td>
+                                                    <td><?php echo htmlspecialchars((string)($candidate['company'] ?? '-')); ?></td>
+                                                    <td><?php echo htmlspecialchars((string)($candidate['name'] ?? '-')); ?></td>
+                                                    <td><?php echo htmlspecialchars((string)($candidate['email'] ?? '-')); ?></td>
+                                                    <td><?php echo htmlspecialchars((string)($candidate['address'] ?? '-')); ?></td>
+                                                    <td>
+                                                        <a class="btn btn-sm btn-outline-primary" href="contact_detail.php?user_id=<?php echo (int)($candidate['user_id'] ?? 0); ?>">
+                                                            <i class="fas fa-eye"></i>
+                                                        </a>
+                                                    </td>
+                                                </tr>
+                                            <?php endforeach; ?>
+                                        </tbody>
+                                    </table>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" value="1" id="forceCreateIfSimilar" name="force_create_if_similar"<?php echo !empty($createFormState['force_create_if_similar']) ? ' checked' : ''; ?>>
+                                    <label class="form-check-label" for="forceCreateIfSimilar">
+                                        <?php echo htmlspecialchars(abTxt('Confermo la creazione di un nuovo record anche se simile a quelli trovati.', 'I confirm creating a new record even if similar records exist.')); ?>
+                                    </label>
+                                </div>
+                            </div>
+                        <?php endif; ?>
                         <div class="row g-2">
                             <div class="col-md-4">
                                 <label class="form-label"><?php echo htmlspecialchars($lang['contacts_name'] ?? abTxt('Nome', 'Name')); ?>*</label>
-                                <input type="text" name="name" class="form-control" required>
+                                <input type="text" name="name" class="form-control" value="<?php echo htmlspecialchars((string)($createFormState['name'] ?? '')); ?>" required>
                             </div>
                             <div class="col-md-4">
                                 <label class="form-label"><?php echo htmlspecialchars($lang['contacts_email'] ?? 'Email'); ?>*</label>
-                                <input type="email" name="email" class="form-control" required>
+                                <input type="email" name="email" class="form-control" value="<?php echo htmlspecialchars((string)($createFormState['email'] ?? '')); ?>" required>
                             </div>
                             <div class="col-md-4">
                                 <label class="form-label"><?php echo htmlspecialchars($lang['users_password'] ?? abTxt('Password', 'Password')); ?></label>
@@ -534,33 +883,33 @@ foreach ($directoryRows as $row) {
                             </div>
                             <div class="col-md-3">
                                 <label class="form-label"><?php echo htmlspecialchars($lang['contacts_phone'] ?? abTxt('Telefono', 'Phone')); ?></label>
-                                <input type="text" name="phone" class="form-control">
+                                <input type="text" name="phone" class="form-control" value="<?php echo htmlspecialchars((string)($createFormState['phone'] ?? '')); ?>">
                             </div>
                             <div class="col-md-5">
                                 <label class="form-label"><?php echo htmlspecialchars($lang['contacts_company'] ?? abTxt('Azienda', 'Company')); ?>*</label>
-                                <input type="text" name="company" class="form-control" required>
+                                <input type="text" name="company" class="form-control" value="<?php echo htmlspecialchars((string)($createFormState['company'] ?? '')); ?>" required>
                             </div>
                             <div class="col-md-4">
                                 <label class="form-label"><?php echo htmlspecialchars($lang['users_role'] ?? abTxt('Ruolo', 'Role')); ?>*</label>
                                 <select name="role" class="form-select" required>
                                     <?php foreach ($allowedCreateRoles as $r): ?>
-                                        <option value="<?php echo htmlspecialchars($r); ?>"><?php echo htmlspecialchars(abRoleLabel($r, $lang)); ?></option>
+                                        <option value="<?php echo htmlspecialchars($r); ?>"<?php echo ((string)($createFormState['role'] ?? '') === $r) ? ' selected' : ''; ?>><?php echo htmlspecialchars(abRoleLabel($r, $lang)); ?></option>
                                     <?php endforeach; ?>
                                 </select>
                             </div>
                             <div class="col-md-6">
                                 <label class="form-label">Indirizzo</label>
-                                <input type="text" name="address" class="form-control" placeholder="Via, numero civico, citta">
+                                <input type="text" name="address" class="form-control" placeholder="Via, numero civico, citta" value="<?php echo htmlspecialchars((string)($createFormState['address'] ?? '')); ?>">
                             </div>
                             <div class="col-md-3">
                                 <label class="form-label">Partita IVA</label>
-                                <input type="text" name="vat_number" class="form-control" placeholder="IT12345678901">
+                                <input type="text" name="vat_number" class="form-control" placeholder="IT12345678901" value="<?php echo htmlspecialchars((string)($createFormState['vat_number'] ?? '')); ?>">
                             </div>
                             <div class="col-md-3">
                                 <label class="form-label">Stato accesso</label>
                                 <select name="portal_access_level" id="createUserAccessLevel" class="form-select">
                                     <?php foreach ($accessLevelOptions as $value => $label): ?>
-                                        <option value="<?php echo htmlspecialchars($value); ?>"><?php echo htmlspecialchars($label); ?></option>
+                                        <option value="<?php echo htmlspecialchars($value); ?>"<?php echo ((string)($createFormState['portal_access_level'] ?? 'active') === $value) ? ' selected' : ''; ?>><?php echo htmlspecialchars($label); ?></option>
                                     <?php endforeach; ?>
                                 </select>
                             </div>

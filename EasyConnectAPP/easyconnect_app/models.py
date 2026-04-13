@@ -4,6 +4,26 @@ from dataclasses import dataclass
 
 
 @dataclass(slots=True)
+class UserPermissions:
+    firmware_update: bool = False
+    plant_create: bool = False
+    serial_lifecycle: bool = False
+    serial_reserve: bool = False
+    manual_peripheral: bool = False
+
+    @classmethod
+    def from_dict(cls, data: dict | None) -> "UserPermissions":
+        data = data or {}
+        return cls(
+            firmware_update=bool(data.get("firmware_update", data.get("can_firmware_update", False))),
+            plant_create=bool(data.get("plant_create", data.get("can_create_plants", False))),
+            serial_lifecycle=bool(data.get("serial_lifecycle", data.get("can_manage_serial_lifecycle", False))),
+            serial_reserve=bool(data.get("serial_reserve", data.get("can_reserve_serials", False))),
+            manual_peripheral=bool(data.get("manual_peripheral", data.get("can_assign_manual_peripherals", False))),
+        )
+
+
+@dataclass(slots=True)
 class UserSession:
     username: str
     role: str
@@ -76,6 +96,7 @@ class PeripheralInfo:
     serial_number: str
     board_type: str
     board_label: str
+    rs485_ip: str
     group: str
     mode: str
     firmware_version: str
@@ -91,6 +112,7 @@ class PeripheralInfo:
             serial_number=str(data.get("serial_number", data.get("slave_sn", "-"))),
             board_type=str(data.get("board_type", data.get("product_type_code", "-"))),
             board_label=str(data.get("board_label", data.get("type_label", "-"))),
+            rs485_ip=str(data.get("rs485_ip", data.get("slave_id", "-"))),
             group=str(data.get("group", data.get("slave_grp", "-"))),
             mode=str(data.get("mode", "-")),
             firmware_version=str(data.get("firmware_version", data.get("fw_version", "-"))),
@@ -142,6 +164,7 @@ class UserProfile:
     company: str
     name: str
     has_2fa: bool
+    permissions: UserPermissions
 
     @classmethod
     def from_dict(cls, data: dict) -> "UserProfile":
@@ -154,4 +177,37 @@ class UserProfile:
             company=str(data.get("company", "")),
             name=str(data.get("name", "")),
             has_2fa=bool(data.get("has_2fa", False)),
+            permissions=UserPermissions.from_dict(data.get("permissions")),
         )
+
+
+@dataclass(slots=True)
+class BoardSnapshot:
+    board_kind: str
+    product_type_code: str
+    board_label: str
+    serial_number: str
+    firmware_version: str
+    rs485_ip: int | None
+    group: int | None
+    mode_code: int | None
+    mode_label: str
+    api_url: str
+    api_key_state: str
+    customer_api_url: str
+    customer_api_key_state: str
+    feedback_enabled: bool | None
+    feedback_logic: int | None
+    feedback_delay_sec: int | None
+    feedback_attempts: int | None
+    feedback_message: str
+    safety_message: str
+    raw_info: str
+
+    @property
+    def is_master(self) -> bool:
+        return self.product_type_code in {"01", "02"} or self.board_kind == "master"
+
+    @property
+    def is_peripheral(self) -> bool:
+        return self.product_type_code in {"03", "04", "05"} or self.board_kind in {"relay", "pressure"}

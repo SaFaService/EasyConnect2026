@@ -149,10 +149,14 @@ class HomePage(QWidget):
         ]
 
         self._tiles: list[HomeTileButton] = []
+        self._tiles_by_key: dict[str, HomeTileButton] = {}
+        self._action_visibility: dict[str, bool] = {}
         for action in actions:
             btn = HomeTileButton(action)
             btn.clicked.connect(lambda _checked=False, k=action.key: self.action_clicked.emit(k))
             self._tiles.append(btn)
+            self._tiles_by_key[action.key] = btn
+            self._action_visibility[action.key] = True
 
         self._relayout_tiles()
 
@@ -174,16 +178,29 @@ class HomePage(QWidget):
     def set_session_text(self, value: str) -> None:
         self.session_label.setText(value)
 
+    def set_action_visible(self, action_key: str, visible: bool) -> None:
+        tile = self._tiles_by_key.get(action_key)
+        if tile is None:
+            return
+        self._action_visibility[action_key] = visible
+        tile.setHidden(not visible)
+        self._relayout_tiles()
+
     def resizeEvent(self, event) -> None:  # type: ignore[override]
         super().resizeEvent(event)
         self._relayout_tiles()
 
     def _relayout_tiles(self) -> None:
-        for idx, tile in enumerate(self._tiles):
+        for tile in self._tiles:
             self._grid.removeWidget(tile)
-            tile.show()
+            if not self._action_visibility.get(tile.action_key, True):
+                tile.hide()
 
-        if not self._tiles:
+        visible_tiles = [
+            tile for tile in self._tiles
+            if self._action_visibility.get(tile.action_key, True)
+        ]
+        if not visible_tiles:
             return
 
         margins = self._grid.contentsMargins()
@@ -191,15 +208,16 @@ class HomePage(QWidget):
             1,
             self._grid_holder.width() - margins.left() - margins.right(),
         )
-        tile_width = self._tiles[0].minimumWidth()
+        tile_width = visible_tiles[0].minimumWidth()
         spacing = self._grid.horizontalSpacing()
         cell_width = tile_width + max(0, spacing)
         columns = max(1, (available_width + max(0, spacing)) // max(1, cell_width))
 
-        for i, tile in enumerate(self._tiles):
+        for i, tile in enumerate(visible_tiles):
             row = i // columns
             col = i % columns
             self._grid.addWidget(tile, row, col, alignment=Qt.AlignLeft | Qt.AlignTop)
+            tile.show()
 
     def _load_custom_icon(self, base_names: list[str], fallback: QIcon) -> QIcon:
         valid_ext = (".png", ".jpg", ".jpeg", ".bmp", ".webp", ".svg")

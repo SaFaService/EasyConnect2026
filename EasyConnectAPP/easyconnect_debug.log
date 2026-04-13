@@ -2715,3 +2715,681 @@ easyconnect_app.services.api_client.ApiError: 2FA_REQUIRED
 2026-02-22 21:40:54,518 | DEBUG | httpcore.http11 | response_closed.complete
 2026-02-22 21:40:54,519 | DEBUG | easyconnect_app.services.api_client | HTTP response | status=200 | url=https://www.antralux.com/impianti/api_desktop_plant_detail.php
 2026-02-22 21:40:54,519 | DEBUG | easyconnect_app.services.api_client | HTTP json ok | url=https://www.antralux.com/impianti/api_desktop_plant_detail.php | type=dict
+2026-03-25 23:08:44,353 | INFO | __main__ | Avvio EasyConnect Desktop | base_url=https://www.antralux.com/impianti | mock_mode=False
+2026-03-25 23:08:47,086 | DEBUG | easyconnect_app.services.api_client | HTTP request | method=GET | url=https://www.antralux.com/impianti/api_desktop_version.php | as_form=False | payload=None | params={'current_version': '0.2.1'}
+2026-03-25 23:08:47,088 | DEBUG | httpcore.connection | connect_tcp.started host='www.antralux.com' port=443 local_address=None timeout=20.0 socket_options=None
+2026-03-25 23:08:47,279 | DEBUG | httpcore.connection | connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x0000018D232A6120>
+2026-03-25 23:08:47,279 | DEBUG | httpcore.connection | start_tls.started ssl_context=<ssl.SSLContext object at 0x0000018D232C8A70> server_hostname='www.antralux.com' timeout=20.0
+2026-03-25 23:08:47,315 | DEBUG | httpcore.connection | start_tls.complete return_value=<httpcore._backends.sync.SyncStream object at 0x0000018D233051D0>
+2026-03-25 23:08:47,316 | DEBUG | httpcore.http11 | send_request_headers.started request=<Request [b'GET']>
+2026-03-25 23:08:47,316 | DEBUG | httpcore.http11 | send_request_headers.complete
+2026-03-25 23:08:47,317 | DEBUG | httpcore.http11 | send_request_body.started request=<Request [b'GET']>
+2026-03-25 23:08:47,317 | DEBUG | httpcore.http11 | send_request_body.complete
+2026-03-25 23:08:47,318 | DEBUG | httpcore.http11 | receive_response_headers.started request=<Request [b'GET']>
+2026-03-25 23:08:47,359 | DEBUG | httpcore.http11 | receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Wed, 25 Mar 2026 22:08:48 GMT'), (b'Server', b'Apache'), (b'Cache-Control', b'no-store, no-cache, must-revalidate'), (b'Pragma', b'no-cache'), (b'Upgrade', b'h2,h2c'), (b'Connection', b'Upgrade, Keep-Alive'), (b'Vary', b'Accept-Encoding'), (b'Keep-Alive', b'timeout=5, max=100'), (b'Transfer-Encoding', b'chunked'), (b'Content-Type', b'application/json')])
+2026-03-25 23:08:47,360 | INFO | httpx | HTTP Request: GET https://www.antralux.com/impianti/api_desktop_version.php?current_version=0.2.1 "HTTP/1.1 200 OK"
+2026-03-25 23:08:47,360 | DEBUG | httpcore.http11 | receive_response_body.started request=<Request [b'GET']>
+2026-03-25 23:08:47,360 | DEBUG | httpcore.http11 | receive_response_body.complete
+2026-03-25 23:08:47,360 | DEBUG | httpcore.http11 | response_closed.started
+2026-03-25 23:08:47,361 | DEBUG | httpcore.http11 | response_closed.complete
+2026-03-25 23:08:47,361 | DEBUG | easyconnect_app.services.api_client | HTTP response | status=200 | url=https://www.antralux.com/impianti/api_desktop_version.php
+2026-03-25 23:08:47,361 | DEBUG | easyconnect_app.services.api_client | HTTP json ok | url=https://www.antralux.com/impianti/api_desktop_version.php | type=dict
+2026-03-25 23:09:03,742 | INFO | easyconnect_app.ui.main_window | UI login requested | user=vendite@safaservice.com
+2026-03-25 23:09:03,743 | INFO | easyconnect_app.ui.main_window | UI login dispatch | user=vendite@safaservice.com | had_otp=False | otp_len=0
+2026-03-25 23:09:03,744 | INFO | easyconnect_app.services.auth_service | Login attempt | user=vendite@safaservice.com | mock_mode=False | has_otp=False
+2026-03-25 23:09:03,745 | DEBUG | easyconnect_app.services.api_client | HTTP request | method=POST | url=https://www.antralux.com/impianti/api_desktop_auth.php | as_form=False | payload={'email': 'vendite@safaservice.com', 'username': 'vendite@safaservice.com', 'password': '<masked>', 'code': '', 'otp': '', 'otp_code': '', 'two_factor_code': '', '2fa_code': '', 'source': 'desktop_app'} | params=None
+2026-03-25 23:09:03,745 | DEBUG | httpcore.connection | close.started
+2026-03-25 23:09:03,746 | DEBUG | httpcore.connection | close.complete
+2026-03-25 23:09:03,746 | DEBUG | httpcore.connection | connect_tcp.started host='www.antralux.com' port=443 local_address=None timeout=20.0 socket_options=None
+2026-03-25 23:09:03,883 | DEBUG | httpcore.connection | connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x0000018D23305E50>
+2026-03-25 23:09:03,883 | DEBUG | httpcore.connection | start_tls.started ssl_context=<ssl.SSLContext object at 0x0000018D232C8A70> server_hostname='www.antralux.com' timeout=20.0
+2026-03-25 23:09:03,923 | DEBUG | httpcore.connection | start_tls.complete return_value=<httpcore._backends.sync.SyncStream object at 0x0000018D2334C640>
+2026-03-25 23:09:03,923 | DEBUG | httpcore.http11 | send_request_headers.started request=<Request [b'POST']>
+2026-03-25 23:09:03,924 | DEBUG | httpcore.http11 | send_request_headers.complete
+2026-03-25 23:09:03,924 | DEBUG | httpcore.http11 | send_request_body.started request=<Request [b'POST']>
+2026-03-25 23:09:03,924 | DEBUG | httpcore.http11 | send_request_body.complete
+2026-03-25 23:09:03,925 | DEBUG | httpcore.http11 | receive_response_headers.started request=<Request [b'POST']>
+2026-03-25 23:09:04,016 | DEBUG | httpcore.http11 | receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Wed, 25 Mar 2026 22:09:04 GMT'), (b'Server', b'Apache'), (b'Expires', b'Thu, 19 Nov 1981 08:52:00 GMT'), (b'Cache-Control', b'no-store, no-cache, must-revalidate'), (b'Pragma', b'no-cache'), (b'Set-Cookie', b'PHPSESSID=8604041efb84eed4c51b0edd74196577; path=/'), (b'Upgrade', b'h2,h2c'), (b'Connection', b'Upgrade, Keep-Alive'), (b'Vary', b'Accept-Encoding'), (b'Keep-Alive', b'timeout=5, max=100'), (b'Transfer-Encoding', b'chunked'), (b'Content-Type', b'application/json')])
+2026-03-25 23:09:04,018 | INFO | httpx | HTTP Request: POST https://www.antralux.com/impianti/api_desktop_auth.php "HTTP/1.1 200 OK"
+2026-03-25 23:09:04,018 | DEBUG | httpcore.http11 | receive_response_body.started request=<Request [b'POST']>
+2026-03-25 23:09:04,019 | DEBUG | httpcore.http11 | receive_response_body.complete
+2026-03-25 23:09:04,019 | DEBUG | httpcore.http11 | response_closed.started
+2026-03-25 23:09:04,019 | DEBUG | httpcore.http11 | response_closed.complete
+2026-03-25 23:09:04,020 | DEBUG | easyconnect_app.services.api_client | HTTP response | status=200 | url=https://www.antralux.com/impianti/api_desktop_auth.php
+2026-03-25 23:09:04,020 | DEBUG | easyconnect_app.services.api_client | HTTP json ok | url=https://www.antralux.com/impianti/api_desktop_auth.php | type=dict
+2026-03-25 23:09:04,020 | INFO | easyconnect_app.services.auth_service | Login success | user=vendite@safaservice.com | role=builder | token=True
+2026-03-25 23:09:04,021 | INFO | easyconnect_app.ui.main_window | UI login success | user=vendite@safaservice.com | role=builder
+2026-03-25 23:09:08,245 | DEBUG | easyconnect_app.services.api_client | HTTP request | method=GET | url=https://www.antralux.com/impianti/api_desktop_plants.php | as_form=False | payload=None | params=None
+2026-03-25 23:09:08,246 | DEBUG | httpcore.http11 | send_request_headers.started request=<Request [b'GET']>
+2026-03-25 23:09:08,246 | DEBUG | httpcore.http11 | send_request_headers.complete
+2026-03-25 23:09:08,246 | DEBUG | httpcore.http11 | send_request_body.started request=<Request [b'GET']>
+2026-03-25 23:09:08,247 | DEBUG | httpcore.http11 | send_request_body.complete
+2026-03-25 23:09:08,247 | DEBUG | httpcore.http11 | receive_response_headers.started request=<Request [b'GET']>
+2026-03-25 23:09:08,307 | DEBUG | httpcore.http11 | receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Wed, 25 Mar 2026 22:09:09 GMT'), (b'Server', b'Apache'), (b'Expires', b'Thu, 19 Nov 1981 08:52:00 GMT'), (b'Cache-Control', b'no-store, no-cache, must-revalidate'), (b'Pragma', b'no-cache'), (b'Vary', b'Accept-Encoding'), (b'Keep-Alive', b'timeout=5, max=99'), (b'Connection', b'Keep-Alive'), (b'Transfer-Encoding', b'chunked'), (b'Content-Type', b'application/json')])
+2026-03-25 23:09:08,307 | INFO | httpx | HTTP Request: GET https://www.antralux.com/impianti/api_desktop_plants.php "HTTP/1.1 200 OK"
+2026-03-25 23:09:08,308 | DEBUG | httpcore.http11 | receive_response_body.started request=<Request [b'GET']>
+2026-03-25 23:09:08,308 | DEBUG | httpcore.http11 | receive_response_body.complete
+2026-03-25 23:09:08,308 | DEBUG | httpcore.http11 | response_closed.started
+2026-03-25 23:09:08,308 | DEBUG | httpcore.http11 | response_closed.complete
+2026-03-25 23:09:08,309 | DEBUG | easyconnect_app.services.api_client | HTTP response | status=200 | url=https://www.antralux.com/impianti/api_desktop_plants.php
+2026-03-25 23:09:08,309 | DEBUG | easyconnect_app.services.api_client | HTTP json ok | url=https://www.antralux.com/impianti/api_desktop_plants.php | type=dict
+2026-03-26 08:58:30,149 | INFO | __main__ | Avvio EasyConnect Desktop | base_url=https://www.antralux.com/impianti | mock_mode=False
+2026-03-26 08:58:34,311 | DEBUG | easyconnect_app.services.api_client | HTTP request | method=GET | url=https://www.antralux.com/impianti/api_desktop_version.php | as_form=False | payload=None | params={'current_version': '0.2.1'}
+2026-03-26 08:58:34,312 | DEBUG | httpcore.connection | connect_tcp.started host='www.antralux.com' port=443 local_address=None timeout=20.0 socket_options=None
+2026-03-26 08:58:34,981 | DEBUG | httpcore.connection | connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x000002D47A546120>
+2026-03-26 08:58:34,986 | DEBUG | httpcore.connection | start_tls.started ssl_context=<ssl.SSLContext object at 0x000002D47A568A70> server_hostname='www.antralux.com' timeout=20.0
+2026-03-26 08:58:35,190 | DEBUG | httpcore.connection | start_tls.complete return_value=<httpcore._backends.sync.SyncStream object at 0x000002D47A5A51D0>
+2026-03-26 08:58:35,191 | DEBUG | httpcore.http11 | send_request_headers.started request=<Request [b'GET']>
+2026-03-26 08:58:35,192 | DEBUG | httpcore.http11 | send_request_headers.complete
+2026-03-26 08:58:35,192 | DEBUG | httpcore.http11 | send_request_body.started request=<Request [b'GET']>
+2026-03-26 08:58:35,193 | DEBUG | httpcore.http11 | send_request_body.complete
+2026-03-26 08:58:35,193 | DEBUG | httpcore.http11 | receive_response_headers.started request=<Request [b'GET']>
+2026-03-26 08:58:35,441 | DEBUG | httpcore.http11 | receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Thu, 26 Mar 2026 07:58:35 GMT'), (b'Server', b'Apache'), (b'Cache-Control', b'no-store, no-cache, must-revalidate'), (b'Pragma', b'no-cache'), (b'Upgrade', b'h2,h2c'), (b'Connection', b'Upgrade, Keep-Alive'), (b'Vary', b'Accept-Encoding'), (b'Keep-Alive', b'timeout=5, max=100'), (b'Transfer-Encoding', b'chunked'), (b'Content-Type', b'application/json')])
+2026-03-26 08:58:35,443 | INFO | httpx | HTTP Request: GET https://www.antralux.com/impianti/api_desktop_version.php?current_version=0.2.1 "HTTP/1.1 200 OK"
+2026-03-26 08:58:35,444 | DEBUG | httpcore.http11 | receive_response_body.started request=<Request [b'GET']>
+2026-03-26 08:58:35,444 | DEBUG | httpcore.http11 | receive_response_body.complete
+2026-03-26 08:58:35,445 | DEBUG | httpcore.http11 | response_closed.started
+2026-03-26 08:58:35,445 | DEBUG | httpcore.http11 | response_closed.complete
+2026-03-26 08:58:35,446 | DEBUG | easyconnect_app.services.api_client | HTTP response | status=200 | url=https://www.antralux.com/impianti/api_desktop_version.php
+2026-03-26 08:58:35,447 | DEBUG | easyconnect_app.services.api_client | HTTP json ok | url=https://www.antralux.com/impianti/api_desktop_version.php | type=dict
+2026-03-26 08:58:46,729 | INFO | easyconnect_app.ui.main_window | UI login requested | user=vendite@safaservice.com
+2026-03-26 08:58:46,730 | INFO | easyconnect_app.ui.main_window | UI login dispatch | user=vendite@safaservice.com | had_otp=False | otp_len=0
+2026-03-26 08:58:46,732 | INFO | easyconnect_app.services.auth_service | Login attempt | user=vendite@safaservice.com | mock_mode=False | has_otp=False
+2026-03-26 08:58:46,733 | DEBUG | easyconnect_app.services.api_client | HTTP request | method=POST | url=https://www.antralux.com/impianti/api_desktop_auth.php | as_form=False | payload={'email': 'vendite@safaservice.com', 'username': 'vendite@safaservice.com', 'password': '<masked>', 'code': '', 'otp': '', 'otp_code': '', 'two_factor_code': '', '2fa_code': '', 'source': 'desktop_app'} | params=None
+2026-03-26 08:58:46,735 | DEBUG | httpcore.connection | close.started
+2026-03-26 08:58:46,736 | DEBUG | httpcore.connection | close.complete
+2026-03-26 08:58:46,737 | DEBUG | httpcore.connection | connect_tcp.started host='www.antralux.com' port=443 local_address=None timeout=20.0 socket_options=None
+2026-03-26 08:58:48,270 | DEBUG | httpcore.connection | connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x000002D47A5A5E50>
+2026-03-26 08:58:48,270 | DEBUG | httpcore.connection | start_tls.started ssl_context=<ssl.SSLContext object at 0x000002D47A568A70> server_hostname='www.antralux.com' timeout=20.0
+2026-03-26 08:58:48,802 | DEBUG | httpcore.connection | start_tls.complete return_value=<httpcore._backends.sync.SyncStream object at 0x000002D47A5EC640>
+2026-03-26 08:58:48,802 | DEBUG | httpcore.http11 | send_request_headers.started request=<Request [b'POST']>
+2026-03-26 08:58:48,803 | DEBUG | httpcore.http11 | send_request_headers.complete
+2026-03-26 08:58:48,803 | DEBUG | httpcore.http11 | send_request_body.started request=<Request [b'POST']>
+2026-03-26 08:58:48,804 | DEBUG | httpcore.http11 | send_request_body.complete
+2026-03-26 08:58:48,804 | DEBUG | httpcore.http11 | receive_response_headers.started request=<Request [b'POST']>
+2026-03-26 08:58:49,170 | DEBUG | httpcore.http11 | receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Thu, 26 Mar 2026 07:58:49 GMT'), (b'Server', b'Apache'), (b'Expires', b'Thu, 19 Nov 1981 08:52:00 GMT'), (b'Cache-Control', b'no-store, no-cache, must-revalidate'), (b'Pragma', b'no-cache'), (b'Set-Cookie', b'PHPSESSID=832a11cfd8a51602a81b80e376dcf89b; path=/'), (b'Upgrade', b'h2,h2c'), (b'Connection', b'Upgrade, Keep-Alive'), (b'Vary', b'Accept-Encoding'), (b'Keep-Alive', b'timeout=5, max=100'), (b'Transfer-Encoding', b'chunked'), (b'Content-Type', b'application/json')])
+2026-03-26 08:58:49,172 | INFO | httpx | HTTP Request: POST https://www.antralux.com/impianti/api_desktop_auth.php "HTTP/1.1 200 OK"
+2026-03-26 08:58:49,173 | DEBUG | httpcore.http11 | receive_response_body.started request=<Request [b'POST']>
+2026-03-26 08:58:49,173 | DEBUG | httpcore.http11 | receive_response_body.complete
+2026-03-26 08:58:49,174 | DEBUG | httpcore.http11 | response_closed.started
+2026-03-26 08:58:49,174 | DEBUG | httpcore.http11 | response_closed.complete
+2026-03-26 08:58:49,175 | DEBUG | easyconnect_app.services.api_client | HTTP response | status=200 | url=https://www.antralux.com/impianti/api_desktop_auth.php
+2026-03-26 08:58:49,175 | DEBUG | easyconnect_app.services.api_client | HTTP json ok | url=https://www.antralux.com/impianti/api_desktop_auth.php | type=dict
+2026-03-26 08:58:49,176 | INFO | easyconnect_app.services.auth_service | Login success | user=vendite@safaservice.com | role=builder | token=True
+2026-03-26 08:58:49,176 | INFO | easyconnect_app.ui.main_window | UI login success | user=vendite@safaservice.com | role=builder
+2026-03-26 09:07:49,810 | DEBUG | easyconnect_app.services.api_client | HTTP request | method=GET | url=https://www.antralux.com/impianti/api_desktop_plants.php | as_form=False | payload=None | params=None
+2026-03-26 09:07:49,812 | DEBUG | httpcore.connection | close.started
+2026-03-26 09:07:49,813 | DEBUG | httpcore.connection | close.complete
+2026-03-26 09:07:49,814 | DEBUG | httpcore.connection | connect_tcp.started host='www.antralux.com' port=443 local_address=None timeout=20.0 socket_options=None
+2026-03-26 09:07:49,996 | DEBUG | httpcore.connection | connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x000002D47A483E10>
+2026-03-26 09:07:49,996 | DEBUG | httpcore.connection | start_tls.started ssl_context=<ssl.SSLContext object at 0x000002D47A568A70> server_hostname='www.antralux.com' timeout=20.0
+2026-03-26 09:07:50,231 | DEBUG | httpcore.connection | start_tls.complete return_value=<httpcore._backends.sync.SyncStream object at 0x000002D47A4FF2F0>
+2026-03-26 09:07:50,232 | DEBUG | httpcore.http11 | send_request_headers.started request=<Request [b'GET']>
+2026-03-26 09:07:50,233 | DEBUG | httpcore.http11 | send_request_headers.complete
+2026-03-26 09:07:50,233 | DEBUG | httpcore.http11 | send_request_body.started request=<Request [b'GET']>
+2026-03-26 09:07:50,234 | DEBUG | httpcore.http11 | send_request_body.complete
+2026-03-26 09:07:50,234 | DEBUG | httpcore.http11 | receive_response_headers.started request=<Request [b'GET']>
+2026-03-26 09:07:50,465 | DEBUG | httpcore.http11 | receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Thu, 26 Mar 2026 08:07:50 GMT'), (b'Server', b'Apache'), (b'Expires', b'Thu, 19 Nov 1981 08:52:00 GMT'), (b'Cache-Control', b'no-store, no-cache, must-revalidate'), (b'Pragma', b'no-cache'), (b'Upgrade', b'h2,h2c'), (b'Connection', b'Upgrade, Keep-Alive'), (b'Vary', b'Accept-Encoding'), (b'Keep-Alive', b'timeout=5, max=100'), (b'Transfer-Encoding', b'chunked'), (b'Content-Type', b'application/json')])
+2026-03-26 09:07:50,466 | INFO | httpx | HTTP Request: GET https://www.antralux.com/impianti/api_desktop_plants.php "HTTP/1.1 200 OK"
+2026-03-26 09:07:50,466 | DEBUG | httpcore.http11 | receive_response_body.started request=<Request [b'GET']>
+2026-03-26 09:07:50,467 | DEBUG | httpcore.http11 | receive_response_body.complete
+2026-03-26 09:07:50,467 | DEBUG | httpcore.http11 | response_closed.started
+2026-03-26 09:07:50,468 | DEBUG | httpcore.http11 | response_closed.complete
+2026-03-26 09:07:50,468 | DEBUG | easyconnect_app.services.api_client | HTTP response | status=200 | url=https://www.antralux.com/impianti/api_desktop_plants.php
+2026-03-26 09:07:50,468 | DEBUG | easyconnect_app.services.api_client | HTTP json ok | url=https://www.antralux.com/impianti/api_desktop_plants.php | type=dict
+2026-03-26 09:07:56,101 | DEBUG | easyconnect_app.services.api_client | HTTP request | method=GET | url=https://www.antralux.com/impianti/api_desktop_profile.php | as_form=False | payload=None | params=None
+2026-03-26 09:07:56,101 | DEBUG | httpcore.connection | close.started
+2026-03-26 09:07:56,102 | DEBUG | httpcore.connection | close.complete
+2026-03-26 09:07:56,102 | DEBUG | httpcore.connection | connect_tcp.started host='www.antralux.com' port=443 local_address=None timeout=20.0 socket_options=None
+2026-03-26 09:07:56,179 | DEBUG | httpcore.connection | connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x000002D47A5A1370>
+2026-03-26 09:07:56,180 | DEBUG | httpcore.connection | start_tls.started ssl_context=<ssl.SSLContext object at 0x000002D47A568A70> server_hostname='www.antralux.com' timeout=20.0
+2026-03-26 09:07:56,371 | DEBUG | httpcore.connection | start_tls.complete return_value=<httpcore._backends.sync.SyncStream object at 0x000002D47A5A1480>
+2026-03-26 09:07:56,372 | DEBUG | httpcore.http11 | send_request_headers.started request=<Request [b'GET']>
+2026-03-26 09:07:56,372 | DEBUG | httpcore.http11 | send_request_headers.complete
+2026-03-26 09:07:56,372 | DEBUG | httpcore.http11 | send_request_body.started request=<Request [b'GET']>
+2026-03-26 09:07:56,373 | DEBUG | httpcore.http11 | send_request_body.complete
+2026-03-26 09:07:56,373 | DEBUG | httpcore.http11 | receive_response_headers.started request=<Request [b'GET']>
+2026-03-26 09:07:56,548 | DEBUG | httpcore.http11 | receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Thu, 26 Mar 2026 08:07:57 GMT'), (b'Server', b'Apache'), (b'Expires', b'Thu, 19 Nov 1981 08:52:00 GMT'), (b'Cache-Control', b'no-store, no-cache, must-revalidate'), (b'Pragma', b'no-cache'), (b'Upgrade', b'h2,h2c'), (b'Connection', b'Upgrade, Keep-Alive'), (b'Vary', b'Accept-Encoding'), (b'Keep-Alive', b'timeout=5, max=100'), (b'Transfer-Encoding', b'chunked'), (b'Content-Type', b'application/json')])
+2026-03-26 09:07:56,549 | INFO | httpx | HTTP Request: GET https://www.antralux.com/impianti/api_desktop_profile.php "HTTP/1.1 200 OK"
+2026-03-26 09:07:56,549 | DEBUG | httpcore.http11 | receive_response_body.started request=<Request [b'GET']>
+2026-03-26 09:07:56,549 | DEBUG | httpcore.http11 | receive_response_body.complete
+2026-03-26 09:07:56,550 | DEBUG | httpcore.http11 | response_closed.started
+2026-03-26 09:07:56,550 | DEBUG | httpcore.http11 | response_closed.complete
+2026-03-26 09:07:56,550 | DEBUG | easyconnect_app.services.api_client | HTTP response | status=200 | url=https://www.antralux.com/impianti/api_desktop_profile.php
+2026-03-26 09:07:56,551 | DEBUG | easyconnect_app.services.api_client | HTTP json ok | url=https://www.antralux.com/impianti/api_desktop_profile.php | type=dict
+2026-03-26 09:09:53,100 | INFO | __main__ | Avvio EasyConnect Desktop | base_url=https://www.antralux.com/impianti | mock_mode=False
+2026-03-26 09:09:56,065 | DEBUG | easyconnect_app.services.api_client | HTTP request | method=GET | url=https://www.antralux.com/impianti/api_desktop_version.php | as_form=False | payload=None | params={'current_version': '0.2.1'}
+2026-03-26 09:09:56,070 | DEBUG | httpcore.connection | connect_tcp.started host='www.antralux.com' port=443 local_address=None timeout=20.0 socket_options=None
+2026-03-26 09:09:56,218 | DEBUG | httpcore.connection | connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x000002A6F1886120>
+2026-03-26 09:09:56,305 | DEBUG | httpcore.connection | start_tls.started ssl_context=<ssl.SSLContext object at 0x000002A6F18A8A70> server_hostname='www.antralux.com' timeout=20.0
+2026-03-26 09:09:56,654 | DEBUG | httpcore.connection | start_tls.complete return_value=<httpcore._backends.sync.SyncStream object at 0x000002A6F18E51D0>
+2026-03-26 09:09:56,655 | DEBUG | httpcore.http11 | send_request_headers.started request=<Request [b'GET']>
+2026-03-26 09:09:56,657 | DEBUG | httpcore.http11 | send_request_headers.complete
+2026-03-26 09:09:56,657 | DEBUG | httpcore.http11 | send_request_body.started request=<Request [b'GET']>
+2026-03-26 09:09:56,658 | DEBUG | httpcore.http11 | send_request_body.complete
+2026-03-26 09:09:56,659 | DEBUG | httpcore.http11 | receive_response_headers.started request=<Request [b'GET']>
+2026-03-26 09:09:56,825 | DEBUG | httpcore.http11 | receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Thu, 26 Mar 2026 08:09:57 GMT'), (b'Server', b'Apache'), (b'Cache-Control', b'no-store, no-cache, must-revalidate'), (b'Pragma', b'no-cache'), (b'Upgrade', b'h2,h2c'), (b'Connection', b'Upgrade, Keep-Alive'), (b'Vary', b'Accept-Encoding'), (b'Keep-Alive', b'timeout=5, max=100'), (b'Transfer-Encoding', b'chunked'), (b'Content-Type', b'application/json')])
+2026-03-26 09:09:56,828 | INFO | httpx | HTTP Request: GET https://www.antralux.com/impianti/api_desktop_version.php?current_version=0.2.1 "HTTP/1.1 200 OK"
+2026-03-26 09:09:56,829 | DEBUG | httpcore.http11 | receive_response_body.started request=<Request [b'GET']>
+2026-03-26 09:09:56,829 | DEBUG | httpcore.http11 | receive_response_body.complete
+2026-03-26 09:09:56,830 | DEBUG | httpcore.http11 | response_closed.started
+2026-03-26 09:09:56,830 | DEBUG | httpcore.http11 | response_closed.complete
+2026-03-26 09:09:56,831 | DEBUG | easyconnect_app.services.api_client | HTTP response | status=200 | url=https://www.antralux.com/impianti/api_desktop_version.php
+2026-03-26 09:09:56,846 | DEBUG | easyconnect_app.services.api_client | HTTP json ok | url=https://www.antralux.com/impianti/api_desktop_version.php | type=dict
+2026-03-26 09:10:19,220 | INFO | easyconnect_app.ui.main_window | UI login requested | user=antonio.falcinelli@mabsolution.it
+2026-03-26 09:10:19,221 | INFO | easyconnect_app.ui.main_window | UI login dispatch | user=antonio.falcinelli@mabsolution.it | had_otp=False | otp_len=0
+2026-03-26 09:10:19,225 | INFO | easyconnect_app.services.auth_service | Login attempt | user=antonio.falcinelli@mabsolution.it | mock_mode=False | has_otp=False
+2026-03-26 09:10:19,225 | DEBUG | easyconnect_app.services.api_client | HTTP request | method=POST | url=https://www.antralux.com/impianti/api_desktop_auth.php | as_form=False | payload={'email': 'antonio.falcinelli@mabsolution.it', 'username': 'antonio.falcinelli@mabsolution.it', 'password': '<masked>', 'code': '', 'otp': '', 'otp_code': '', 'two_factor_code': '', '2fa_code': '', 'source': 'desktop_app'} | params=None
+2026-03-26 09:10:19,226 | DEBUG | httpcore.connection | close.started
+2026-03-26 09:10:19,229 | DEBUG | httpcore.connection | close.complete
+2026-03-26 09:10:19,229 | DEBUG | httpcore.connection | connect_tcp.started host='www.antralux.com' port=443 local_address=None timeout=20.0 socket_options=None
+2026-03-26 09:10:19,428 | DEBUG | httpcore.connection | connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x000002A6F18E5E50>
+2026-03-26 09:10:19,429 | DEBUG | httpcore.connection | start_tls.started ssl_context=<ssl.SSLContext object at 0x000002A6F18A8A70> server_hostname='www.antralux.com' timeout=20.0
+2026-03-26 09:10:19,631 | DEBUG | httpcore.connection | start_tls.complete return_value=<httpcore._backends.sync.SyncStream object at 0x000002A6F192C640>
+2026-03-26 09:10:19,633 | DEBUG | httpcore.http11 | send_request_headers.started request=<Request [b'POST']>
+2026-03-26 09:10:19,633 | DEBUG | httpcore.http11 | send_request_headers.complete
+2026-03-26 09:10:19,634 | DEBUG | httpcore.http11 | send_request_body.started request=<Request [b'POST']>
+2026-03-26 09:10:19,634 | DEBUG | httpcore.http11 | send_request_body.complete
+2026-03-26 09:10:19,635 | DEBUG | httpcore.http11 | receive_response_headers.started request=<Request [b'POST']>
+2026-03-26 09:10:19,833 | DEBUG | httpcore.http11 | receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Thu, 26 Mar 2026 08:10:20 GMT'), (b'Server', b'Apache'), (b'Expires', b'Thu, 19 Nov 1981 08:52:00 GMT'), (b'Cache-Control', b'no-store, no-cache, must-revalidate'), (b'Pragma', b'no-cache'), (b'Set-Cookie', b'PHPSESSID=bb316d458fc2cc2f9cef6a497088450b; path=/'), (b'Upgrade', b'h2,h2c'), (b'Connection', b'Upgrade, Keep-Alive'), (b'Vary', b'Accept-Encoding'), (b'Keep-Alive', b'timeout=5, max=100'), (b'Transfer-Encoding', b'chunked'), (b'Content-Type', b'application/json')])
+2026-03-26 09:10:19,834 | INFO | httpx | HTTP Request: POST https://www.antralux.com/impianti/api_desktop_auth.php "HTTP/1.1 200 OK"
+2026-03-26 09:10:19,835 | DEBUG | httpcore.http11 | receive_response_body.started request=<Request [b'POST']>
+2026-03-26 09:10:19,838 | DEBUG | httpcore.http11 | receive_response_body.complete
+2026-03-26 09:10:19,838 | DEBUG | httpcore.http11 | response_closed.started
+2026-03-26 09:10:19,840 | DEBUG | httpcore.http11 | response_closed.complete
+2026-03-26 09:10:19,840 | DEBUG | easyconnect_app.services.api_client | HTTP response | status=200 | url=https://www.antralux.com/impianti/api_desktop_auth.php
+2026-03-26 09:10:19,841 | DEBUG | easyconnect_app.services.api_client | HTTP json ok | url=https://www.antralux.com/impianti/api_desktop_auth.php | type=dict
+2026-03-26 09:10:19,842 | INFO | easyconnect_app.services.auth_service | Login success | user=antonio.falcinelli@mabsolution.it | role=builder | token=True
+2026-03-26 09:10:19,842 | INFO | easyconnect_app.ui.main_window | UI login success | user=antonio.falcinelli@mabsolution.it | role=builder
+2026-03-26 09:49:59,985 | DEBUG | easyconnect_app.services.api_client | HTTP request | method=GET | url=https://www.antralux.com/impianti/api_desktop_plants.php | as_form=False | payload=None | params=None
+2026-03-26 09:49:59,986 | DEBUG | httpcore.connection | close.started
+2026-03-26 09:49:59,987 | DEBUG | httpcore.connection | close.complete
+2026-03-26 09:49:59,987 | DEBUG | httpcore.connection | connect_tcp.started host='www.antralux.com' port=443 local_address=None timeout=20.0 socket_options=None
+2026-03-26 09:50:00,318 | DEBUG | httpcore.connection | connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x000002A6F17C7E10>
+2026-03-26 09:50:00,318 | DEBUG | httpcore.connection | start_tls.started ssl_context=<ssl.SSLContext object at 0x000002A6F18A8A70> server_hostname='www.antralux.com' timeout=20.0
+2026-03-26 09:50:00,527 | DEBUG | httpcore.connection | start_tls.complete return_value=<httpcore._backends.sync.SyncStream object at 0x000002A6F183F2F0>
+2026-03-26 09:50:00,528 | DEBUG | httpcore.http11 | send_request_headers.started request=<Request [b'GET']>
+2026-03-26 09:50:00,528 | DEBUG | httpcore.http11 | send_request_headers.complete
+2026-03-26 09:50:00,529 | DEBUG | httpcore.http11 | send_request_body.started request=<Request [b'GET']>
+2026-03-26 09:50:00,529 | DEBUG | httpcore.http11 | send_request_body.complete
+2026-03-26 09:50:00,529 | DEBUG | httpcore.http11 | receive_response_headers.started request=<Request [b'GET']>
+2026-03-26 09:50:00,650 | DEBUG | httpcore.http11 | receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Thu, 26 Mar 2026 08:50:01 GMT'), (b'Server', b'Apache'), (b'Expires', b'Thu, 19 Nov 1981 08:52:00 GMT'), (b'Cache-Control', b'no-store, no-cache, must-revalidate'), (b'Pragma', b'no-cache'), (b'Upgrade', b'h2,h2c'), (b'Connection', b'Upgrade, Keep-Alive'), (b'Vary', b'Accept-Encoding'), (b'Keep-Alive', b'timeout=5, max=100'), (b'Transfer-Encoding', b'chunked'), (b'Content-Type', b'application/json')])
+2026-03-26 09:50:00,650 | INFO | httpx | HTTP Request: GET https://www.antralux.com/impianti/api_desktop_plants.php "HTTP/1.1 200 OK"
+2026-03-26 09:50:00,651 | DEBUG | httpcore.http11 | receive_response_body.started request=<Request [b'GET']>
+2026-03-26 09:50:00,651 | DEBUG | httpcore.http11 | receive_response_body.complete
+2026-03-26 09:50:00,651 | DEBUG | httpcore.http11 | response_closed.started
+2026-03-26 09:50:00,652 | DEBUG | httpcore.http11 | response_closed.complete
+2026-03-26 09:50:00,652 | DEBUG | easyconnect_app.services.api_client | HTTP response | status=200 | url=https://www.antralux.com/impianti/api_desktop_plants.php
+2026-03-26 09:50:00,652 | DEBUG | easyconnect_app.services.api_client | HTTP json ok | url=https://www.antralux.com/impianti/api_desktop_plants.php | type=dict
+2026-03-26 11:13:00,339 | INFO | __main__ | Avvio EasyConnect Desktop | base_url=https://www.antralux.com/impianti | mock_mode=False
+2026-03-26 11:13:08,225 | DEBUG | easyconnect_app.services.api_client | HTTP request | method=GET | url=https://www.antralux.com/impianti/api_desktop_version.php | as_form=False | payload=None | params={'current_version': '0.2.1'}
+2026-03-26 11:13:08,434 | DEBUG | httpcore.connection | connect_tcp.started host='www.antralux.com' port=443 local_address=None timeout=20.0 socket_options=None
+2026-03-26 11:13:08,634 | DEBUG | httpcore.connection | connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x00000187DFC63380>
+2026-03-26 11:13:08,636 | DEBUG | httpcore.connection | start_tls.started ssl_context=<ssl.SSLContext object at 0x00000187DFD14DD0> server_hostname='www.antralux.com' timeout=20.0
+2026-03-26 11:13:08,729 | DEBUG | httpcore.connection | start_tls.complete return_value=<httpcore._backends.sync.SyncStream object at 0x00000187DFD79A90>
+2026-03-26 11:13:08,731 | DEBUG | httpcore.http11 | send_request_headers.started request=<Request [b'GET']>
+2026-03-26 11:13:08,732 | DEBUG | httpcore.http11 | send_request_headers.complete
+2026-03-26 11:13:08,733 | DEBUG | httpcore.http11 | send_request_body.started request=<Request [b'GET']>
+2026-03-26 11:13:08,733 | DEBUG | httpcore.http11 | send_request_body.complete
+2026-03-26 11:13:08,734 | DEBUG | httpcore.http11 | receive_response_headers.started request=<Request [b'GET']>
+2026-03-26 11:13:08,816 | DEBUG | httpcore.http11 | receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Thu, 26 Mar 2026 10:13:09 GMT'), (b'Server', b'Apache'), (b'Cache-Control', b'no-store, no-cache, must-revalidate'), (b'Pragma', b'no-cache'), (b'Upgrade', b'h2,h2c'), (b'Connection', b'Upgrade, Keep-Alive'), (b'Vary', b'Accept-Encoding'), (b'Keep-Alive', b'timeout=5, max=100'), (b'Transfer-Encoding', b'chunked'), (b'Content-Type', b'application/json')])
+2026-03-26 11:13:08,818 | INFO | httpx | HTTP Request: GET https://www.antralux.com/impianti/api_desktop_version.php?current_version=0.2.1 "HTTP/1.1 200 OK"
+2026-03-26 11:13:08,819 | DEBUG | httpcore.http11 | receive_response_body.started request=<Request [b'GET']>
+2026-03-26 11:13:08,820 | DEBUG | httpcore.http11 | receive_response_body.complete
+2026-03-26 11:13:08,820 | DEBUG | httpcore.http11 | response_closed.started
+2026-03-26 11:13:08,821 | DEBUG | httpcore.http11 | response_closed.complete
+2026-03-26 11:13:08,822 | DEBUG | easyconnect_app.services.api_client | HTTP response | status=200 | url=https://www.antralux.com/impianti/api_desktop_version.php
+2026-03-26 11:13:08,822 | DEBUG | easyconnect_app.services.api_client | HTTP json ok | url=https://www.antralux.com/impianti/api_desktop_version.php | type=dict
+2026-03-26 11:13:38,523 | INFO | easyconnect_app.ui.main_window | UI login requested | user=antonio.falcinelli@mabsolution.it
+2026-03-26 11:13:38,523 | INFO | easyconnect_app.ui.main_window | UI login dispatch | user=antonio.falcinelli@mabsolution.it | had_otp=False | otp_len=0
+2026-03-26 11:13:38,525 | INFO | easyconnect_app.services.auth_service | Login attempt | user=antonio.falcinelli@mabsolution.it | mock_mode=False | has_otp=False
+2026-03-26 11:13:38,525 | DEBUG | easyconnect_app.services.api_client | HTTP request | method=POST | url=https://www.antralux.com/impianti/api_desktop_auth.php | as_form=False | payload={'email': 'antonio.falcinelli@mabsolution.it', 'username': 'antonio.falcinelli@mabsolution.it', 'password': '<masked>', 'code': '', 'otp': '', 'otp_code': '', 'two_factor_code': '', '2fa_code': '', 'source': 'desktop_app'} | params=None
+2026-03-26 11:13:38,526 | DEBUG | httpcore.connection | close.started
+2026-03-26 11:13:38,527 | DEBUG | httpcore.connection | close.complete
+2026-03-26 11:13:38,527 | DEBUG | httpcore.connection | connect_tcp.started host='www.antralux.com' port=443 local_address=None timeout=20.0 socket_options=None
+2026-03-26 11:13:38,600 | DEBUG | httpcore.connection | connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x00000187DFD7A710>
+2026-03-26 11:13:38,601 | DEBUG | httpcore.connection | start_tls.started ssl_context=<ssl.SSLContext object at 0x00000187DFD14DD0> server_hostname='www.antralux.com' timeout=20.0
+2026-03-26 11:13:38,689 | DEBUG | httpcore.connection | start_tls.complete return_value=<httpcore._backends.sync.SyncStream object at 0x00000187DFD950F0>
+2026-03-26 11:13:38,689 | DEBUG | httpcore.http11 | send_request_headers.started request=<Request [b'POST']>
+2026-03-26 11:13:38,690 | DEBUG | httpcore.http11 | send_request_headers.complete
+2026-03-26 11:13:38,690 | DEBUG | httpcore.http11 | send_request_body.started request=<Request [b'POST']>
+2026-03-26 11:13:38,691 | DEBUG | httpcore.http11 | send_request_body.complete
+2026-03-26 11:13:38,691 | DEBUG | httpcore.http11 | receive_response_headers.started request=<Request [b'POST']>
+2026-03-26 11:13:38,819 | DEBUG | httpcore.http11 | receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Thu, 26 Mar 2026 10:13:39 GMT'), (b'Server', b'Apache'), (b'Expires', b'Thu, 19 Nov 1981 08:52:00 GMT'), (b'Cache-Control', b'no-store, no-cache, must-revalidate'), (b'Pragma', b'no-cache'), (b'Set-Cookie', b'PHPSESSID=95da3d0b192457168eb45ee75c4cb38a; path=/'), (b'Upgrade', b'h2,h2c'), (b'Connection', b'Upgrade, Keep-Alive'), (b'Vary', b'Accept-Encoding'), (b'Keep-Alive', b'timeout=5, max=100'), (b'Transfer-Encoding', b'chunked'), (b'Content-Type', b'application/json')])
+2026-03-26 11:13:38,821 | INFO | httpx | HTTP Request: POST https://www.antralux.com/impianti/api_desktop_auth.php "HTTP/1.1 200 OK"
+2026-03-26 11:13:38,822 | DEBUG | httpcore.http11 | receive_response_body.started request=<Request [b'POST']>
+2026-03-26 11:13:38,822 | DEBUG | httpcore.http11 | receive_response_body.complete
+2026-03-26 11:13:38,823 | DEBUG | httpcore.http11 | response_closed.started
+2026-03-26 11:13:38,823 | DEBUG | httpcore.http11 | response_closed.complete
+2026-03-26 11:13:38,823 | DEBUG | easyconnect_app.services.api_client | HTTP response | status=200 | url=https://www.antralux.com/impianti/api_desktop_auth.php
+2026-03-26 11:13:38,823 | DEBUG | easyconnect_app.services.api_client | HTTP json ok | url=https://www.antralux.com/impianti/api_desktop_auth.php | type=dict
+2026-03-26 11:13:38,824 | INFO | easyconnect_app.services.auth_service | Login success | user=antonio.falcinelli@mabsolution.it | role=builder | token=True
+2026-03-26 11:13:38,824 | INFO | easyconnect_app.ui.main_window | UI login success | user=antonio.falcinelli@mabsolution.it | role=builder
+2026-03-26 11:13:38,843 | DEBUG | easyconnect_app.services.api_client | HTTP request | method=GET | url=https://www.antralux.com/impianti/api_desktop_profile.php | as_form=False | payload=None | params=None
+2026-03-26 11:13:38,844 | DEBUG | httpcore.http11 | send_request_headers.started request=<Request [b'GET']>
+2026-03-26 11:13:38,846 | DEBUG | httpcore.http11 | send_request_headers.complete
+2026-03-26 11:13:38,846 | DEBUG | httpcore.http11 | send_request_body.started request=<Request [b'GET']>
+2026-03-26 11:13:38,847 | DEBUG | httpcore.http11 | send_request_body.complete
+2026-03-26 11:13:38,848 | DEBUG | httpcore.http11 | receive_response_headers.started request=<Request [b'GET']>
+2026-03-26 11:13:38,934 | DEBUG | httpcore.http11 | receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Thu, 26 Mar 2026 10:13:39 GMT'), (b'Server', b'Apache'), (b'Expires', b'Thu, 19 Nov 1981 08:52:00 GMT'), (b'Cache-Control', b'no-store, no-cache, must-revalidate'), (b'Pragma', b'no-cache'), (b'Vary', b'Accept-Encoding'), (b'Keep-Alive', b'timeout=5, max=99'), (b'Connection', b'Keep-Alive'), (b'Transfer-Encoding', b'chunked'), (b'Content-Type', b'application/json')])
+2026-03-26 11:13:38,934 | INFO | httpx | HTTP Request: GET https://www.antralux.com/impianti/api_desktop_profile.php "HTTP/1.1 200 OK"
+2026-03-26 11:13:38,935 | DEBUG | httpcore.http11 | receive_response_body.started request=<Request [b'GET']>
+2026-03-26 11:13:38,935 | DEBUG | httpcore.http11 | receive_response_body.complete
+2026-03-26 11:13:38,936 | DEBUG | httpcore.http11 | response_closed.started
+2026-03-26 11:13:38,936 | DEBUG | httpcore.http11 | response_closed.complete
+2026-03-26 11:13:38,937 | DEBUG | easyconnect_app.services.api_client | HTTP response | status=200 | url=https://www.antralux.com/impianti/api_desktop_profile.php
+2026-03-26 11:13:38,938 | DEBUG | easyconnect_app.services.api_client | HTTP json ok | url=https://www.antralux.com/impianti/api_desktop_profile.php | type=dict
+2026-03-26 11:13:45,994 | DEBUG | easyconnect_app.services.api_client | HTTP request | method=GET | url=https://www.antralux.com/impianti/api_desktop_profile.php | as_form=False | payload=None | params=None
+2026-03-26 11:13:45,995 | DEBUG | httpcore.connection | close.started
+2026-03-26 11:13:45,996 | DEBUG | httpcore.connection | close.complete
+2026-03-26 11:13:45,997 | DEBUG | httpcore.connection | connect_tcp.started host='www.antralux.com' port=443 local_address=None timeout=20.0 socket_options=None
+2026-03-26 11:13:46,068 | DEBUG | httpcore.connection | connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x00000187DFD95CD0>
+2026-03-26 11:13:46,069 | DEBUG | httpcore.connection | start_tls.started ssl_context=<ssl.SSLContext object at 0x00000187DFD14DD0> server_hostname='www.antralux.com' timeout=20.0
+2026-03-26 11:13:46,144 | DEBUG | httpcore.connection | start_tls.complete return_value=<httpcore._backends.sync.SyncStream object at 0x00000187DFC9F650>
+2026-03-26 11:13:46,144 | DEBUG | httpcore.http11 | send_request_headers.started request=<Request [b'GET']>
+2026-03-26 11:13:46,145 | DEBUG | httpcore.http11 | send_request_headers.complete
+2026-03-26 11:13:46,145 | DEBUG | httpcore.http11 | send_request_body.started request=<Request [b'GET']>
+2026-03-26 11:13:46,146 | DEBUG | httpcore.http11 | send_request_body.complete
+2026-03-26 11:13:46,146 | DEBUG | httpcore.http11 | receive_response_headers.started request=<Request [b'GET']>
+2026-03-26 11:13:46,230 | DEBUG | httpcore.http11 | receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Thu, 26 Mar 2026 10:13:46 GMT'), (b'Server', b'Apache'), (b'Expires', b'Thu, 19 Nov 1981 08:52:00 GMT'), (b'Cache-Control', b'no-store, no-cache, must-revalidate'), (b'Pragma', b'no-cache'), (b'Upgrade', b'h2,h2c'), (b'Connection', b'Upgrade, Keep-Alive'), (b'Vary', b'Accept-Encoding'), (b'Keep-Alive', b'timeout=5, max=100'), (b'Transfer-Encoding', b'chunked'), (b'Content-Type', b'application/json')])
+2026-03-26 11:13:46,231 | INFO | httpx | HTTP Request: GET https://www.antralux.com/impianti/api_desktop_profile.php "HTTP/1.1 200 OK"
+2026-03-26 11:13:46,231 | DEBUG | httpcore.http11 | receive_response_body.started request=<Request [b'GET']>
+2026-03-26 11:13:46,231 | DEBUG | httpcore.http11 | receive_response_body.complete
+2026-03-26 11:13:46,231 | DEBUG | httpcore.http11 | response_closed.started
+2026-03-26 11:13:46,232 | DEBUG | httpcore.http11 | response_closed.complete
+2026-03-26 11:13:46,232 | DEBUG | easyconnect_app.services.api_client | HTTP response | status=200 | url=https://www.antralux.com/impianti/api_desktop_profile.php
+2026-03-26 11:13:46,232 | DEBUG | easyconnect_app.services.api_client | HTTP json ok | url=https://www.antralux.com/impianti/api_desktop_profile.php | type=dict
+2026-03-26 11:14:53,617 | INFO | __main__ | Avvio EasyConnect Desktop | base_url=https://www.antralux.com/impianti | mock_mode=False
+2026-03-26 11:14:54,827 | DEBUG | easyconnect_app.services.api_client | HTTP request | method=GET | url=https://www.antralux.com/impianti/api_desktop_version.php | as_form=False | payload=None | params={'current_version': '0.2.1'}
+2026-03-26 11:14:54,829 | DEBUG | httpcore.connection | connect_tcp.started host='www.antralux.com' port=443 local_address=None timeout=20.0 socket_options=None
+2026-03-26 11:14:54,919 | DEBUG | httpcore.connection | connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x000001C75C92B0E0>
+2026-03-26 11:14:54,920 | DEBUG | httpcore.connection | start_tls.started ssl_context=<ssl.SSLContext object at 0x000001C75CA008C0> server_hostname='www.antralux.com' timeout=20.0
+2026-03-26 11:14:55,002 | DEBUG | httpcore.connection | start_tls.complete return_value=<httpcore._backends.sync.SyncStream object at 0x000001C75CA25A90>
+2026-03-26 11:14:55,002 | DEBUG | httpcore.http11 | send_request_headers.started request=<Request [b'GET']>
+2026-03-26 11:14:55,003 | DEBUG | httpcore.http11 | send_request_headers.complete
+2026-03-26 11:14:55,004 | DEBUG | httpcore.http11 | send_request_body.started request=<Request [b'GET']>
+2026-03-26 11:14:55,005 | DEBUG | httpcore.http11 | send_request_body.complete
+2026-03-26 11:14:55,005 | DEBUG | httpcore.http11 | receive_response_headers.started request=<Request [b'GET']>
+2026-03-26 11:14:55,085 | DEBUG | httpcore.http11 | receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Thu, 26 Mar 2026 10:14:55 GMT'), (b'Server', b'Apache'), (b'Cache-Control', b'no-store, no-cache, must-revalidate'), (b'Pragma', b'no-cache'), (b'Upgrade', b'h2,h2c'), (b'Connection', b'Upgrade, Keep-Alive'), (b'Vary', b'Accept-Encoding'), (b'Keep-Alive', b'timeout=5, max=100'), (b'Transfer-Encoding', b'chunked'), (b'Content-Type', b'application/json')])
+2026-03-26 11:14:55,086 | INFO | httpx | HTTP Request: GET https://www.antralux.com/impianti/api_desktop_version.php?current_version=0.2.1 "HTTP/1.1 200 OK"
+2026-03-26 11:14:55,087 | DEBUG | httpcore.http11 | receive_response_body.started request=<Request [b'GET']>
+2026-03-26 11:14:55,087 | DEBUG | httpcore.http11 | receive_response_body.complete
+2026-03-26 11:14:55,087 | DEBUG | httpcore.http11 | response_closed.started
+2026-03-26 11:14:55,087 | DEBUG | httpcore.http11 | response_closed.complete
+2026-03-26 11:14:55,087 | DEBUG | easyconnect_app.services.api_client | HTTP response | status=200 | url=https://www.antralux.com/impianti/api_desktop_version.php
+2026-03-26 11:14:55,088 | DEBUG | easyconnect_app.services.api_client | HTTP json ok | url=https://www.antralux.com/impianti/api_desktop_version.php | type=dict
+2026-03-26 11:15:08,458 | INFO | easyconnect_app.ui.main_window | UI login requested | user=info@safaservice.com
+2026-03-26 11:15:08,458 | INFO | easyconnect_app.ui.main_window | UI login dispatch | user=info@safaservice.com | had_otp=False | otp_len=0
+2026-03-26 11:15:08,460 | INFO | easyconnect_app.services.auth_service | Login attempt | user=info@safaservice.com | mock_mode=False | has_otp=False
+2026-03-26 11:15:08,461 | DEBUG | easyconnect_app.services.api_client | HTTP request | method=POST | url=https://www.antralux.com/impianti/api_desktop_auth.php | as_form=False | payload={'email': 'info@safaservice.com', 'username': 'info@safaservice.com', 'password': '<masked>', 'code': '', 'otp': '', 'otp_code': '', 'two_factor_code': '', '2fa_code': '', 'source': 'desktop_app'} | params=None
+2026-03-26 11:15:08,462 | DEBUG | httpcore.connection | close.started
+2026-03-26 11:15:08,462 | DEBUG | httpcore.connection | close.complete
+2026-03-26 11:15:08,463 | DEBUG | httpcore.connection | connect_tcp.started host='www.antralux.com' port=443 local_address=None timeout=20.0 socket_options=None
+2026-03-26 11:15:08,644 | DEBUG | httpcore.connection | connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x000001C75CA26710>
+2026-03-26 11:15:08,645 | DEBUG | httpcore.connection | start_tls.started ssl_context=<ssl.SSLContext object at 0x000001C75CA008C0> server_hostname='www.antralux.com' timeout=20.0
+2026-03-26 11:15:08,954 | DEBUG | httpcore.connection | start_tls.complete return_value=<httpcore._backends.sync.SyncStream object at 0x000001C75CA5CD60>
+2026-03-26 11:15:08,957 | DEBUG | httpcore.http11 | send_request_headers.started request=<Request [b'POST']>
+2026-03-26 11:15:08,964 | DEBUG | httpcore.http11 | send_request_headers.complete
+2026-03-26 11:15:08,974 | DEBUG | httpcore.http11 | send_request_body.started request=<Request [b'POST']>
+2026-03-26 11:15:08,986 | DEBUG | httpcore.http11 | send_request_body.complete
+2026-03-26 11:15:08,992 | DEBUG | httpcore.http11 | receive_response_headers.started request=<Request [b'POST']>
+2026-03-26 11:15:09,210 | DEBUG | httpcore.http11 | receive_response_headers.complete return_value=(b'HTTP/1.1', 401, b'Unauthorized', [(b'Date', b'Thu, 26 Mar 2026 10:15:09 GMT'), (b'Server', b'Apache'), (b'Expires', b'Thu, 19 Nov 1981 08:52:00 GMT'), (b'Cache-Control', b'no-store, no-cache, must-revalidate'), (b'Pragma', b'no-cache'), (b'Set-Cookie', b'PHPSESSID=eb47eb390354572cdfdbddbab945f72d; path=/'), (b'Upgrade', b'h2,h2c'), (b'Connection', b'Upgrade, Keep-Alive'), (b'Vary', b'Accept-Encoding'), (b'Keep-Alive', b'timeout=5, max=100'), (b'Transfer-Encoding', b'chunked'), (b'Content-Type', b'application/json')])
+2026-03-26 11:15:09,211 | INFO | httpx | HTTP Request: POST https://www.antralux.com/impianti/api_desktop_auth.php "HTTP/1.1 401 Unauthorized"
+2026-03-26 11:15:09,212 | DEBUG | httpcore.http11 | receive_response_body.started request=<Request [b'POST']>
+2026-03-26 11:15:09,212 | DEBUG | httpcore.http11 | receive_response_body.complete
+2026-03-26 11:15:09,212 | DEBUG | httpcore.http11 | response_closed.started
+2026-03-26 11:15:09,212 | DEBUG | httpcore.http11 | response_closed.complete
+2026-03-26 11:15:09,213 | DEBUG | easyconnect_app.services.api_client | HTTP response | status=401 | url=https://www.antralux.com/impianti/api_desktop_auth.php
+2026-03-26 11:15:09,213 | WARNING | easyconnect_app.services.api_client | HTTP status error | status=401 | url=https://www.antralux.com/impianti/api_desktop_auth.php | message=Credenziali non valide.
+2026-03-26 11:15:09,214 | WARNING | easyconnect_app.services.auth_service | Login JSON failed | user=info@safaservice.com | message=Credenziali non valide. (HTTP 401)
+2026-03-26 11:15:09,214 | DEBUG | easyconnect_app.services.api_client | HTTP request | method=POST | url=https://www.antralux.com/impianti/api_desktop_auth.php | as_form=True | payload={'email': 'info@safaservice.com', 'username': 'info@safaservice.com', 'password': '<masked>', 'code': '', 'otp': '', 'otp_code': '', 'two_factor_code': '', '2fa_code': '', 'source': 'desktop_app'} | params=None
+2026-03-26 11:15:09,216 | DEBUG | httpcore.http11 | send_request_headers.started request=<Request [b'POST']>
+2026-03-26 11:15:09,216 | DEBUG | httpcore.http11 | send_request_headers.complete
+2026-03-26 11:15:09,217 | DEBUG | httpcore.http11 | send_request_body.started request=<Request [b'POST']>
+2026-03-26 11:15:09,217 | DEBUG | httpcore.http11 | send_request_body.complete
+2026-03-26 11:15:09,217 | DEBUG | httpcore.http11 | receive_response_headers.started request=<Request [b'POST']>
+2026-03-26 11:15:09,362 | DEBUG | httpcore.http11 | receive_response_headers.complete return_value=(b'HTTP/1.1', 401, b'Unauthorized', [(b'Date', b'Thu, 26 Mar 2026 10:15:09 GMT'), (b'Server', b'Apache'), (b'Expires', b'Thu, 19 Nov 1981 08:52:00 GMT'), (b'Cache-Control', b'no-store, no-cache, must-revalidate'), (b'Pragma', b'no-cache'), (b'Vary', b'Accept-Encoding'), (b'Keep-Alive', b'timeout=5, max=99'), (b'Connection', b'Keep-Alive'), (b'Transfer-Encoding', b'chunked'), (b'Content-Type', b'application/json')])
+2026-03-26 11:15:09,363 | INFO | httpx | HTTP Request: POST https://www.antralux.com/impianti/api_desktop_auth.php "HTTP/1.1 401 Unauthorized"
+2026-03-26 11:15:09,364 | DEBUG | httpcore.http11 | receive_response_body.started request=<Request [b'POST']>
+2026-03-26 11:15:09,365 | DEBUG | httpcore.http11 | receive_response_body.complete
+2026-03-26 11:15:09,365 | DEBUG | httpcore.http11 | response_closed.started
+2026-03-26 11:15:09,365 | DEBUG | httpcore.http11 | response_closed.complete
+2026-03-26 11:15:09,366 | DEBUG | easyconnect_app.services.api_client | HTTP response | status=401 | url=https://www.antralux.com/impianti/api_desktop_auth.php
+2026-03-26 11:15:09,366 | WARNING | easyconnect_app.services.api_client | HTTP status error | status=401 | url=https://www.antralux.com/impianti/api_desktop_auth.php | message=Credenziali non valide.
+2026-03-26 11:15:09,366 | WARNING | easyconnect_app.services.auth_service | Login form fallback failed | user=info@safaservice.com | message=Credenziali non valide. (HTTP 401)
+2026-03-26 11:15:09,367 | ERROR | easyconnect_app.ui.worker | Worker exception
+Traceback (most recent call last):
+  File "c:\Users\fabri\Documents\PlatformIO\Projects\EasyConnect\EasyConnect2026\EasyConnectAPP\easyconnect_app\services\api_client.py", line 85, in request_json
+    response.raise_for_status()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\fabri\AppData\Roaming\Python\Python314\site-packages\httpx\_models.py", line 829, in raise_for_status
+    raise HTTPStatusError(message, request=request, response=self)
+httpx.HTTPStatusError: Client error '401 Unauthorized' for url 'https://www.antralux.com/impianti/api_desktop_auth.php'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/401
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "c:\Users\fabri\Documents\PlatformIO\Projects\EasyConnect\EasyConnect2026\EasyConnectAPP\easyconnect_app\services\auth_service.py", line 48, in login
+    response = self.api_client.call_endpoint(
+        "auth",
+        method="POST",
+        payload=payload,
+    )
+  File "c:\Users\fabri\Documents\PlatformIO\Projects\EasyConnect\EasyConnect2026\EasyConnectAPP\easyconnect_app\services\api_client.py", line 140, in call_endpoint
+    return self.request_json(
+           ~~~~~~~~~~~~~~~~~^
+        method=method,
+        ^^^^^^^^^^^^^^
+    ...<3 lines>...
+        as_form=as_form,
+        ^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "c:\Users\fabri\Documents\PlatformIO\Projects\EasyConnect\EasyConnect2026\EasyConnectAPP\easyconnect_app\services\api_client.py", line 109, in request_json
+    raise ApiError(f"{message} (HTTP 401)") from exc
+easyconnect_app.services.api_client.ApiError: Credenziali non valide. (HTTP 401)
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "c:\Users\fabri\Documents\PlatformIO\Projects\EasyConnect\EasyConnect2026\EasyConnectAPP\easyconnect_app\services\api_client.py", line 85, in request_json
+    response.raise_for_status()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\fabri\AppData\Roaming\Python\Python314\site-packages\httpx\_models.py", line 829, in raise_for_status
+    raise HTTPStatusError(message, request=request, response=self)
+httpx.HTTPStatusError: Client error '401 Unauthorized' for url 'https://www.antralux.com/impianti/api_desktop_auth.php'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/401
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "c:\Users\fabri\Documents\PlatformIO\Projects\EasyConnect\EasyConnect2026\EasyConnectAPP\easyconnect_app\services\auth_service.py", line 60, in login
+    response = self.api_client.call_endpoint(
+        "auth",
+    ...<2 lines>...
+        as_form=True,
+    )
+  File "c:\Users\fabri\Documents\PlatformIO\Projects\EasyConnect\EasyConnect2026\EasyConnectAPP\easyconnect_app\services\api_client.py", line 140, in call_endpoint
+    return self.request_json(
+           ~~~~~~~~~~~~~~~~~^
+        method=method,
+        ^^^^^^^^^^^^^^
+    ...<3 lines>...
+        as_form=as_form,
+        ^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "c:\Users\fabri\Documents\PlatformIO\Projects\EasyConnect\EasyConnect2026\EasyConnectAPP\easyconnect_app\services\api_client.py", line 109, in request_json
+    raise ApiError(f"{message} (HTTP 401)") from exc
+easyconnect_app.services.api_client.ApiError: Credenziali non valide. (HTTP 401)
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "c:\Users\fabri\Documents\PlatformIO\Projects\EasyConnect\EasyConnect2026\EasyConnectAPP\easyconnect_app\ui\worker.py", line 24, in run
+    result = self.fn()
+  File "c:\Users\fabri\Documents\PlatformIO\Projects\EasyConnect\EasyConnect2026\EasyConnectAPP\easyconnect_app\ui\main_window.py", line 234, in <lambda>
+    lambda: self.auth_service.login(username, password, otp_code),
+            ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "c:\Users\fabri\Documents\PlatformIO\Projects\EasyConnect\EasyConnect2026\EasyConnectAPP\easyconnect_app\services\auth_service.py", line 69, in login
+    raise ApiError(
+        f"{exc_form} | endpoint auth verificato sia in JSON che form-data."
+    ) from exc_form
+easyconnect_app.services.api_client.ApiError: Credenziali non valide. (HTTP 401) | endpoint auth verificato sia in JSON che form-data.
+2026-03-26 11:15:09,374 | WARNING | easyconnect_app.ui.main_window | UI login error | user=info@safaservice.com | had_otp=False | message=Credenziali non valide. (HTTP 401) | endpoint auth verificato sia in JSON che form-data.
+2026-03-26 11:15:16,176 | INFO | easyconnect_app.ui.main_window | UI login requested | user=info@safaservice.com
+2026-03-26 11:15:16,177 | INFO | easyconnect_app.ui.main_window | UI login dispatch | user=info@safaservice.com | had_otp=False | otp_len=0
+2026-03-26 11:15:16,178 | INFO | easyconnect_app.services.auth_service | Login attempt | user=info@safaservice.com | mock_mode=False | has_otp=False
+2026-03-26 11:15:16,178 | DEBUG | easyconnect_app.services.api_client | HTTP request | method=POST | url=https://www.antralux.com/impianti/api_desktop_auth.php | as_form=False | payload={'email': 'info@safaservice.com', 'username': 'info@safaservice.com', 'password': '<masked>', 'code': '', 'otp': '', 'otp_code': '', 'two_factor_code': '', '2fa_code': '', 'source': 'desktop_app'} | params=None
+2026-03-26 11:15:16,179 | DEBUG | httpcore.connection | close.started
+2026-03-26 11:15:16,180 | DEBUG | httpcore.connection | close.complete
+2026-03-26 11:15:16,180 | DEBUG | httpcore.connection | connect_tcp.started host='www.antralux.com' port=443 local_address=None timeout=20.0 socket_options=None
+2026-03-26 11:15:16,437 | DEBUG | httpcore.connection | connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x000001C75CA5D6E0>
+2026-03-26 11:15:16,438 | DEBUG | httpcore.connection | start_tls.started ssl_context=<ssl.SSLContext object at 0x000001C75CA008C0> server_hostname='www.antralux.com' timeout=20.0
+2026-03-26 11:15:16,753 | DEBUG | httpcore.connection | start_tls.complete return_value=<httpcore._backends.sync.SyncStream object at 0x000001C75C93F770>
+2026-03-26 11:15:16,753 | DEBUG | httpcore.http11 | send_request_headers.started request=<Request [b'POST']>
+2026-03-26 11:15:16,754 | DEBUG | httpcore.http11 | send_request_headers.complete
+2026-03-26 11:15:16,754 | DEBUG | httpcore.http11 | send_request_body.started request=<Request [b'POST']>
+2026-03-26 11:15:16,754 | DEBUG | httpcore.http11 | send_request_body.complete
+2026-03-26 11:15:16,754 | DEBUG | httpcore.http11 | receive_response_headers.started request=<Request [b'POST']>
+2026-03-26 11:15:17,092 | DEBUG | httpcore.http11 | receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Thu, 26 Mar 2026 10:15:17 GMT'), (b'Server', b'Apache'), (b'Expires', b'Thu, 19 Nov 1981 08:52:00 GMT'), (b'Cache-Control', b'no-store, no-cache, must-revalidate'), (b'Pragma', b'no-cache'), (b'Upgrade', b'h2,h2c'), (b'Connection', b'Upgrade, Keep-Alive'), (b'Vary', b'Accept-Encoding'), (b'Keep-Alive', b'timeout=5, max=100'), (b'Transfer-Encoding', b'chunked'), (b'Content-Type', b'application/json')])
+2026-03-26 11:15:17,092 | INFO | httpx | HTTP Request: POST https://www.antralux.com/impianti/api_desktop_auth.php "HTTP/1.1 200 OK"
+2026-03-26 11:15:17,093 | DEBUG | httpcore.http11 | receive_response_body.started request=<Request [b'POST']>
+2026-03-26 11:15:17,094 | DEBUG | httpcore.http11 | receive_response_body.complete
+2026-03-26 11:15:17,094 | DEBUG | httpcore.http11 | response_closed.started
+2026-03-26 11:15:17,094 | DEBUG | httpcore.http11 | response_closed.complete
+2026-03-26 11:15:17,094 | DEBUG | easyconnect_app.services.api_client | HTTP response | status=200 | url=https://www.antralux.com/impianti/api_desktop_auth.php
+2026-03-26 11:15:17,095 | DEBUG | easyconnect_app.services.api_client | HTTP json ok | url=https://www.antralux.com/impianti/api_desktop_auth.php | type=dict
+2026-03-26 11:15:17,095 | INFO | easyconnect_app.services.auth_service | Login requires 2FA | user=info@safaservice.com
+2026-03-26 11:15:17,095 | ERROR | easyconnect_app.ui.worker | Worker exception
+Traceback (most recent call last):
+  File "c:\Users\fabri\Documents\PlatformIO\Projects\EasyConnect\EasyConnect2026\EasyConnectAPP\easyconnect_app\ui\worker.py", line 24, in run
+    result = self.fn()
+  File "c:\Users\fabri\Documents\PlatformIO\Projects\EasyConnect\EasyConnect2026\EasyConnectAPP\easyconnect_app\ui\main_window.py", line 234, in <lambda>
+    lambda: self.auth_service.login(username, password, otp_code),
+            ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "c:\Users\fabri\Documents\PlatformIO\Projects\EasyConnect\EasyConnect2026\EasyConnectAPP\easyconnect_app\services\auth_service.py", line 77, in login
+    raise ApiError("2FA_REQUIRED")
+easyconnect_app.services.api_client.ApiError: 2FA_REQUIRED
+2026-03-26 11:15:17,097 | WARNING | easyconnect_app.ui.main_window | UI login error | user=info@safaservice.com | had_otp=False | message=2FA_REQUIRED
+2026-03-26 11:15:17,097 | INFO | easyconnect_app.ui.main_window | UI OTP prompt | user=info@safaservice.com | prompt_count=1
+2026-03-26 11:15:22,834 | INFO | easyconnect_app.ui.main_window | UI login dispatch | user=info@safaservice.com | had_otp=True | otp_len=6
+2026-03-26 11:15:22,835 | INFO | easyconnect_app.services.auth_service | Login attempt | user=info@safaservice.com | mock_mode=False | has_otp=True
+2026-03-26 11:15:22,836 | DEBUG | easyconnect_app.services.api_client | HTTP request | method=POST | url=https://www.antralux.com/impianti/api_desktop_auth.php | as_form=False | payload={'email': 'info@safaservice.com', 'username': 'info@safaservice.com', 'password': '<masked>', 'code': '<masked:6>', 'otp': '<masked:6>', 'otp_code': '<masked:6>', 'two_factor_code': '<masked:6>', '2fa_code': '<masked:6>', 'source': 'desktop_app'} | params=None
+2026-03-26 11:15:22,837 | DEBUG | httpcore.connection | close.started
+2026-03-26 11:15:22,837 | DEBUG | httpcore.connection | close.complete
+2026-03-26 11:15:22,837 | DEBUG | httpcore.connection | connect_tcp.started host='www.antralux.com' port=443 local_address=None timeout=20.0 socket_options=None
+2026-03-26 11:15:22,912 | DEBUG | httpcore.connection | connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x000001C75CA1D6A0>
+2026-03-26 11:15:22,913 | DEBUG | httpcore.connection | start_tls.started ssl_context=<ssl.SSLContext object at 0x000001C75CA008C0> server_hostname='www.antralux.com' timeout=20.0
+2026-03-26 11:15:22,991 | DEBUG | httpcore.connection | start_tls.complete return_value=<httpcore._backends.sync.SyncStream object at 0x000001C75CA1D8C0>
+2026-03-26 11:15:22,992 | DEBUG | httpcore.http11 | send_request_headers.started request=<Request [b'POST']>
+2026-03-26 11:15:22,992 | DEBUG | httpcore.http11 | send_request_headers.complete
+2026-03-26 11:15:22,992 | DEBUG | httpcore.http11 | send_request_body.started request=<Request [b'POST']>
+2026-03-26 11:15:22,993 | DEBUG | httpcore.http11 | send_request_body.complete
+2026-03-26 11:15:22,993 | DEBUG | httpcore.http11 | receive_response_headers.started request=<Request [b'POST']>
+2026-03-26 11:15:23,179 | DEBUG | httpcore.http11 | receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Thu, 26 Mar 2026 10:15:23 GMT'), (b'Server', b'Apache'), (b'Expires', b'Thu, 19 Nov 1981 08:52:00 GMT'), (b'Cache-Control', b'no-store, no-cache, must-revalidate'), (b'Pragma', b'no-cache'), (b'Set-Cookie', b'PHPSESSID=1614735452e7f98b73b104e7fece893e; path=/'), (b'Upgrade', b'h2,h2c'), (b'Connection', b'Upgrade, Keep-Alive'), (b'Vary', b'Accept-Encoding'), (b'Keep-Alive', b'timeout=5, max=100'), (b'Transfer-Encoding', b'chunked'), (b'Content-Type', b'application/json')])
+2026-03-26 11:15:23,180 | INFO | httpx | HTTP Request: POST https://www.antralux.com/impianti/api_desktop_auth.php "HTTP/1.1 200 OK"
+2026-03-26 11:15:23,181 | DEBUG | httpcore.http11 | receive_response_body.started request=<Request [b'POST']>
+2026-03-26 11:15:23,181 | DEBUG | httpcore.http11 | receive_response_body.complete
+2026-03-26 11:15:23,182 | DEBUG | httpcore.http11 | response_closed.started
+2026-03-26 11:15:23,182 | DEBUG | httpcore.http11 | response_closed.complete
+2026-03-26 11:15:23,182 | DEBUG | easyconnect_app.services.api_client | HTTP response | status=200 | url=https://www.antralux.com/impianti/api_desktop_auth.php
+2026-03-26 11:15:23,183 | DEBUG | easyconnect_app.services.api_client | HTTP json ok | url=https://www.antralux.com/impianti/api_desktop_auth.php | type=dict
+2026-03-26 11:15:23,183 | INFO | easyconnect_app.services.auth_service | Login success | user=info@safaservice.com | role=admin | token=True
+2026-03-26 11:15:23,183 | INFO | easyconnect_app.ui.main_window | UI login success | user=info@safaservice.com | role=admin
+2026-03-26 11:15:23,194 | DEBUG | easyconnect_app.services.api_client | HTTP request | method=GET | url=https://www.antralux.com/impianti/api_desktop_profile.php | as_form=False | payload=None | params=None
+2026-03-26 11:15:23,203 | DEBUG | httpcore.http11 | send_request_headers.started request=<Request [b'GET']>
+2026-03-26 11:15:23,204 | DEBUG | httpcore.http11 | send_request_headers.complete
+2026-03-26 11:15:23,207 | DEBUG | httpcore.http11 | send_request_body.started request=<Request [b'GET']>
+2026-03-26 11:15:23,207 | DEBUG | httpcore.http11 | send_request_body.complete
+2026-03-26 11:15:23,208 | DEBUG | httpcore.http11 | receive_response_headers.started request=<Request [b'GET']>
+2026-03-26 11:15:23,291 | DEBUG | httpcore.http11 | receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Thu, 26 Mar 2026 10:15:23 GMT'), (b'Server', b'Apache'), (b'Expires', b'Thu, 19 Nov 1981 08:52:00 GMT'), (b'Cache-Control', b'no-store, no-cache, must-revalidate'), (b'Pragma', b'no-cache'), (b'Vary', b'Accept-Encoding'), (b'Keep-Alive', b'timeout=5, max=99'), (b'Connection', b'Keep-Alive'), (b'Transfer-Encoding', b'chunked'), (b'Content-Type', b'application/json')])
+2026-03-26 11:15:23,291 | INFO | httpx | HTTP Request: GET https://www.antralux.com/impianti/api_desktop_profile.php "HTTP/1.1 200 OK"
+2026-03-26 11:15:23,292 | DEBUG | httpcore.http11 | receive_response_body.started request=<Request [b'GET']>
+2026-03-26 11:15:23,292 | DEBUG | httpcore.http11 | receive_response_body.complete
+2026-03-26 11:15:23,292 | DEBUG | httpcore.http11 | response_closed.started
+2026-03-26 11:15:23,293 | DEBUG | httpcore.http11 | response_closed.complete
+2026-03-26 11:15:23,293 | DEBUG | easyconnect_app.services.api_client | HTTP response | status=200 | url=https://www.antralux.com/impianti/api_desktop_profile.php
+2026-03-26 11:15:23,293 | DEBUG | easyconnect_app.services.api_client | HTTP json ok | url=https://www.antralux.com/impianti/api_desktop_profile.php | type=dict
+2026-03-26 11:16:45,360 | INFO | __main__ | Avvio EasyConnect Desktop | base_url=https://www.antralux.com/impianti | mock_mode=False
+2026-03-26 11:16:46,563 | DEBUG | easyconnect_app.services.api_client | HTTP request | method=GET | url=https://www.antralux.com/impianti/api_desktop_version.php | as_form=False | payload=None | params={'current_version': '0.2.1'}
+2026-03-26 11:16:46,564 | DEBUG | httpcore.connection | connect_tcp.started host='www.antralux.com' port=443 local_address=None timeout=20.0 socket_options=None
+2026-03-26 11:16:46,672 | DEBUG | httpcore.connection | connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x000001BEC1A970E0>
+2026-03-26 11:16:46,673 | DEBUG | httpcore.connection | start_tls.started ssl_context=<ssl.SSLContext object at 0x000001BEC1B708C0> server_hostname='www.antralux.com' timeout=20.0
+2026-03-26 11:16:46,770 | DEBUG | httpcore.connection | start_tls.complete return_value=<httpcore._backends.sync.SyncStream object at 0x000001BEC1B99A90>
+2026-03-26 11:16:46,770 | DEBUG | httpcore.http11 | send_request_headers.started request=<Request [b'GET']>
+2026-03-26 11:16:46,771 | DEBUG | httpcore.http11 | send_request_headers.complete
+2026-03-26 11:16:46,772 | DEBUG | httpcore.http11 | send_request_body.started request=<Request [b'GET']>
+2026-03-26 11:16:46,772 | DEBUG | httpcore.http11 | send_request_body.complete
+2026-03-26 11:16:46,772 | DEBUG | httpcore.http11 | receive_response_headers.started request=<Request [b'GET']>
+2026-03-26 11:16:46,853 | DEBUG | httpcore.http11 | receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Thu, 26 Mar 2026 10:16:47 GMT'), (b'Server', b'Apache'), (b'Cache-Control', b'no-store, no-cache, must-revalidate'), (b'Pragma', b'no-cache'), (b'Upgrade', b'h2,h2c'), (b'Connection', b'Upgrade, Keep-Alive'), (b'Vary', b'Accept-Encoding'), (b'Keep-Alive', b'timeout=5, max=100'), (b'Transfer-Encoding', b'chunked'), (b'Content-Type', b'application/json')])
+2026-03-26 11:16:46,855 | INFO | httpx | HTTP Request: GET https://www.antralux.com/impianti/api_desktop_version.php?current_version=0.2.1 "HTTP/1.1 200 OK"
+2026-03-26 11:16:46,855 | DEBUG | httpcore.http11 | receive_response_body.started request=<Request [b'GET']>
+2026-03-26 11:16:46,856 | DEBUG | httpcore.http11 | receive_response_body.complete
+2026-03-26 11:16:46,856 | DEBUG | httpcore.http11 | response_closed.started
+2026-03-26 11:16:46,856 | DEBUG | httpcore.http11 | response_closed.complete
+2026-03-26 11:16:46,857 | DEBUG | easyconnect_app.services.api_client | HTTP response | status=200 | url=https://www.antralux.com/impianti/api_desktop_version.php
+2026-03-26 11:16:46,857 | DEBUG | easyconnect_app.services.api_client | HTTP json ok | url=https://www.antralux.com/impianti/api_desktop_version.php | type=dict
+2026-03-26 11:16:58,574 | INFO | easyconnect_app.ui.main_window | UI login requested | user=info@safaservice.com
+2026-03-26 11:16:58,575 | INFO | easyconnect_app.ui.main_window | UI login dispatch | user=info@safaservice.com | had_otp=False | otp_len=0
+2026-03-26 11:16:58,576 | INFO | easyconnect_app.services.auth_service | Login attempt | user=info@safaservice.com | mock_mode=False | has_otp=False
+2026-03-26 11:16:58,577 | DEBUG | easyconnect_app.services.api_client | HTTP request | method=POST | url=https://www.antralux.com/impianti/api_desktop_auth.php | as_form=False | payload={'email': 'info@safaservice.com', 'username': 'info@safaservice.com', 'password': '<masked>', 'code': '', 'otp': '', 'otp_code': '', 'two_factor_code': '', '2fa_code': '', 'source': 'desktop_app'} | params=None
+2026-03-26 11:16:58,578 | DEBUG | httpcore.connection | close.started
+2026-03-26 11:16:58,578 | DEBUG | httpcore.connection | close.complete
+2026-03-26 11:16:58,579 | DEBUG | httpcore.connection | connect_tcp.started host='www.antralux.com' port=443 local_address=None timeout=20.0 socket_options=None
+2026-03-26 11:16:58,651 | DEBUG | httpcore.connection | connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x000001BEC1B9A710>
+2026-03-26 11:16:58,652 | DEBUG | httpcore.connection | start_tls.started ssl_context=<ssl.SSLContext object at 0x000001BEC1B708C0> server_hostname='www.antralux.com' timeout=20.0
+2026-03-26 11:16:58,732 | DEBUG | httpcore.connection | start_tls.complete return_value=<httpcore._backends.sync.SyncStream object at 0x000001BEC81E8C30>
+2026-03-26 11:16:58,732 | DEBUG | httpcore.http11 | send_request_headers.started request=<Request [b'POST']>
+2026-03-26 11:16:58,732 | DEBUG | httpcore.http11 | send_request_headers.complete
+2026-03-26 11:16:58,733 | DEBUG | httpcore.http11 | send_request_body.started request=<Request [b'POST']>
+2026-03-26 11:16:58,733 | DEBUG | httpcore.http11 | send_request_body.complete
+2026-03-26 11:16:58,733 | DEBUG | httpcore.http11 | receive_response_headers.started request=<Request [b'POST']>
+2026-03-26 11:16:58,864 | DEBUG | httpcore.http11 | receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Thu, 26 Mar 2026 10:16:59 GMT'), (b'Server', b'Apache'), (b'Expires', b'Thu, 19 Nov 1981 08:52:00 GMT'), (b'Cache-Control', b'no-store, no-cache, must-revalidate'), (b'Pragma', b'no-cache'), (b'Set-Cookie', b'PHPSESSID=6c5a00235f8c761c0b027f4eebca6dd0; path=/'), (b'Upgrade', b'h2,h2c'), (b'Connection', b'Upgrade, Keep-Alive'), (b'Vary', b'Accept-Encoding'), (b'Keep-Alive', b'timeout=5, max=100'), (b'Transfer-Encoding', b'chunked'), (b'Content-Type', b'application/json')])
+2026-03-26 11:16:58,866 | INFO | httpx | HTTP Request: POST https://www.antralux.com/impianti/api_desktop_auth.php "HTTP/1.1 200 OK"
+2026-03-26 11:16:58,867 | DEBUG | httpcore.http11 | receive_response_body.started request=<Request [b'POST']>
+2026-03-26 11:16:58,867 | DEBUG | httpcore.http11 | receive_response_body.complete
+2026-03-26 11:16:58,868 | DEBUG | httpcore.http11 | response_closed.started
+2026-03-26 11:16:58,868 | DEBUG | httpcore.http11 | response_closed.complete
+2026-03-26 11:16:58,869 | DEBUG | easyconnect_app.services.api_client | HTTP response | status=200 | url=https://www.antralux.com/impianti/api_desktop_auth.php
+2026-03-26 11:16:58,869 | DEBUG | easyconnect_app.services.api_client | HTTP json ok | url=https://www.antralux.com/impianti/api_desktop_auth.php | type=dict
+2026-03-26 11:16:58,870 | INFO | easyconnect_app.services.auth_service | Login requires 2FA | user=info@safaservice.com
+2026-03-26 11:16:58,870 | ERROR | easyconnect_app.ui.worker | Worker exception
+Traceback (most recent call last):
+  File "c:\Users\fabri\Documents\PlatformIO\Projects\EasyConnect\EasyConnect2026\EasyConnectAPP\easyconnect_app\ui\worker.py", line 24, in run
+    result = self.fn()
+  File "c:\Users\fabri\Documents\PlatformIO\Projects\EasyConnect\EasyConnect2026\EasyConnectAPP\easyconnect_app\ui\main_window.py", line 234, in <lambda>
+    lambda: self.auth_service.login(username, password, otp_code),
+            ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "c:\Users\fabri\Documents\PlatformIO\Projects\EasyConnect\EasyConnect2026\EasyConnectAPP\easyconnect_app\services\auth_service.py", line 77, in login
+    raise ApiError("2FA_REQUIRED")
+easyconnect_app.services.api_client.ApiError: 2FA_REQUIRED
+2026-03-26 11:16:58,874 | WARNING | easyconnect_app.ui.main_window | UI login error | user=info@safaservice.com | had_otp=False | message=2FA_REQUIRED
+2026-03-26 11:16:58,874 | INFO | easyconnect_app.ui.main_window | UI OTP prompt | user=info@safaservice.com | prompt_count=1
+2026-03-26 11:17:08,376 | INFO | easyconnect_app.ui.main_window | UI login dispatch | user=info@safaservice.com | had_otp=True | otp_len=6
+2026-03-26 11:17:08,377 | INFO | easyconnect_app.services.auth_service | Login attempt | user=info@safaservice.com | mock_mode=False | has_otp=True
+2026-03-26 11:17:08,378 | DEBUG | easyconnect_app.services.api_client | HTTP request | method=POST | url=https://www.antralux.com/impianti/api_desktop_auth.php | as_form=False | payload={'email': 'info@safaservice.com', 'username': 'info@safaservice.com', 'password': '<masked>', 'code': '<masked:6>', 'otp': '<masked:6>', 'otp_code': '<masked:6>', 'two_factor_code': '<masked:6>', '2fa_code': '<masked:6>', 'source': 'desktop_app'} | params=None
+2026-03-26 11:17:08,379 | DEBUG | httpcore.connection | close.started
+2026-03-26 11:17:08,380 | DEBUG | httpcore.connection | close.complete
+2026-03-26 11:17:08,380 | DEBUG | httpcore.connection | connect_tcp.started host='www.antralux.com' port=443 local_address=None timeout=20.0 socket_options=None
+2026-03-26 11:17:08,464 | DEBUG | httpcore.connection | connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x000001BEC81E83E0>
+2026-03-26 11:17:08,464 | DEBUG | httpcore.connection | start_tls.started ssl_context=<ssl.SSLContext object at 0x000001BEC1B708C0> server_hostname='www.antralux.com' timeout=20.0
+2026-03-26 11:17:08,543 | DEBUG | httpcore.connection | start_tls.complete return_value=<httpcore._backends.sync.SyncStream object at 0x000001BEC1AABE30>
+2026-03-26 11:17:08,543 | DEBUG | httpcore.http11 | send_request_headers.started request=<Request [b'POST']>
+2026-03-26 11:17:08,544 | DEBUG | httpcore.http11 | send_request_headers.complete
+2026-03-26 11:17:08,544 | DEBUG | httpcore.http11 | send_request_body.started request=<Request [b'POST']>
+2026-03-26 11:17:08,545 | DEBUG | httpcore.http11 | send_request_body.complete
+2026-03-26 11:17:08,546 | DEBUG | httpcore.http11 | receive_response_headers.started request=<Request [b'POST']>
+2026-03-26 11:17:08,672 | DEBUG | httpcore.http11 | receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Thu, 26 Mar 2026 10:17:09 GMT'), (b'Server', b'Apache'), (b'Expires', b'Thu, 19 Nov 1981 08:52:00 GMT'), (b'Cache-Control', b'no-store, no-cache, must-revalidate'), (b'Pragma', b'no-cache'), (b'Set-Cookie', b'PHPSESSID=3c41d4d181caff7574fe2b0d298d1eef; path=/'), (b'Upgrade', b'h2,h2c'), (b'Connection', b'Upgrade, Keep-Alive'), (b'Vary', b'Accept-Encoding'), (b'Keep-Alive', b'timeout=5, max=100'), (b'Transfer-Encoding', b'chunked'), (b'Content-Type', b'application/json')])
+2026-03-26 11:17:08,673 | INFO | httpx | HTTP Request: POST https://www.antralux.com/impianti/api_desktop_auth.php "HTTP/1.1 200 OK"
+2026-03-26 11:17:08,673 | DEBUG | httpcore.http11 | receive_response_body.started request=<Request [b'POST']>
+2026-03-26 11:17:08,674 | DEBUG | httpcore.http11 | receive_response_body.complete
+2026-03-26 11:17:08,674 | DEBUG | httpcore.http11 | response_closed.started
+2026-03-26 11:17:08,675 | DEBUG | httpcore.http11 | response_closed.complete
+2026-03-26 11:17:08,675 | DEBUG | easyconnect_app.services.api_client | HTTP response | status=200 | url=https://www.antralux.com/impianti/api_desktop_auth.php
+2026-03-26 11:17:08,675 | DEBUG | easyconnect_app.services.api_client | HTTP json ok | url=https://www.antralux.com/impianti/api_desktop_auth.php | type=dict
+2026-03-26 11:17:08,676 | INFO | easyconnect_app.services.auth_service | Login success | user=info@safaservice.com | role=admin | token=True
+2026-03-26 11:17:08,676 | INFO | easyconnect_app.ui.main_window | UI login success | user=info@safaservice.com | role=admin
+2026-03-26 11:17:08,695 | DEBUG | easyconnect_app.services.api_client | HTTP request | method=GET | url=https://www.antralux.com/impianti/api_desktop_profile.php | as_form=False | payload=None | params=None
+2026-03-26 11:17:08,700 | DEBUG | httpcore.http11 | send_request_headers.started request=<Request [b'GET']>
+2026-03-26 11:17:08,701 | DEBUG | httpcore.http11 | send_request_headers.complete
+2026-03-26 11:17:08,702 | DEBUG | httpcore.http11 | send_request_body.started request=<Request [b'GET']>
+2026-03-26 11:17:08,703 | DEBUG | httpcore.http11 | send_request_body.complete
+2026-03-26 11:17:08,703 | DEBUG | httpcore.http11 | receive_response_headers.started request=<Request [b'GET']>
+2026-03-26 11:17:08,787 | DEBUG | httpcore.http11 | receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Thu, 26 Mar 2026 10:17:09 GMT'), (b'Server', b'Apache'), (b'Expires', b'Thu, 19 Nov 1981 08:52:00 GMT'), (b'Cache-Control', b'no-store, no-cache, must-revalidate'), (b'Pragma', b'no-cache'), (b'Vary', b'Accept-Encoding'), (b'Keep-Alive', b'timeout=5, max=99'), (b'Connection', b'Keep-Alive'), (b'Transfer-Encoding', b'chunked'), (b'Content-Type', b'application/json')])
+2026-03-26 11:17:08,787 | INFO | httpx | HTTP Request: GET https://www.antralux.com/impianti/api_desktop_profile.php "HTTP/1.1 200 OK"
+2026-03-26 11:17:08,788 | DEBUG | httpcore.http11 | receive_response_body.started request=<Request [b'GET']>
+2026-03-26 11:17:08,789 | DEBUG | httpcore.http11 | receive_response_body.complete
+2026-03-26 11:17:08,789 | DEBUG | httpcore.http11 | response_closed.started
+2026-03-26 11:17:08,789 | DEBUG | httpcore.http11 | response_closed.complete
+2026-03-26 11:17:08,790 | DEBUG | easyconnect_app.services.api_client | HTTP response | status=200 | url=https://www.antralux.com/impianti/api_desktop_profile.php
+2026-03-26 11:17:08,790 | DEBUG | easyconnect_app.services.api_client | HTTP json ok | url=https://www.antralux.com/impianti/api_desktop_profile.php | type=dict
+2026-03-26 11:17:13,929 | DEBUG | easyconnect_app.services.api_client | HTTP request | method=GET | url=https://www.antralux.com/impianti/api_desktop_plants.php | as_form=False | payload=None | params=None
+2026-03-26 11:17:13,931 | DEBUG | httpcore.connection | close.started
+2026-03-26 11:17:13,931 | DEBUG | httpcore.connection | close.complete
+2026-03-26 11:17:13,932 | DEBUG | httpcore.connection | connect_tcp.started host='www.antralux.com' port=443 local_address=None timeout=20.0 socket_options=None
+2026-03-26 11:17:14,027 | DEBUG | httpcore.connection | connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x000001BEC1B8D9D0>
+2026-03-26 11:17:14,028 | DEBUG | httpcore.connection | start_tls.started ssl_context=<ssl.SSLContext object at 0x000001BEC1B708C0> server_hostname='www.antralux.com' timeout=20.0
+2026-03-26 11:17:14,115 | DEBUG | httpcore.connection | start_tls.complete return_value=<httpcore._backends.sync.SyncStream object at 0x000001BEC1B8DAE0>
+2026-03-26 11:17:14,116 | DEBUG | httpcore.http11 | send_request_headers.started request=<Request [b'GET']>
+2026-03-26 11:17:14,117 | DEBUG | httpcore.http11 | send_request_headers.complete
+2026-03-26 11:17:14,117 | DEBUG | httpcore.http11 | send_request_body.started request=<Request [b'GET']>
+2026-03-26 11:17:14,118 | DEBUG | httpcore.http11 | send_request_body.complete
+2026-03-26 11:17:14,118 | DEBUG | httpcore.http11 | receive_response_headers.started request=<Request [b'GET']>
+2026-03-26 11:17:14,828 | DEBUG | httpcore.http11 | receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Thu, 26 Mar 2026 10:17:14 GMT'), (b'Server', b'Apache'), (b'Expires', b'Thu, 19 Nov 1981 08:52:00 GMT'), (b'Cache-Control', b'no-store, no-cache, must-revalidate'), (b'Pragma', b'no-cache'), (b'Upgrade', b'h2,h2c'), (b'Connection', b'Upgrade, Keep-Alive'), (b'Vary', b'Accept-Encoding'), (b'Keep-Alive', b'timeout=5, max=100'), (b'Transfer-Encoding', b'chunked'), (b'Content-Type', b'application/json')])
+2026-03-26 11:17:14,829 | INFO | httpx | HTTP Request: GET https://www.antralux.com/impianti/api_desktop_plants.php "HTTP/1.1 200 OK"
+2026-03-26 11:17:14,829 | DEBUG | httpcore.http11 | receive_response_body.started request=<Request [b'GET']>
+2026-03-26 11:17:14,830 | DEBUG | httpcore.http11 | receive_response_body.complete
+2026-03-26 11:17:14,830 | DEBUG | httpcore.http11 | response_closed.started
+2026-03-26 11:17:14,831 | DEBUG | httpcore.http11 | response_closed.complete
+2026-03-26 11:17:14,831 | DEBUG | easyconnect_app.services.api_client | HTTP response | status=200 | url=https://www.antralux.com/impianti/api_desktop_plants.php
+2026-03-26 11:17:14,832 | DEBUG | easyconnect_app.services.api_client | HTTP json ok | url=https://www.antralux.com/impianti/api_desktop_plants.php | type=dict
+2026-03-26 11:17:14,835 | DEBUG | easyconnect_app.services.api_client | HTTP request | method=GET | url=https://www.antralux.com/impianti/api_desktop_plant_detail.php | as_form=False | payload=None | params={'plant_id': 9}
+2026-03-26 11:17:14,836 | DEBUG | httpcore.http11 | send_request_headers.started request=<Request [b'GET']>
+2026-03-26 11:17:14,837 | DEBUG | httpcore.http11 | send_request_headers.complete
+2026-03-26 11:17:14,837 | DEBUG | httpcore.http11 | send_request_body.started request=<Request [b'GET']>
+2026-03-26 11:17:14,837 | DEBUG | httpcore.http11 | send_request_body.complete
+2026-03-26 11:17:14,838 | DEBUG | httpcore.http11 | receive_response_headers.started request=<Request [b'GET']>
+2026-03-26 11:17:14,944 | DEBUG | httpcore.http11 | receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Thu, 26 Mar 2026 10:17:15 GMT'), (b'Server', b'Apache'), (b'Expires', b'Thu, 19 Nov 1981 08:52:00 GMT'), (b'Cache-Control', b'no-store, no-cache, must-revalidate'), (b'Pragma', b'no-cache'), (b'Vary', b'Accept-Encoding'), (b'Keep-Alive', b'timeout=5, max=99'), (b'Connection', b'Keep-Alive'), (b'Transfer-Encoding', b'chunked'), (b'Content-Type', b'application/json')])
+2026-03-26 11:17:14,945 | INFO | httpx | HTTP Request: GET https://www.antralux.com/impianti/api_desktop_plant_detail.php?plant_id=9 "HTTP/1.1 200 OK"
+2026-03-26 11:17:14,946 | DEBUG | httpcore.http11 | receive_response_body.started request=<Request [b'GET']>
+2026-03-26 11:17:14,946 | DEBUG | httpcore.http11 | receive_response_body.complete
+2026-03-26 11:17:14,946 | DEBUG | httpcore.http11 | response_closed.started
+2026-03-26 11:17:14,947 | DEBUG | httpcore.http11 | response_closed.complete
+2026-03-26 11:17:14,947 | DEBUG | easyconnect_app.services.api_client | HTTP response | status=200 | url=https://www.antralux.com/impianti/api_desktop_plant_detail.php
+2026-03-26 11:17:14,948 | DEBUG | easyconnect_app.services.api_client | HTTP json ok | url=https://www.antralux.com/impianti/api_desktop_plant_detail.php | type=dict
+2026-03-26 11:17:34,305 | DEBUG | easyconnect_app.services.api_client | HTTP request | method=GET | url=https://www.antralux.com/impianti/api_desktop_plants.php | as_form=False | payload=None | params=None
+2026-03-26 11:17:34,306 | DEBUG | httpcore.connection | close.started
+2026-03-26 11:17:34,306 | DEBUG | httpcore.connection | close.complete
+2026-03-26 11:17:34,307 | DEBUG | httpcore.connection | connect_tcp.started host='www.antralux.com' port=443 local_address=None timeout=20.0 socket_options=None
+2026-03-26 11:17:34,404 | DEBUG | httpcore.connection | connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x000001BEC1BA5350>
+2026-03-26 11:17:34,405 | DEBUG | httpcore.connection | start_tls.started ssl_context=<ssl.SSLContext object at 0x000001BEC1B708C0> server_hostname='www.antralux.com' timeout=20.0
+2026-03-26 11:17:34,477 | DEBUG | httpcore.connection | start_tls.complete return_value=<httpcore._backends.sync.SyncStream object at 0x000001BEC1BA6050>
+2026-03-26 11:17:34,478 | DEBUG | httpcore.http11 | send_request_headers.started request=<Request [b'GET']>
+2026-03-26 11:17:34,478 | DEBUG | httpcore.http11 | send_request_headers.complete
+2026-03-26 11:17:34,478 | DEBUG | httpcore.http11 | send_request_body.started request=<Request [b'GET']>
+2026-03-26 11:17:34,479 | DEBUG | httpcore.http11 | send_request_body.complete
+2026-03-26 11:17:34,479 | DEBUG | httpcore.http11 | receive_response_headers.started request=<Request [b'GET']>
+2026-03-26 11:17:34,562 | DEBUG | httpcore.http11 | receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Thu, 26 Mar 2026 10:17:35 GMT'), (b'Server', b'Apache'), (b'Expires', b'Thu, 19 Nov 1981 08:52:00 GMT'), (b'Cache-Control', b'no-store, no-cache, must-revalidate'), (b'Pragma', b'no-cache'), (b'Upgrade', b'h2,h2c'), (b'Connection', b'Upgrade, Keep-Alive'), (b'Vary', b'Accept-Encoding'), (b'Keep-Alive', b'timeout=5, max=100'), (b'Transfer-Encoding', b'chunked'), (b'Content-Type', b'application/json')])
+2026-03-26 11:17:34,563 | INFO | httpx | HTTP Request: GET https://www.antralux.com/impianti/api_desktop_plants.php "HTTP/1.1 200 OK"
+2026-03-26 11:17:34,563 | DEBUG | httpcore.http11 | receive_response_body.started request=<Request [b'GET']>
+2026-03-26 11:17:34,564 | DEBUG | httpcore.http11 | receive_response_body.complete
+2026-03-26 11:17:34,564 | DEBUG | httpcore.http11 | response_closed.started
+2026-03-26 11:17:34,565 | DEBUG | httpcore.http11 | response_closed.complete
+2026-03-26 11:17:34,565 | DEBUG | easyconnect_app.services.api_client | HTTP response | status=200 | url=https://www.antralux.com/impianti/api_desktop_plants.php
+2026-03-26 11:17:34,566 | DEBUG | easyconnect_app.services.api_client | HTTP json ok | url=https://www.antralux.com/impianti/api_desktop_plants.php | type=dict
+2026-03-26 11:17:34,569 | DEBUG | easyconnect_app.services.api_client | HTTP request | method=GET | url=https://www.antralux.com/impianti/api_desktop_plant_detail.php | as_form=False | payload=None | params={'plant_id': 9}
+2026-03-26 11:17:34,570 | DEBUG | httpcore.http11 | send_request_headers.started request=<Request [b'GET']>
+2026-03-26 11:17:34,571 | DEBUG | httpcore.http11 | send_request_headers.complete
+2026-03-26 11:17:34,572 | DEBUG | httpcore.http11 | send_request_body.started request=<Request [b'GET']>
+2026-03-26 11:17:34,572 | DEBUG | httpcore.http11 | send_request_body.complete
+2026-03-26 11:17:34,572 | DEBUG | httpcore.http11 | receive_response_headers.started request=<Request [b'GET']>
+2026-03-26 11:17:34,656 | DEBUG | httpcore.http11 | receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Thu, 26 Mar 2026 10:17:35 GMT'), (b'Server', b'Apache'), (b'Expires', b'Thu, 19 Nov 1981 08:52:00 GMT'), (b'Cache-Control', b'no-store, no-cache, must-revalidate'), (b'Pragma', b'no-cache'), (b'Vary', b'Accept-Encoding'), (b'Keep-Alive', b'timeout=5, max=99'), (b'Connection', b'Keep-Alive'), (b'Transfer-Encoding', b'chunked'), (b'Content-Type', b'application/json')])
+2026-03-26 11:17:34,657 | INFO | httpx | HTTP Request: GET https://www.antralux.com/impianti/api_desktop_plant_detail.php?plant_id=9 "HTTP/1.1 200 OK"
+2026-03-26 11:17:34,657 | DEBUG | httpcore.http11 | receive_response_body.started request=<Request [b'GET']>
+2026-03-26 11:17:34,658 | DEBUG | httpcore.http11 | receive_response_body.complete
+2026-03-26 11:17:34,658 | DEBUG | httpcore.http11 | response_closed.started
+2026-03-26 11:17:34,658 | DEBUG | httpcore.http11 | response_closed.complete
+2026-03-26 11:17:34,659 | DEBUG | easyconnect_app.services.api_client | HTTP response | status=200 | url=https://www.antralux.com/impianti/api_desktop_plant_detail.php
+2026-03-26 11:17:34,659 | DEBUG | easyconnect_app.services.api_client | HTTP json ok | url=https://www.antralux.com/impianti/api_desktop_plant_detail.php | type=dict
+2026-03-26 11:17:43,610 | DEBUG | easyconnect_app.services.api_client | HTTP request | method=GET | url=https://www.antralux.com/impianti/api_desktop_plant_detail.php | as_form=False | payload=None | params={'plant_id': 9}
+2026-03-26 11:17:43,611 | DEBUG | httpcore.connection | close.started
+2026-03-26 11:17:43,612 | DEBUG | httpcore.connection | close.complete
+2026-03-26 11:17:43,612 | DEBUG | httpcore.connection | connect_tcp.started host='www.antralux.com' port=443 local_address=None timeout=20.0 socket_options=None
+2026-03-26 11:17:43,689 | DEBUG | httpcore.connection | connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0x000001BEC1BC94F0>
+2026-03-26 11:17:43,689 | DEBUG | httpcore.connection | start_tls.started ssl_context=<ssl.SSLContext object at 0x000001BEC1B708C0> server_hostname='www.antralux.com' timeout=20.0
+2026-03-26 11:17:43,763 | DEBUG | httpcore.connection | start_tls.complete return_value=<httpcore._backends.sync.SyncStream object at 0x000001BEC1BC95E0>
+2026-03-26 11:17:43,763 | DEBUG | httpcore.http11 | send_request_headers.started request=<Request [b'GET']>
+2026-03-26 11:17:43,766 | DEBUG | httpcore.http11 | send_request_headers.complete
+2026-03-26 11:17:43,767 | DEBUG | httpcore.http11 | send_request_body.started request=<Request [b'GET']>
+2026-03-26 11:17:43,767 | DEBUG | httpcore.http11 | send_request_body.complete
+2026-03-26 11:17:43,767 | DEBUG | httpcore.http11 | receive_response_headers.started request=<Request [b'GET']>
+2026-03-26 11:17:43,861 | DEBUG | httpcore.http11 | receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Date', b'Thu, 26 Mar 2026 10:17:44 GMT'), (b'Server', b'Apache'), (b'Expires', b'Thu, 19 Nov 1981 08:52:00 GMT'), (b'Cache-Control', b'no-store, no-cache, must-revalidate'), (b'Pragma', b'no-cache'), (b'Upgrade', b'h2,h2c'), (b'Connection', b'Upgrade, Keep-Alive'), (b'Vary', b'Accept-Encoding'), (b'Keep-Alive', b'timeout=5, max=100'), (b'Transfer-Encoding', b'chunked'), (b'Content-Type', b'application/json')])
+2026-03-26 11:17:43,862 | INFO | httpx | HTTP Request: GET https://www.antralux.com/impianti/api_desktop_plant_detail.php?plant_id=9 "HTTP/1.1 200 OK"
+2026-03-26 11:17:43,862 | DEBUG | httpcore.http11 | receive_response_body.started request=<Request [b'GET']>
+2026-03-26 11:17:43,863 | DEBUG | httpcore.http11 | receive_response_body.complete
+2026-03-26 11:17:43,863 | DEBUG | httpcore.http11 | response_closed.started
+2026-03-26 11:17:43,863 | DEBUG | httpcore.http11 | response_closed.complete
+2026-03-26 11:17:43,864 | DEBUG | easyconnect_app.services.api_client | HTTP response | status=200 | url=https://www.antralux.com/impianti/api_desktop_plant_detail.php
+2026-03-26 11:17:43,864 | DEBUG | easyconnect_app.services.api_client | HTTP json ok | url=https://www.antralux.com/impianti/api_desktop_plant_detail.php | type=dict

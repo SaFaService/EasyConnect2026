@@ -24,7 +24,8 @@ class SerialProvisioningService:
     def check_serial(self, serial_number: str, product_type_code: str) -> dict[str, Any]:
         if self.api_client.mock_mode:
             return {
-                "status": "available",
+                "status": "ok",
+                "exists": True,
                 "assignable": True,
                 "serial_number": serial_number,
                 "product_type_code": product_type_code,

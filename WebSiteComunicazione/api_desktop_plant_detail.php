@@ -76,6 +76,7 @@ $hasBuilderColumn = columnExists($pdo, 'masters', 'builder_id');
 $hasUsersCompanyColumn = columnExists($pdo, 'users', 'company');
 $hasUsersNameColumn = columnExists($pdo, 'users', 'name');
 $hasHumidity = columnExists($pdo, 'measurements', 'humidity');
+$hasSlaveId = columnExists($pdo, 'measurements', 'slave_id');
 $hasDeviceSerials = tableExists($pdo, 'device_serials');
 $hasDeviceSerialStatus = $hasDeviceSerials ? columnExists($pdo, 'device_serials', 'status') : false;
 $hasProductTypes = tableExists($pdo, 'product_types');
@@ -168,6 +169,7 @@ try {
     }
 
     $hSelect = $hasHumidity ? "m1.humidity" : "NULL AS humidity";
+    $slaveIdSelect = $hasSlaveId ? "m1.slave_id" : "NULL AS slave_id";
     $serialJoin = $hasDeviceSerials ? "LEFT JOIN device_serials ds ON ds.serial_number = m1.slave_sn" : "";
     $productJoin = ($hasDeviceSerials && $hasProductTypes) ? "LEFT JOIN product_types pt ON pt.code = ds.product_type_code" : "";
     $ptypeSelect = $hasDeviceSerials ? "ds.product_type_code" : "NULL AS product_type_code";
@@ -181,6 +183,7 @@ try {
             m1.pressure,
             m1.temperature,
             {$hSelect},
+            {$slaveIdSelect},
             m1.fw_version,
             m1.recorded_at,
             {$ptypeSelect},
@@ -233,6 +236,7 @@ try {
             'serial_number' => (string)($r['slave_sn'] ?? ''),
             'board_type' => $ptype !== '' ? $ptype : 'unknown',
             'board_label' => (string)($r['product_label'] ?? 'Periferica'),
+            'rs485_ip' => $r['slave_id'] === null ? '' : (string)$r['slave_id'],
             'group' => (string)($r['slave_grp'] ?? ''),
             'mode' => $mode,
             'firmware_version' => (string)($r['fw_version'] ?? ''),

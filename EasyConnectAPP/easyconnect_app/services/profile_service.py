@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from easyconnect_app.models import UserProfile
+from easyconnect_app.models import UserPermissions, UserProfile
 from easyconnect_app.services.api_client import ApiClient, ApiError
 
 
@@ -19,6 +19,13 @@ class ProfileService:
                 company="Antralux",
                 name="Utente Demo",
                 has_2fa=True,
+                permissions=UserPermissions(
+                    firmware_update=True,
+                    plant_create=True,
+                    serial_lifecycle=True,
+                    serial_reserve=True,
+                    manual_peripheral=True,
+                ),
             )
 
         response = self.api_client.call_endpoint("profile_api", method="GET")
@@ -57,4 +64,3 @@ class ProfileService:
         if not isinstance(profile, dict):
             raise ApiError("Formato aggiornamento profilo non valido.")
         return UserProfile.from_dict(profile)
-
