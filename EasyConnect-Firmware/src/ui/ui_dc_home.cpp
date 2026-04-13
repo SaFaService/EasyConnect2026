@@ -466,11 +466,23 @@ static bool _relay_has_feedback_fault(const Rs485Device& dev) {
            state.indexOf("FAULT") >= 0;
 }
 
+static bool _air010_has_feedback_fault(const Rs485Device& dev) {
+    if (dev.type != Rs485DevType::SENSOR) return false;
+    if (dev.sensor_profile != Rs485SensorProfile::AIR_010) return false;
+    if (!dev.online || !dev.sensor_active) return false;
+    if (dev.sensor_feedback_fault_latched) return true;
+
+    String state = dev.sensor_state;
+    state.toUpperCase();
+    return !dev.sensor_feedback_ok && state.indexOf("FAULT") >= 0;
+}
+
 static bool _device_has_warning(const Rs485Device& dev) {
     if (!dev.data_valid) return true;
     if (_device_has_comm_issue(dev)) return true;
     if (_relay_has_safety_issue(dev)) return true;
     if (_relay_has_feedback_fault(dev)) return true;
+    if (_air010_has_feedback_fault(dev)) return true;
     return false;
 }
 
@@ -994,6 +1006,13 @@ static void _format_notification_body(const Rs485Device& dev, const char* issue,
         return;
     }
 
+    if (_air010_has_feedback_fault(dev)) {
+        lv_snprintf(out, (uint32_t)out_size,
+                    "Feedback inverter non ricevuto sulla scheda 0/10V %u del gruppo %u dopo il tempo di verifica.",
+                    (unsigned)dev.address, (unsigned)dev.group);
+        return;
+    }
+
     lv_snprintf(out, (uint32_t)out_size, "%s", (issue && issue[0]) ? issue : "Anomalia rilevata.");
 }
 
@@ -1388,6 +1407,19 @@ static void _sync_notifications_from_network_state() {
             ui_notif_push_or_update(key, UI_NOTIF_ALERT, title, body);
         } else {
             ui_notif_clear(key);
+        }
+
+        if (dev.type == Rs485DevType::SENSOR && dev.sensor_profile == Rs485SensorProfile::AIR_010) {
+            lv_snprintf(key, sizeof(key), "air010_fb_%u", (unsigned)dev.address);
+            if (_air010_has_feedback_fault(dev)) {
+                lv_snprintf(title, sizeof(title), "%s G%u - Feedback",
+                            _tile_warning_title(dev), (unsigned)dev.group);
+                _format_notification_body(dev, "Feedback inverter non ricevuto.", body, sizeof(body));
+                ui_notif_push_or_update(key, UI_NOTIF_ALERT, title, body);
+            } else {
+                ui_notif_clear(key);
+            }
+            continue;
         }
 
         if (dev.type != Rs485DevType::RELAY) continue;

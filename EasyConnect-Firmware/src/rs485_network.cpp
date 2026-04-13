@@ -152,6 +152,8 @@ static void _device_from_cache_record(const Rs485CacheRecord& rec, Rs485Device& 
     dev.relay_safety_closed = rec.relay_safety_closed != 0;
     dev.relay_feedback_ok = rec.relay_feedback_ok != 0;
     dev.sensor_active = rec.sensor_active != 0;
+    dev.sensor_feedback_ok = true;
+    dev.sensor_feedback_fault_latched = false;
     dev.t = rec.t;
     dev.h = rec.h;
     dev.p = rec.p;
@@ -161,6 +163,8 @@ static void _device_from_cache_record(const Rs485CacheRecord& rec, Rs485Device& 
     dev.sn[sizeof(dev.sn) - 1] = '\0';
     dev.version[sizeof(dev.version) - 1] = '\0';
     dev.relay_state[sizeof(dev.relay_state) - 1] = '\0';
+    strncpy(dev.sensor_state, "N/A", sizeof(dev.sensor_state) - 1);
+    dev.sensor_state[sizeof(dev.sensor_state) - 1] = '\0';
     dev.online = true;
     dev.in_plant = true;
     dev.comm_failures = 0;
@@ -469,9 +473,9 @@ static void _parse_sensor(const String& resp, Rs485Device& dev) {
 }
 
 static void _parse_0v10v(const String& resp, Rs485Device& dev) {
-    int v[8] = {};
+    int v[10] = {};
     int found = 0;
-    for (int k = 0; k < (int)resp.length() && found < 8; k++) {
+    for (int k = 0; k < (int)resp.length() && found < 10; k++) {
         if (resp.charAt(k) == ',') v[found++] = k;
     }
     if (found < 7) {
@@ -485,18 +489,37 @@ static void _parse_0v10v(const String& resp, Rs485Device& dev) {
     const String fb_str = resp.substring(v[3] + 1, v[4]);
     const String grp_str = resp.substring(v[4] + 1, v[5]);
     String sn = resp.substring(v[5] + 1, v[6]);
-    String ver = resp.substring(v[6] + 1);
+    String ver;
+    String state;
+    bool feedback_fault_latched = false;
+    if (found >= 9) {
+        ver = resp.substring(v[6] + 1, v[7]);
+        feedback_fault_latched = _field_to_bool(resp.substring(v[7] + 1, v[8]));
+        state = resp.substring(v[8] + 1);
+    } else if (found >= 8) {
+        ver = resp.substring(v[6] + 1, v[7]);
+        feedback_fault_latched = _field_to_bool(resp.substring(v[7] + 1));
+    } else {
+        ver = resp.substring(v[6] + 1);
+    }
     sn.trim();
     ver.trim();
+    state.trim();
 
     dev.h = speed_str.toFloat();
     dev.sensor_active = _field_to_bool(enabled_str);
-    dev.p = fb_str.toFloat();
+    dev.sensor_feedback_ok = _field_to_bool(fb_str);
+    dev.sensor_feedback_fault_latched = feedback_fault_latched;
+    dev.p = dev.sensor_feedback_ok ? 1.0f : 0.0f;
 
     uint8_t parsed_group = 0;
     if (_field_to_uint8_checked(grp_str, parsed_group)) dev.group = parsed_group;
     sn.toCharArray(dev.sn, sizeof(dev.sn));
     ver.toCharArray(dev.version, sizeof(dev.version));
+    if (state.length() == 0) {
+        state = dev.sensor_active ? (dev.sensor_feedback_ok ? "RUNNING" : "WAIT_FB") : "OFF";
+    }
+    state.toCharArray(dev.sensor_state, sizeof(dev.sensor_state));
 
     dev.sensor_profile = Rs485SensorProfile::AIR_010;
     dev.data_valid = (_serial_type_code(dev.sn) == "05" || _serial_type_code(dev.sn) == "06") &&
@@ -566,6 +589,8 @@ static void _fill_device_from_response(int addr, const String& resp, Rs485Device
     dev.version[sizeof(dev.version) - 1] = '\0';
     strncpy(dev.relay_state, "N/A", sizeof(dev.relay_state) - 1);
     dev.relay_state[sizeof(dev.relay_state) - 1] = '\0';
+    strncpy(dev.sensor_state, "N/A", sizeof(dev.sensor_state) - 1);
+    dev.sensor_state[sizeof(dev.sensor_state) - 1] = '\0';
     dev.sensor_profile = Rs485SensorProfile::UNKNOWN;
     dev.sensor_mode = 0;
     dev.data_valid = false;
@@ -1082,6 +1107,15 @@ bool rs485_network_motor_enable_command(uint8_t address, bool enable, String& ra
     raw_response = last_raw;
     if (ok) {
         s_devices[runtime_idx].sensor_active = enable;
+        if (enable) {
+            s_devices[runtime_idx].sensor_feedback_fault_latched = false;
+            strncpy(s_devices[runtime_idx].sensor_state, "WAIT_FB", sizeof(s_devices[runtime_idx].sensor_state) - 1);
+        } else {
+            s_devices[runtime_idx].sensor_feedback_ok = false;
+            s_devices[runtime_idx].sensor_feedback_fault_latched = false;
+            strncpy(s_devices[runtime_idx].sensor_state, "OFF", sizeof(s_devices[runtime_idx].sensor_state) - 1);
+        }
+        s_devices[runtime_idx].sensor_state[sizeof(s_devices[runtime_idx].sensor_state) - 1] = '\0';
     }
     xSemaphoreGive(s_bus_mutex);
     return ok;

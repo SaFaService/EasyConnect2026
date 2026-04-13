@@ -118,11 +118,23 @@ static bool _relay_has_feedback_fault(const Rs485Device& dev) {
            state.indexOf("FAULT") >= 0;
 }
 
+static bool _air010_has_feedback_fault(const Rs485Device& dev) {
+    if (dev.type != Rs485DevType::SENSOR) return false;
+    if (dev.sensor_profile != Rs485SensorProfile::AIR_010) return false;
+    if (!dev.online || !dev.sensor_active) return false;
+    if (dev.sensor_feedback_fault_latched) return true;
+
+    String state = dev.sensor_state;
+    state.toUpperCase();
+    return !dev.sensor_feedback_ok && state.indexOf("FAULT") >= 0;
+}
+
 static bool _device_has_any_error(const Rs485Device& dev) {
     if (!dev.data_valid) return true;
     return _device_has_comm_issue(dev) ||
            _relay_has_safety_issue(dev) ||
-           _relay_has_feedback_fault(dev);
+           _relay_has_feedback_fault(dev) ||
+           _air010_has_feedback_fault(dev);
 }
 
 static bool _device_is_frozen(const Rs485Device& dev) {
@@ -150,6 +162,10 @@ static void _device_error_summary(const Rs485Device& dev, char* out, size_t out_
     }
     if (_relay_has_feedback_fault(dev)) {
         lv_snprintf(out, out_sz, "Errore: feedback mancato");
+        return;
+    }
+    if (_air010_has_feedback_fault(dev)) {
+        lv_snprintf(out, out_sz, "Errore: feedback inverter");
         return;
     }
 
@@ -346,9 +362,14 @@ static void _open_device_detail(const Rs485Device& dev) {
     } else if (dev.type == Rs485DevType::SENSOR && dev.sensor_profile == Rs485SensorProfile::AIR_010) {
         add_row("Ruolo:", _air_role_text(dev.group), 160);
         add_row("Stato:", dev.sensor_active ? "ON" : "OFF", 190);
+        char spd_buf[16];
+        lv_snprintf(spd_buf, sizeof(spd_buf), "%d %%", (int)(dev.h + 0.5f));
+        add_row("Velocita':", spd_buf, 220);
+        add_row("Feedback:", dev.sensor_feedback_ok ? "OK" : "FAIL", 250);
+        add_row("Run state:", dev.sensor_state[0] ? dev.sensor_state : "N/D", 280);
         char grp_buf[8];
         lv_snprintf(grp_buf, sizeof(grp_buf), "%u", dev.group);
-        add_row("Gruppo:", grp_buf, 220);
+        add_row("Gruppo:", grp_buf, 310);
     } else if (dev.type == Rs485DevType::SENSOR) {
         char t_buf[24], h_buf[24], p_buf[24];
         _format_signed_tenths(dev.t, "C", t_buf, sizeof(t_buf));
@@ -377,6 +398,8 @@ static void _open_device_detail(const Rs485Device& dev) {
         error_text = "Sicurezza aperta";
     } else if (_relay_has_feedback_fault(dev)) {
         error_text = "Feedback mancato";
+    } else if (_air010_has_feedback_fault(dev)) {
+        error_text = "Feedback inverter mancato";
     }
 
     lv_obj_t* err_lbl = lv_label_create(card);

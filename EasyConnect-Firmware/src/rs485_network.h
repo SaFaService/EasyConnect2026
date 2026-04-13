@@ -30,6 +30,8 @@ struct Rs485Device {
     float        p;              // Pressione   (solo SENSOR)
     uint8_t      group;          // Gruppo dispositivo (se disponibile)
     bool         sensor_active;  // Stato digitale sensore/0-10 (se disponibile)
+    bool         sensor_feedback_ok;            // Feedback 0-10V, se disponibile
+    bool         sensor_feedback_fault_latched; // Fault feedback 0-10V temporizzato
     Rs485SensorProfile sensor_profile;
     uint8_t      sensor_mode;    // 1=TH, 2=P, 3=ALL (se esposto dal firmware sensore)
     bool         data_valid;     // false se la periferica risponde ma non ha ancora dati/config coerenti
@@ -43,6 +45,7 @@ struct Rs485Device {
     bool         in_plant;           // true se appartiene alla fotografia impianto salvata
     uint8_t      comm_failures;      // contatore runtime di miss consecutivi
     char         relay_state[24];    // Stato testuale relay (es. RUNNING/FAULT)
+    char         sensor_state[24];   // Stato testuale sensore/0-10V (es. RUNNING/FAULT)
 };
 
 // Stato della scansione RS485.

@@ -30,7 +30,7 @@
 #include "Led.h"
 
 // ─── Versione firmware ─────────────────────────────────────────────────────
-static const char* FW_VERSION = "0.1.0";
+static const char* FW_VERSION = "0.1.2";
 
 // ─── Pin (dichiarati nel profilo BOARD_PROFILE_0V10V di Pins.h) ────────────
 //   PIN_RS485_DIR  = 7
@@ -50,9 +50,11 @@ static const char* FW_VERSION = "0.1.0";
 
 // ─── LEDC (PWM hardware ESP32-C3) ─────────────────────────────────────────
 #define LEDC_CHANNEL    0
-#define LEDC_FREQ_HZ    2000    // 2 kHz: buon compromesso per il filtro RC
+#define LEDC_FREQ_HZ    100     // 100 Hz: riduce la deformazione duty attraverso l'opto TLP182
 #define LEDC_BITS       10
 #define LEDC_MAX_DUTY   ((1u << LEDC_BITS) - 1u)   // = 1023
+
+static constexpr unsigned long FEEDBACK_CHECK_DELAY_MS = 5000UL;
 
 // ─── RS485 ────────────────────────────────────────────────────────────────
 #define RS485_BAUD      115200
@@ -79,6 +81,17 @@ static unsigned long g_lastDirectedAct    = 0;
 static uint8_t       g_speed   = 0;
 static bool          g_enabled = false;
 static bool          g_fbOk    = false;
+static bool          g_fbFaultLatched = false;
+static unsigned long g_fbCheckStartMs = 0;
+
+enum class InvRunState : uint8_t {
+    Off = 0,
+    WaitingFeedback,
+    Running,
+    Fault,
+};
+
+static InvRunState   g_runState = InvRunState::Off;
 
 static Led g_ledGreen(PIN_LED_GREEN);
 static Led g_ledRed(PIN_LED_RED);
@@ -106,16 +119,74 @@ static bool hasMinConfig() {
            isValidSerial(String(g_cfg.serialId));
 }
 
+static const char* runStateText() {
+    switch (g_runState) {
+        case InvRunState::Off:             return "OFF";
+        case InvRunState::WaitingFeedback: return "WAIT_FB";
+        case InvRunState::Running:         return "RUNNING";
+        case InvRunState::Fault:           return "FAULT";
+        default:                           return "UNKNOWN";
+    }
+}
+
+static void writePwmForState() {
+    const uint32_t duty = g_enabled ? (((uint32_t)g_speed * LEDC_MAX_DUTY) / 100u) : 0u;
+    ledcWrite(LEDC_CHANNEL, duty);
+}
+
 static void applySpeed(uint8_t pct) {
     if (pct > 100) pct = 100;
     g_speed = pct;
-    const uint32_t duty = ((uint32_t)pct * LEDC_MAX_DUTY) / 100u;
-    ledcWrite(LEDC_CHANNEL, duty);
+    writePwmForState();
 }
 
 static void applyEnable(bool en) {
     g_enabled = en;
     digitalWrite(PIN_0V10V_ENABLE, en ? HIGH : LOW);
+    writePwmForState();
+
+    if (en) {
+        g_fbFaultLatched = false;
+        g_fbCheckStartMs = millis();
+        g_runState = InvRunState::WaitingFeedback;
+    } else {
+        g_fbFaultLatched = false;
+        g_fbCheckStartMs = 0;
+        g_runState = InvRunState::Off;
+    }
+}
+
+static void updateFeedbackState() {
+    g_fbOk = (digitalRead(PIN_0V10V_FEEDBACK) == FEEDBACK_OK_LEVEL);
+
+    if (!g_enabled) {
+        g_fbFaultLatched = false;
+        g_fbCheckStartMs = 0;
+        g_runState = InvRunState::Off;
+        return;
+    }
+
+    const unsigned long now = millis();
+    if (g_fbOk) {
+        g_fbFaultLatched = false;
+        g_fbCheckStartMs = now;
+        g_runState = InvRunState::Running;
+        return;
+    }
+
+    if (g_runState != InvRunState::WaitingFeedback && g_runState != InvRunState::Fault) {
+        g_runState = InvRunState::WaitingFeedback;
+        g_fbCheckStartMs = now;
+    }
+    if (g_fbCheckStartMs == 0) {
+        g_fbCheckStartMs = now;
+    }
+
+    if (g_runState == InvRunState::WaitingFeedback &&
+        (now - g_fbCheckStartMs) >= FEEDBACK_CHECK_DELAY_MS) {
+        g_fbFaultLatched = true;
+        g_runState = InvRunState::Fault;
+    }
 }
 
 // ─── Preferences ──────────────────────────────────────────────────────────
@@ -173,7 +244,9 @@ static String buildStatus() {
     s += g_fbOk    ? 1 : 0; s += ",";
     s += g_cfg.group;   s += ",";
     s += g_cfg.serialId; s += ",";
-    s += FW_VERSION;
+    s += FW_VERSION; s += ",";
+    s += g_fbFaultLatched ? 1 : 0; s += ",";
+    s += runStateText();
     return s;
 }
 
@@ -298,6 +371,9 @@ static void printInfo() {
     Serial.printf("Velocita       : %u %%\n", g_speed);
     Serial.printf("Inverter EN    : %s\n", g_enabled ? "ON" : "OFF");
     Serial.printf("Feedback       : %s\n", g_fbOk ? "OK (no fault)" : "FAULT / NC");
+    Serial.printf("Stato          : %s\n", runStateText());
+    Serial.printf("Fault latched  : %s\n", g_fbFaultLatched ? "SI" : "NO");
+    Serial.printf("Check delay    : %lu ms\n", (unsigned long)FEEDBACK_CHECK_DELAY_MS);
     Serial.printf("SavedSpeed     : %u %%\n", g_cfg.savedSpeed);
     Serial.printf("EnableOnBoot   : %s\n", g_cfg.enableOnBoot ? "SI" : "NO");
     Serial.printf("Debug 485      : %s\n", g_debug485 ? "ATTIVO" : "DISATTIVO");
@@ -440,7 +516,7 @@ static void updateLeds() {
     // LED ROSSO: stato dispositivo
     if (!g_cfg.configured) {
         g_ledRed.setState(LED_BLINK_FAST);
-    } else if (g_enabled && !g_fbOk) {
+    } else if (g_fbFaultLatched) {
         g_ledRed.setState(LED_BLINK_SLOW);  // inverter in fault
     } else if (g_enabled) {
         g_ledRed.setState(LED_SOLID);       // in funzione OK
@@ -506,8 +582,7 @@ void loop() {
     serialUpdate();
     rs485Update();
 
-    // Lettura feedback inverter
-    g_fbOk = (digitalRead(PIN_0V10V_FEEDBACK) == FEEDBACK_OK_LEVEL);
+    updateFeedbackState();
 
     updateLeds();
     delay(2);
