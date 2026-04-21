@@ -26,6 +26,11 @@ if ($apiKey === '' || $commandId <= 0) {
     echo json_encode(['status' => 'error', 'message' => 'Parametri mancanti']);
     exit;
 }
+if (!preg_match('/^[a-f0-9]{64}$/i', $apiKey)) {
+    http_response_code(403);
+    echo json_encode(['status' => 'error', 'message' => 'API Key non valida']);
+    exit;
+}
 if (!tableExists($pdo, 'device_commands')) {
     http_response_code(500);
     echo json_encode(['status' => 'error', 'message' => 'Tabella device_commands non disponibile']);

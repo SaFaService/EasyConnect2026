@@ -4,6 +4,7 @@ header('Content-Type: application/json');
 
 $input = json_decode(file_get_contents('php://input'), true);
 $apiKey = $input['api_key'] ?? '';
+$apiKey = trim((string)$apiKey);
 $slaveSn = $input['slave_sn'] ?? '';
 $status = $input['status'] ?? 'Failed';
 $message = $input['message'] ?? 'Nessun messaggio.';
@@ -11,6 +12,11 @@ $message = $input['message'] ?? 'Nessun messaggio.';
 if (empty($apiKey) || empty($slaveSn)) {
     http_response_code(400);
     echo json_encode(['status' => 'error', 'message' => 'API Key o Seriale Slave mancante.']);
+    exit;
+}
+if (!preg_match('/^[a-f0-9]{64}$/i', trim((string)$apiKey))) {
+    http_response_code(403);
+    echo json_encode(['status' => 'error', 'message' => 'API Key non valida.']);
     exit;
 }
 

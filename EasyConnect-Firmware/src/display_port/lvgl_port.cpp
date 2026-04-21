@@ -587,6 +587,9 @@ bool lvgl_port_notify_rgb_vsync(void)
 #elif LVGL_PORT_AVOID_TEAR_ENABLE
     // Siamo in ISR: notifichiamo al task LVGL che il framebuffer corrente e'
     // stato trasmesso e che puo' procedere con il prossimo ciclo.
+    if (lvgl_task_handle == NULL) {
+        return false;
+    }
     xTaskNotifyFromISR(lvgl_task_handle, ULONG_MAX, eNoAction, &need_yield); // Notify the LVGL task
 #endif
     return (need_yield == pdTRUE); // Return whether a yield is needed

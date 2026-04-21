@@ -9,6 +9,7 @@ $lang = [
     'navbar_user_management' => 'Gestione Utenti',
     'navbar_firmware_management' => 'Gestione Firmware',
     'navbar_serial_management' => 'Gestione Seriali',
+    'navbar_api_keys' => 'API Key',
     'navbar_language' => 'Lingua',
     'navbar_italian' => 'Italiano',
     'navbar_english' => 'English',

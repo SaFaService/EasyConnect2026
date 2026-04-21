@@ -53,7 +53,7 @@
 #define EXAMPLE_LCD_RGB_BUFFER_NUMS     (2)    ///< Default number of frame buffers
 // Piccolo buffer intermedio che aiuta il driver RGB a reggere meglio le contese
 // di memoria/DMA, soprattutto quando il sistema e' sotto pressione.
-#define EXAMPLE_RGB_BOUNCE_BUFFER_SIZE  (EXAMPLE_LCD_H_RES * 10) ///< Bounce buffer to reduce DMA underflow artifacts
+#define EXAMPLE_RGB_BOUNCE_BUFFER_SIZE  (EXAMPLE_LCD_H_RES * 4) ///< Bounce buffer: 4 rows (DMA budget condiviso con WiFi statico)
 
 #if DISPLAY_DRIVER_LOCK_ENABLED
 #if EXAMPLE_LCD_PIXEL_CLOCK_HZ != (30 * 1000 * 1000)
@@ -159,5 +159,14 @@ void waveshare_rgb_lcd_set_pclk(uint32_t freq_hz);
  * temporarily desynchronizes LCD DMA.
  */
 void waveshare_rgb_lcd_request_restart();
+
+/**
+ * @brief Temporarily lower RGB bandwidth while another subsystem stresses memory/radio buses.
+ *
+ * Calls are reference-counted: multiple subsystems can hold the guard at once,
+ * and the normal pixel clock is restored only after the last release.
+ */
+void waveshare_rgb_lcd_activity_guard_acquire();
+void waveshare_rgb_lcd_activity_guard_release();
 
 #endif // _RGB_LCD_H_

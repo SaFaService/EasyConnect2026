@@ -1,3 +1,12 @@
+/**
+ * ITA: Gestione invio dati del master verso API cloud.
+ * ENG: Master data upload manager for cloud APIs.
+ *
+ * ITA: Questo file decide a quali endpoint inviare (factory/customer),
+ *      prepara il payload JSON e gestisce gli esiti HTTP.
+ * ENG: This file decides which endpoints to use (factory/customer),
+ *      builds the JSON payload, and handles HTTP outcomes.
+ */
 #include "API_Manager.h"
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
@@ -7,7 +16,8 @@
 #include "Calibration.h"
 #include <WiFi.h>
 
-// --- VARIABILI ESTERNE ---
+// ITA: Variabili globali definite in altri moduli.
+// ENG: Global variables defined in other modules.
 extern const char* FW_VERSION;
 extern Impostazioni config;
 extern bool listaPerifericheAttive[101];
@@ -19,6 +29,8 @@ extern bool apiAuthRejected;
 extern bool apiCustomerIssue;
 extern bool slaveExcludedByPortal[101];
 
+// ITA: Descrive un endpoint API (nome logico + URL + API key).
+// ENG: Describes one API endpoint (logical name + URL + API key).
 struct ApiEndpoint {
     String name;
     String url;
@@ -26,6 +38,8 @@ struct ApiEndpoint {
     bool isCustomer;
 };
 
+// ITA: Piano di dispatch calcolato a runtime (1 o 2 endpoint).
+// ENG: Runtime dispatch plan (1 or 2 endpoints).
 struct ApiDispatchPlan {
     ApiEndpoint endpoints[2];
     int count;
@@ -33,18 +47,23 @@ struct ApiDispatchPlan {
     bool sameAsFactory;
 };
 
-// Contatori traffico API della sessione corrente (dal boot).
+// ITA: Contatori traffico API della sessione corrente (dal boot).
+// ENG: API traffic counters for current boot session.
 static uint64_t gApiTxBytesSession = 0;
 static uint64_t gApiRxBytesSession = 0;
 static uint32_t gApiPostsSession = 0;
 
 static String u64ToString(uint64_t value) {
+    // ITA: Conversione robusta uint64 -> String anche su toolchain embedded.
+    // ENG: Robust uint64 -> String conversion on embedded toolchains.
     char buf[24];
     snprintf(buf, sizeof(buf), "%llu", (unsigned long long)value);
     return String(buf);
 }
 
 static bool isSlaveOnline485(int slaveId, unsigned long nowMs) {
+    // ITA: Valuta online se ultimo pacchetto ricevuto <= timeout.
+    // ENG: Marks device online if last packet was received within timeout.
     if (slaveId < 1 || slaveId > 100) return false;
     const unsigned long OFFLINE_TIMEOUT_MS = 10000;
     if (databaseSlave[slaveId].lastResponseTime == 0) return false;
@@ -52,12 +71,15 @@ static bool isSlaveOnline485(int slaveId, unsigned long nowMs) {
 }
 
 static void resetExcludedSlaves() {
+    // ITA: Reimposta filtro esclusioni ricevuto dal portale.
+    // ENG: Resets exclusion filter received from backend portal.
     for (int i = 0; i <= 100; i++) {
         slaveExcludedByPortal[i] = false;
     }
 }
 
-// Ritorna true solo se il campo ignore_serials e' presente e processato.
+// ITA: Ritorna true solo se il campo ignore_serials è presente e processato.
+// ENG: Returns true only if ignore_serials exists and is processed.
 static bool applyIgnoreSerialsFromResponse(const String& response) {
     int keyPos = response.indexOf("\"ignore_serials\"");
     if (keyPos < 0) return false;
@@ -96,8 +118,10 @@ static bool applyIgnoreSerialsFromResponse(const String& response) {
 }
 
 static bool computeDeltaPForApi(unsigned long nowMs, float& outDeltaP) {
-    // Priorita' 1: gruppo 1 - gruppo 2
-    // Fallback: prime due periferiche online (utile in laboratorio/test)
+    // ITA: Priorità 1: gruppo 1 - gruppo 2.
+    // ENG: Priority 1: group 1 - group 2.
+    // ITA: Fallback: prime due periferiche online (utile per test/lab).
+    // ENG: Fallback: first two online devices (useful for testing/lab).
     bool grp1Found = false;
     bool grp2Found = false;
     float grp1Pressure = 0.0f;
@@ -141,6 +165,8 @@ static bool computeDeltaPForApi(unsigned long nowMs, float& outDeltaP) {
 }
 
 static String buildPayload(float deltaP, unsigned long nowMs) {
+    // ITA: Include telemetria master + stato di tutte le periferiche.
+    // ENG: Includes master telemetry + state of all peripherals.
     long rssi = WiFi.RSSI();
     const uint32_t uptimeSeconds = millis() / 1000UL;
     const uint32_t heapFree = ESP.getFreeHeap();
@@ -197,6 +223,8 @@ static String buildPayload(float deltaP, unsigned long nowMs) {
             json += "\"err485\":1";
         }
 
+        // ITA: Se lo slave è una relay board, aggiunge campi dedicati.
+        // ENG: If the slave is a relay board, append relay-specific fields.
         if (relayDetected) {
             float hoursRemaining = -1.0f;
             if (relaySnapshot.lifeLimitHours > 0) {
@@ -231,6 +259,8 @@ static String buildPayload(float deltaP, unsigned long nowMs) {
 }
 
 static ApiDispatchPlan resolveDispatchPlan() {
+    // ITA: Determina routing invio in base a config factory/customer.
+    // ENG: Determines upload routing based on factory/customer config.
     ApiDispatchPlan plan;
     plan.count = 0;
     plan.customerConfigured = false;
@@ -248,11 +278,16 @@ static ApiDispatchPlan resolveDispatchPlan() {
     const bool hasFactory = factoryUrl.length() >= 5;
     const bool hasCustomer = (customerUrl.length() >= 5) && (customerKey.length() > 0);
     plan.customerConfigured = hasCustomer;
-    plan.sameAsFactory = hasFactory && hasCustomer && (factoryUrl == customerUrl) && (factoryKey == customerKey);
+    plan.sameAsFactory = hasFactory && hasCustomer &&
+                          ((factoryUrl == customerUrl && factoryKey == customerKey) ||
+                           (factoryKey.length() > 0 && factoryKey == customerKey));
 
-    // Regola richiesta:
-    // - se API cliente == API factory => usa solo API cliente
-    // - altrimenti usa factory e/o cliente in sequenza (mai simultaneo)
+    // ITA: Regola:
+    //      - se endpoint cliente == endpoint factory o la API key e' identica, invia una sola volta.
+    //      - altrimenti invia in sequenza (mai in parallelo).
+    // ENG: Rule:
+    //      - if customer endpoint equals factory endpoint or the API key is identical, send once only.
+    //      - otherwise send sequentially (never in parallel).
     if (plan.sameAsFactory) {
         plan.endpoints[plan.count++] = {"customer", customerUrl, customerKey, true};
         return plan;
@@ -268,6 +303,8 @@ static ApiDispatchPlan resolveDispatchPlan() {
 }
 
 static int postPayloadToEndpoint(const ApiEndpoint& endpoint, const String& json, String& responseOut) {
+    // ITA: Connessione TLS con CA root e POST JSON.
+    // ENG: TLS connection with root CA and JSON POST.
     WiFiClientSecure client;
     client.setCACert(rootCACertificate);
     HTTPClient http;
@@ -289,27 +326,36 @@ static int postPayloadToEndpoint(const ApiEndpoint& endpoint, const String& json
 }
 
 void sendDataToRemoteServer() {
+    // ITA: Calcolo endpoint effettivi di invio.
+    // ENG: Compute effective endpoint dispatch plan.
     ApiDispatchPlan plan = resolveDispatchPlan();
 
-    // LED WiFi tastiera: warning se API cliente non configurata o respinta.
+    // ITA: Flag di stato usati anche da UI/LED diagnostici.
+    // ENG: Status flags also used by diagnostic UI/LED behavior.
     bool customerAuthRejected = false;
     bool anyAuthRejected = false;
     bool anySuccess = false;
     apiCustomerIssue = !plan.customerConfigured;
 
     if (WiFi.status() != WL_CONNECTED) {
+        // ITA: Nessuna connessione: skip pulito.
+        // ENG: No network connection: clean skip.
         apiAuthRejected = false;
         if (debugViewApi) Serial.println("[API-DATA] Invio saltato: WiFi non connesso.");
         return;
     }
 
     if (plan.count == 0) {
+        // ITA: Nessun endpoint valido in configurazione.
+        // ENG: No valid endpoint configured.
         apiAuthRejected = false;
         if (debugViewApi) Serial.println("[API-DATA] Invio saltato: nessun endpoint API configurato.");
         return;
     }
 
     const unsigned long nowMs = millis();
+    // ITA: DeltaP preferito: filtro stabile; fallback a calcolo istantaneo.
+    // ENG: Preferred DeltaP: stable filtered value; fallback to instant calc.
     float deltaNow = 0.0f;
     const bool deltaNowValid = computeDeltaPForApi(nowMs, deltaNow);
     float deltaForPayload = deltaNow;
@@ -323,7 +369,7 @@ void sendDataToRemoteServer() {
     if (debugViewApi) {
         Serial.println("[API-DATA] JSON: " + payload);
         if (plan.sameAsFactory) {
-            Serial.println("[API-DATA] API cliente e factory identiche: invio solo su endpoint cliente.");
+            Serial.println("[API-DATA] API cliente e factory duplicate: invio singolo.");
         }
     }
 
@@ -336,6 +382,8 @@ void sendDataToRemoteServer() {
 
         String response;
         int code = postPayloadToEndpoint(endpoint, payload, response);
+        // ITA: Aggiorna contatori traffico solo su tentativi reali.
+        // ENG: Update traffic counters only for actual send attempts.
         if (code != -9999) {
             gApiTxBytesSession += requestBytes;
             gApiPostsSession++;
@@ -352,7 +400,8 @@ void sendDataToRemoteServer() {
 
         if (code >= 200 && code < 300) {
             anySuccess = true;
-            // Se il server espone ignore_serials, aggiorna la lista.
+            // ITA: Se il server espone ignore_serials, aggiorna la lista locale.
+            // ENG: If server exposes ignore_serials, refresh local exclusion list.
             applyIgnoreSerialsFromResponse(response);
         } else if (code == 401 || code == 403) {
             anyAuthRejected = true;
@@ -363,9 +412,13 @@ void sendDataToRemoteServer() {
             Serial.printf("[API-DATA] Errore invio (%s): codice %d\n", endpoint.name.c_str(), code);
         }
 
-        delay(40); // Evita invii troppo ravvicinati sullo stack di rete.
+        // ITA: Piccola pausa per non saturare lo stack di rete embedded.
+        // ENG: Small pause to avoid overloading embedded networking stack.
+        delay(40);
     }
 
+    // ITA: Propaga stato finale verso altre parti firmware.
+    // ENG: Propagate final status to other firmware modules.
     apiCustomerIssue = (!plan.customerConfigured) || customerAuthRejected;
     apiAuthRejected = (!anySuccess && anyAuthRejected);
 }

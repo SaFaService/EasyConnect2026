@@ -32,6 +32,9 @@ const char *TAG = "example";
 
 // Handle for the RGB LCD panel
 static esp_lcd_panel_handle_t panel_handle = NULL; // Declare a handle for the LCD panel
+static portMUX_TYPE s_activity_guard_lock = portMUX_INITIALIZER_UNLOCKED;
+static uint32_t s_activity_guard_count = 0;
+static constexpr uint32_t k_activity_guard_pclk_hz = 12U * 1000U * 1000U;
 
 // Callback richiamata dal driver RGB quando un frame e' stato effettivamente
 // trasmesso. Qui non facciamo rendering: notifichiamo solo il layer LVGL.
@@ -120,14 +123,11 @@ esp_lcd_panel_handle_t waveshare_esp32_s3_rgb_lcd_init()
     // Initialize the RGB LCD panel
     ESP_ERROR_CHECK(esp_lcd_panel_init(panel_handle));
 
-    // Con bounce buffer o senza bounce buffer cambia il punto di aggancio
-    // migliore dell'evento, ma semanticamente lo usiamo sempre come "fine frame".
+    // LVGL aspetta il vero VSYNC prima di considerare sicuro lo swap dei
+    // framebuffer. Il bounce-frame-finish indica solo che il frame e' stato
+    // consegnato al DMA, quindi non e' equivalente per l'anti-tearing.
     esp_lcd_rgb_panel_event_callbacks_t cbs = {
-#if EXAMPLE_RGB_BOUNCE_BUFFER_SIZE > 0
-        .on_bounce_frame_finish = rgb_lcd_on_vsync_event, // Vendor-proven path with bounce buffer
-#else
         .on_vsync = rgb_lcd_on_vsync_event,
-#endif
     };
     ESP_ERROR_CHECK(esp_lcd_rgb_panel_register_event_callbacks(panel_handle, &cbs, NULL)); // Register event callbacks
 
@@ -233,6 +233,41 @@ void waveshare_rgb_lcd_request_restart()
     esp_err_t err = esp_lcd_rgb_panel_restart(panel_handle);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "esp_lcd_rgb_panel_restart failed: 0x%x", (unsigned int)err);
+    }
+}
+
+void waveshare_rgb_lcd_activity_guard_acquire()
+{
+    bool apply_low_clock = false;
+
+    portENTER_CRITICAL(&s_activity_guard_lock);
+    if (s_activity_guard_count == 0) {
+        apply_low_clock = true;
+    }
+    s_activity_guard_count++;
+    portEXIT_CRITICAL(&s_activity_guard_lock);
+
+    if (apply_low_clock) {
+        waveshare_rgb_lcd_set_pclk(k_activity_guard_pclk_hz);
+    }
+}
+
+void waveshare_rgb_lcd_activity_guard_release()
+{
+    bool restore_normal_clock = false;
+
+    portENTER_CRITICAL(&s_activity_guard_lock);
+    if (s_activity_guard_count > 0) {
+        s_activity_guard_count--;
+        if (s_activity_guard_count == 0) {
+            restore_normal_clock = true;
+        }
+    }
+    portEXIT_CRITICAL(&s_activity_guard_lock);
+
+    if (restore_normal_clock) {
+        waveshare_rgb_lcd_set_pclk(EXAMPLE_LCD_PIXEL_CLOCK_HZ);
+        waveshare_rgb_lcd_request_restart();
     }
 }
 /**

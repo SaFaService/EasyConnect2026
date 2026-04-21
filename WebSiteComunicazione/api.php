@@ -306,10 +306,16 @@ function activateSerialFromTelemetry(PDO $pdo, array $master, string $serial, st
 // 1. Verifica API Key
 $headers = getallheaders();
 $client_key = $headers['X-API-KEY'] ?? $_SERVER['HTTP_X_API_KEY'] ?? '';
+$client_key = trim((string)$client_key);
 
 if (empty($client_key)) {
     http_response_code(403);
     echo json_encode(['error' => 'Missing API Key']);
+    exit;
+}
+if (!preg_match('/^[a-f0-9]{64}$/i', trim((string)$client_key))) {
+    http_response_code(403);
+    echo json_encode(['error' => 'Invalid API Key']);
     exit;
 }
 

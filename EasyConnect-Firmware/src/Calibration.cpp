@@ -1,3 +1,12 @@
+/**
+ * ITA: Modulo di calibrazione DeltaP e monitor soglie con filtro/isteresi.
+ * ENG: DeltaP calibration module and threshold monitor with filter/hysteresis.
+ *
+ * ITA: Contiene wizard web, persistenza su NVS e logica di stabilizzazione
+ *      allarmi per evitare falsi positivi.
+ * ENG: Contains web wizard, NVS persistence, and alarm stabilization logic
+ *      to reduce false positives.
+ */
 #include "Calibration.h"
 #include "GestioneMemoria.h"
 #include <Preferences.h>
@@ -5,11 +14,18 @@
 
 extern Impostazioni config;
 extern Preferences memoria;
-extern float currentDeltaP; // Variabile globale definita in main_standalone_rewamping_controller.cpp
-extern bool currentDeltaPValid; // True quando il DeltaP corrente e' valido
-extern WebServer server; // Riferimento al server HTTP definito in WebHandler.cpp
+// ITA: DeltaP corrente pubblicato dal loop principale.
+// ENG: Current DeltaP published by the main control loop.
+extern float currentDeltaP;
+// ITA: Validita' del DeltaP corrente.
+// ENG: Validity flag for current DeltaP value.
+extern bool currentDeltaPValid;
+// ITA: Istanza server HTTP del firmware.
+// ENG: Firmware HTTP server instance.
+extern WebServer server;
 
-// Variabili di stato per il Wizard
+// ITA: Variabili di stato del wizard di campionamento.
+// ENG: Sampling wizard runtime state.
 bool isSampling = false;
 unsigned long sampleStartTime = 0;
 unsigned long lastSampleTick = 0;
@@ -17,7 +33,8 @@ int sampleCount = 0;
 float sampleAccumulator = 0.0;
 float lastSampledValue = 0.0;
 
-// --- STATO MONITOR DELTA P (Filtro + Isteresi) ---
+// --- ITA: STATO MONITOR DELTA P (Filtro + Isteresi) ---
+// --- ENG: DELTA P MONITOR STATE (Filtering + Hysteresis) ---
 static const int DELTA_WINDOW_SIZE = 5;
 static const int DELTA_MIN_VALID_FOR_FILTER = 3;
 static const float DELTA_EMA_ALPHA = 0.35f;
@@ -40,6 +57,8 @@ static int gPendingFallTarget = -1;
 static unsigned long gPendingFallStart = 0;
 
 static void resetDeltaMonitorState() {
+    // ITA: Reset completo di buffer, filtri e stato allarmi.
+    // ENG: Full reset of buffers, filters, and alarm state.
     for (int i = 0; i < DELTA_WINDOW_SIZE; i++) gDeltaWindow[i] = 0.0f;
     gDeltaWindowCount = 0;
     gDeltaWindowIdx = 0;
@@ -55,6 +74,8 @@ static void resetDeltaMonitorState() {
 }
 
 static float medianWindowValue() {
+    // ITA: Calcola la mediana della finestra per smorzare outlier.
+    // ENG: Computes rolling-window median to suppress outliers.
     if (gDeltaWindowCount <= 0) return 0.0f;
     float tmp[DELTA_WINDOW_SIZE];
     for (int i = 0; i < gDeltaWindowCount; i++) tmp[i] = gDeltaWindow[i];
@@ -75,6 +96,8 @@ static float medianWindowValue() {
 }
 
 static int computeExceededLevelInstant(float currentP) {
+    // ITA: Ritorna il massimo livello soglia superato istantaneamente.
+    // ENG: Returns the highest threshold level currently exceeded.
     if (config.numVelocitaSistema <= 0) return -1;
     int maxExceeded = -1;
     for (int i = 1; i <= config.numVelocitaSistema; i++) {
@@ -87,6 +110,8 @@ static int computeExceededLevelInstant(float currentP) {
 }
 
 static float clearLimitForLevel(int level) {
+    // ITA: Limite di rientro con isteresi in discesa.
+    // ENG: Hysteresis-based clear limit for downward transitions.
     if (level < 1 || level > config.numVelocitaSistema) return 0.0f;
     float base = config.deltaP_Calib[level];
     float limit = base * (1.0f + (config.perc_Calib[level] / 100.0f));
@@ -96,6 +121,8 @@ static float clearLimitForLevel(int level) {
 }
 
 static void updateThresholdState(float filteredP, bool validSample) {
+    // ITA: FSM con hold-time su salita/discesa per stabilita'.
+    // ENG: FSM with rise/fall hold-time for stability.
     if (!validSample || config.numVelocitaSistema <= 0) return;
 
     const unsigned long now = millis();
@@ -136,6 +163,8 @@ static void updateThresholdState(float filteredP, bool validSample) {
 }
 
 void updateDeltaPMonitoring(float rawDeltaP, bool isValidSample) {
+    // ITA: Pipeline filtro: validazione -> mediana -> EMA -> soglie.
+    // ENG: Filter pipeline: validation -> median -> EMA -> thresholds.
     if (!isValidSample) {
         gDeltaInvalidStreak++;
         if (gDeltaInvalidStreak >= 3) {
@@ -169,7 +198,8 @@ bool isFilteredDeltaPValid() {
     return gFilteredDeltaValid;
 }
 
-// --- HTML PAGINA CALIBRAZIONE ---
+// --- ITA: HTML PAGINA CALIBRAZIONE ---
+// --- ENG: CALIBRATION PAGE HTML ---
 String getCalibrationPageHTML() {
     String html = "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width, initial-scale=1'>";
     html += "<title>Calibrazione</title>";
@@ -323,9 +353,12 @@ String getCalibrationPageHTML() {
     return "";
 }
 
-// --- API HANDLERS ---
+// --- ITA: API HANDLERS ---
+// --- ENG: API HANDLERS ---
 
 void handleApiStartSample() {
+    // ITA: Avvia una nuova finestra di campionamento.
+    // ENG: Starts a new sampling window.
     isSampling = true;
     sampleCount = 0;
     sampleAccumulator = 0.0;
@@ -336,6 +369,8 @@ void handleApiStartSample() {
 }
 
 void handleApiStatus() {
+    // ITA: Espone stato wizard e valore corrente/finale.
+    // ENG: Exposes wizard status and current/final value.
     String json = "{";
     if (isSampling) {
         json += "\"status\":\"sampling\",";
@@ -349,6 +384,8 @@ void handleApiStatus() {
 }
 
 void handleApiSaveStep() {
+    // ITA: Salva un punto calibrazione (indice, valore, percentuale).
+    // ENG: Saves one calibration point (index, value, percentage).
     if (server.hasArg("idx") && server.hasArg("val") && server.hasArg("perc")) {
         int idx = server.arg("idx").toInt();
         float val = server.arg("val").toFloat();
@@ -375,6 +412,8 @@ void handleApiSaveStep() {
 }
 
 void handleApiUpdateThresholds() {
+    // ITA: Aggiorna solo le percentuali soglia via API.
+    // ENG: Updates only threshold percentages via API.
     if (server.hasArg("plain")) {
         String body = server.arg("plain");
         // Parsing JSON semplificato manuale
@@ -401,7 +440,8 @@ void handleApiUpdateThresholds() {
     server.send(200, "text/plain", "OK");
 }
 
-// --- LOOP DI CALIBRAZIONE (Chiamato nel loop principale) ---
+// --- ITA: LOOP CALIBRAZIONE (chiamato nel loop principale) ---
+// --- ENG: CALIBRATION LOOP (called from main loop) ---
 void calibrationLoop() {
     if (isSampling) {
         unsigned long now = millis();
@@ -425,7 +465,8 @@ void calibrationLoop() {
     }
 }
 
-// --- SETUP SERVER ---
+// --- ITA: SETUP SERVER ---
+// --- ENG: SERVER SETUP ---
 void setupCalibration() {
     server.on("/calibrazione", []() { server.send(200, "text/html", getCalibrationPageHTML()); });
     server.on("/api/calib/start_sample", handleApiStartSample);
@@ -443,7 +484,8 @@ void setupCalibration() {
     resetDeltaMonitorState();
 }
 
-// --- LOGICA SOGLIE ---
+// --- ITA: LOGICA SOGLIE ---
+// --- ENG: THRESHOLD LOGIC ---
 String checkThresholds(float currentP) {
     (void)currentP; // La decisione usa stato stabile interno (filtro + isteresi).
     if (config.numVelocitaSistema == 0 || !gFilteredDeltaValid) return "";

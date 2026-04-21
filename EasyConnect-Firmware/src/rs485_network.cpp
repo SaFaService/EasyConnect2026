@@ -1,5 +1,8 @@
 #include "rs485_network.h"
 #include "Pins.h"
+#if defined(BOARD_PROFILE_DISPLAY)
+#include "display_port/rgb_lcd_port.h"
+#endif
 #include <Arduino.h>
 #include <Preferences.h>
 #include <freertos/semphr.h>
@@ -42,6 +45,18 @@ static void _merge_response_for_address(uint8_t address, const String& resp);
 static int _find_runtime_preferred_by_address(uint8_t address);
 static void _mark_plant_comm_failed(const Rs485Device& plant_dev);
 static void _remove_runtime_index(int idx);
+
+static inline void _display_activity_guard_acquire() {
+#if defined(BOARD_PROFILE_DISPLAY)
+    waveshare_rgb_lcd_activity_guard_acquire();
+#endif
+}
+
+static inline void _display_activity_guard_release() {
+#if defined(BOARD_PROFILE_DISPLAY)
+    waveshare_rgb_lcd_activity_guard_release();
+#endif
+}
 
 struct Rs485CacheRecord {
     uint8_t address;
@@ -705,6 +720,7 @@ static void _merge_response_for_address(uint8_t address, const String& resp) {
 static void _scan_task(void* /*arg*/) {
     s_scan_progress = 0;
     _set_runtime_from_plant(false);
+    _display_activity_guard_acquire();
 
     Serial.println("[RS485-NET] ---- Avvio scansione 1-200 ----");
     Serial.printf("[RS485-NET] DIR=%d  TX=%d  RX=%d\n", RS485_NET_DIR, RS485_NET_TX, RS485_NET_RX);
@@ -739,6 +755,7 @@ static void _scan_task(void* /*arg*/) {
 
     s_scan_state = Rs485ScanState::DONE;
     s_scan_task = nullptr;
+    _display_activity_guard_release();
     vTaskDelete(nullptr);
 }
 
@@ -1124,7 +1141,12 @@ bool rs485_network_motor_enable_command(uint8_t address, bool enable, String& ra
 void rs485_network_scan_start() {
     if (s_scan_state == Rs485ScanState::RUNNING) return;
     s_scan_state = Rs485ScanState::RUNNING;
-    xTaskCreatePinnedToCore(_scan_task, "rs485_scan", 4096, nullptr, 1, &s_scan_task, 0);
+    const BaseType_t rc = xTaskCreatePinnedToCore(_scan_task, "rs485_scan", 4096, nullptr, 1, &s_scan_task, 0);
+    if (rc != pdPASS) {
+        Serial.println("[RS485-NET] WARN: impossibile avviare task scansione.");
+        s_scan_task = nullptr;
+        s_scan_state = Rs485ScanState::IDLE;
+    }
 }
 
 Rs485ScanState rs485_network_scan_state() { return s_scan_state; }

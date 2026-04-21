@@ -35,6 +35,22 @@ function boolFromInput($value): int {
     return in_array($normalized, ['1', 'true', 'on', 'yes', 'si'], true) ? 1 : 0;
 }
 
+function generatePendingApiKey(PDO $pdo): string {
+    for ($i = 0; $i < 10; $i++) {
+        try {
+            $candidate = 'pending_' . bin2hex(random_bytes(28));
+        } catch (Throwable $e) {
+            $candidate = 'pending_' . substr(hash('sha256', uniqid('pending_api_key_', true)), 0, 56);
+        }
+        $stmt = $pdo->prepare("SELECT 1 FROM masters WHERE api_key = ? LIMIT 1");
+        $stmt->execute([$candidate]);
+        if (!$stmt->fetchColumn()) {
+            return $candidate;
+        }
+    }
+    return 'pending_' . substr(hash('sha256', uniqid('pending_api_key_fallback_', true)), 0, 56);
+}
+
 function normalizePlantKind($value): string {
     $normalized = strtolower(trim((string)$value));
     return in_array($normalized, ['display', 'standalone', 'rewamping'], true) ? $normalized : '';
@@ -123,7 +139,7 @@ $hasPlantKindColumn = columnExists($pdo, 'masters', 'plant_kind');
 $hasNotesColumn = columnExists($pdo, 'masters', 'notes');
 $hasDeliveryDateColumn = columnExists($pdo, 'masters', 'delivery_date');
 $hasUsersAddressColumn = columnExists($pdo, 'users', 'address');
-$apiKey = bin2hex(random_bytes(32));
+$apiKey = generatePendingApiKey($pdo);
 
 try {
     $stmtCheck = $pdo->prepare("SELECT id FROM masters WHERE serial_number = ? AND deleted_at IS NULL LIMIT 1");

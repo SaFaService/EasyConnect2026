@@ -5,6 +5,7 @@ header('Content-Type: application/json');
 // 1. Ricezione Dati (JSON o POST)
 $input = json_decode(file_get_contents('php://input'), true);
 $apiKey = $input['api_key'] ?? $_POST['api_key'] ?? '';
+$apiKey = trim((string)$apiKey);
 
 // Funzione helper per convertire link Google Drive in link diretti
 function convertDriveLink($url) {
@@ -21,6 +22,10 @@ $currentVer = $input['version'] ?? $_POST['version'] ?? '0.0.0';
 
 if (empty($apiKey)) {
     echo json_encode(['status' => 'error', 'message' => 'API Key mancante']);
+    exit;
+}
+if (!preg_match('/^[a-f0-9]{64}$/i', trim((string)$apiKey))) {
+    echo json_encode(['status' => 'error', 'message' => 'API Key non valida']);
     exit;
 }
 

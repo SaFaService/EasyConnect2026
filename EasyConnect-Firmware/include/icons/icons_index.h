@@ -4,7 +4,11 @@
 #include "lvgl.h"
 
 #include "airextraction_off.h"
+#include "airextraction_off_airintake_on.h"
 #include "airextraction_on.h"
+#include "airextraction_on_airintake_off.h"
+#include "airextractionintake_off.h"
+#include "airextractionintake_on.h"
 #include "airintake_off.h"
 #include "airintake_on.h"
 #include "electrostatic_off.h"

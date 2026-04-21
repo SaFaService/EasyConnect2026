@@ -59,7 +59,10 @@
       "Bash(handle \"controller_display\")",
       "Bash(powershell -Command ' $locked = '\\\\''C:\\\\Users\\\\fabri\\\\Documents\\\\PlatformIO\\\\Projects\\\\EasyConnect\\\\EasyConnect2026\\\\EasyConnect-Firmware\\\\.pio\\\\build\\\\controller_display'\\\\'' Get-Process | Where-Object { $_.Path -ne $null } | ForEach-Object { try { $handles = $_ | Select-Object -ExpandProperty Modules -ErrorAction SilentlyContinue if \\($_ | Get-Process -Id $_.Id -ErrorAction SilentlyContinue\\) { $_ | Select-Object Id, ProcessName } } catch {} } ')",
       "Bash(powershell -Command ':*)",
-      "Bash(~/.platformio/penv/Scripts/pio.exe run:*)"
+      "Bash(~/.platformio/penv/Scripts/pio.exe run:*)",
+      "WebFetch(domain:www.linkedin.com)",
+      "Bash(dir \"c:/Users/fabri/Documents/PlatformIO/Projects/EasyConnect/EasyConnect2026/EasyConnect-Firmware/.pio/build/controller_display\")",
+      "Bash(cmd.exe /c \"dir /b \\\\\"c:\\\\Users\\\\fabri\\\\Documents\\\\PlatformIO\\\\Projects\\\\EasyConnect\\\\EasyConnect2026\\\\EasyConnect-Firmware\\\\.pio\\\\build\\\\controller_display\\\\\"\")"
     ]
   }
 }

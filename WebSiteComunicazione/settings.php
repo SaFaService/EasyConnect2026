@@ -198,6 +198,26 @@ function ecSettingsBoolFromInput($value): int {
     return in_array($normalized, ['1', 'true', 'on', 'yes', 'si'], true) ? 1 : 0;
 }
 
+function ecSettingsGeneratePendingApiKey(PDO $pdo): string {
+    for ($i = 0; $i < 10; $i++) {
+        try {
+            $candidate = 'pending_' . bin2hex(random_bytes(28));
+        } catch (Throwable $e) {
+            $candidate = 'pending_' . substr(hash('sha256', uniqid('pending_api_key_', true)), 0, 56);
+        }
+        $stmt = $pdo->prepare("SELECT 1 FROM masters WHERE api_key = ? LIMIT 1");
+        $stmt->execute([$candidate]);
+        if (!$stmt->fetchColumn()) {
+            return $candidate;
+        }
+    }
+    return 'pending_' . substr(hash('sha256', uniqid('pending_api_key_fallback_', true)), 0, 56);
+}
+
+function ecSettingsIsUsableApiKey($value): bool {
+    return (bool)preg_match('/^[a-f0-9]{64}$/i', trim((string)$value));
+}
+
 function ecSettingsNormalizePlantKind($value): string {
     $normalized = strtolower(trim((string)$value));
     return in_array($normalized, ['display', 'standalone', 'rewamping'], true) ? $normalized : '';
@@ -376,7 +396,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $message = "L'impianto non si puo creare perche la scheda master e gia associata ad un altro impianto.";
                     $message_type = 'danger';
                 } else {
-                    $api_key = bin2hex(random_bytes(32));
+                    $api_key = ecSettingsGeneratePendingApiKey($pdo);
 
                     // Se e un cliente a creare, e sia creatore che proprietario
                     $owner_id = $isClient ? $currentUserId : $ownerIdInput;
@@ -425,7 +445,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             VALUES (" . implode(', ', $insertVals) . ")
                         ");
                         $stmt->execute($insertParams);
-                        $message = "Nuovo impianto '{$nickname}' aggiunto con successo!";
+                        $message = "Nuovo impianto '{$nickname}' aggiunto con successo. L'API Key va generata dalla pagina API Key Impianti con utenza amministratore.";
                         $message_type = 'success';
                     } catch (PDOException $e) {
                         if ((int)($e->errorInfo[1] ?? 0) === 1062) {
@@ -1337,10 +1357,19 @@ try {
                         <?php endif; ?>
                     </div>
 
+                    <?php
+                        $apiKeyValue = (string)($master['api_key'] ?? '');
+                        $apiKeyUsable = ecSettingsIsUsableApiKey($apiKeyValue);
+                    ?>
                     <div class="input-group mb-3">
                         <span class="input-group-text"><?php echo $lang['settings_api_key']; ?></span>
-                        <input type="text" class="form-control" value="<?php echo $master['api_key']; ?>" id="apiKey-<?php echo $master['id']; ?>" readonly>
-                        <button class="btn btn-outline-secondary" type="button" onclick="copyToClipboard('apiKey-<?php echo $master['id']; ?>')"><i class="fas fa-copy"></i> <?php echo $lang['settings_copy']; ?></button>
+                        <input type="text" class="form-control" value="<?php echo $apiKeyUsable ? htmlspecialchars($apiKeyValue) : 'Da generare'; ?>" id="apiKey-<?php echo (int)$master['id']; ?>" readonly>
+                        <?php if ($apiKeyUsable): ?>
+                            <button class="btn btn-outline-secondary" type="button" onclick="copyToClipboard('apiKey-<?php echo (int)$master['id']; ?>')"><i class="fas fa-copy"></i> <?php echo $lang['settings_copy']; ?></button>
+                        <?php endif; ?>
+                        <?php if ($isAdmin): ?>
+                            <a class="btn btn-outline-primary" href="api_keys.php?plant_id=<?php echo (int)$master['id']; ?>"><i class="fas fa-key"></i> Gestisci</a>
+                        <?php endif; ?>
                     </div>
 
                     <div class="row">

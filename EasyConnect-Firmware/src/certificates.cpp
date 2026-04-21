@@ -1,5 +1,14 @@
+/**
+ * ITA: Contenitore del certificato root CA in formato PEM.
+ * ENG: Container for the root CA certificate in PEM format.
+ *
+ * ITA: Usato dalle connessioni HTTPS per validare la catena TLS del server.
+ * ENG: Used by HTTPS connections to validate the server TLS certificate chain.
+ */
 #include "certificates.h"
 
+// ITA: Certificato CA Let’s Encrypt (R13 chain trust anchor path).
+// ENG: Let’s Encrypt CA certificate (R13 chain trust anchor path).
 const char* rootCACertificate =
 "-----BEGIN CERTIFICATE-----\n"
 "MIIFBTCCAu2gAwIBAgIQWgDyEtjUtIDzkkFX6imDBTANBgkqhkiG9w0BAQsFADBP\n"

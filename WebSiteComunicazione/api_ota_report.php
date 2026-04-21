@@ -4,12 +4,18 @@ header('Content-Type: application/json');
 
 $input = json_decode(file_get_contents('php://input'), true);
 $apiKey = $input['api_key'] ?? '';
+$apiKey = trim((string)$apiKey);
 $status = trim((string)($input['status'] ?? 'Failed'));
 $message = trim((string)($input['message'] ?? ($input['error_message'] ?? 'Errore non specificato dal dispositivo.')));
 
 if (empty($apiKey)) {
     http_response_code(403);
     echo json_encode(['status' => 'error', 'message' => 'API Key mancante']);
+    exit;
+}
+if (!preg_match('/^[a-f0-9]{64}$/i', trim((string)$apiKey))) {
+    http_response_code(403);
+    echo json_encode(['status' => 'error', 'message' => 'API Key non valida']);
     exit;
 }
 

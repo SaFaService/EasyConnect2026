@@ -1,3 +1,13 @@
+/**
+ * ITA: Firmware periferica inverter 0-10V (ESP32-C3).
+ * ENG: 0-10V inverter peripheral firmware (ESP32-C3).
+ *
+ * ITA: Nota: nel file sono presenti commenti storici con codifica mista.
+ * ENG: Note: the file contains legacy comments with mixed text encoding.
+ *
+ * ITA: Questo header bilingue documenta il modulo in modo uniforme.
+ * ENG: This bilingual header documents the module uniformly.
+ */
 // ═══════════════════════════════════════════════════════════════════════════
 // EasyConnect — Periferica Inverter 0-10V
 // Scheda: ESP32-C3 (Treedom "Periferica Sensori & 0-10V" Rev.1.0)
@@ -66,7 +76,7 @@ struct Inv5Config {
     uint8_t group;          // 1=aspirazione, 2=immissione
     char    serialId[16];
     uint8_t savedSpeed;     // velocità salvata (0..100); ripristinata al boot
-    bool    enableOnBoot;   // abilita inverter automaticamente all'avvio
+    bool    enableOnBoot;   // legacy: forzato false, il motore parte sempre spento
 };
 
 // ─── Variabili globali ────────────────────────────────────────────────────
@@ -196,7 +206,10 @@ static void loadConfig() {
     g_cfg.rs485Address  = (uint8_t)g_prefs.getInt("addr",  1);
     g_cfg.group         = (uint8_t)g_prefs.getInt("grp",   1);
     g_cfg.savedSpeed    = (uint8_t)g_prefs.getInt("spd",   0);
-    g_cfg.enableOnBoot  = g_prefs.getBool("enboot", false);
+    g_cfg.enableOnBoot  = false;
+    if (g_prefs.getBool("enboot", false)) {
+        g_prefs.putBool("enboot", false);
+    }
     String s = g_prefs.getString("ser", "NON_SET");
     s.toCharArray(g_cfg.serialId, sizeof(g_cfg.serialId));
 }
@@ -207,7 +220,8 @@ static void saveConfig() {
     g_prefs.putInt("addr",    g_cfg.rs485Address);
     g_prefs.putInt("grp",     g_cfg.group);
     g_prefs.putString("ser",  g_cfg.serialId);
-    g_prefs.putBool("enboot", g_cfg.enableOnBoot);
+    g_cfg.enableOnBoot = false;
+    g_prefs.putBool("enboot", false);
 }
 
 static void saveSpeed() {
@@ -353,8 +367,8 @@ static void printHelp() {
     Serial.println("SETGROUP x        : Gruppo  1=aspirazione  2=immissione");
     Serial.println("SETSPEED x        : Velocità % (0..100) [test]");
     Serial.println("ENABLE ON|OFF     : Abilita/disabilita inverter [test]");
-    Serial.println("SETENBOOT ON|OFF  : Abilita inverter all'avvio automatico");
     Serial.println("SAVE              : Salva configurazione e velocità corrente");
+    Serial.println("BOOT              : Motore sempre OFF; la velocita salvata viene mantenuta");
     Serial.println("VIEW485|STOP485   : Debug traffico RS485");
     Serial.println("CLEARMEM          : Factory reset e riavvio");
     Serial.println("===========================");
@@ -375,7 +389,7 @@ static void printInfo() {
     Serial.printf("Fault latched  : %s\n", g_fbFaultLatched ? "SI" : "NO");
     Serial.printf("Check delay    : %lu ms\n", (unsigned long)FEEDBACK_CHECK_DELAY_MS);
     Serial.printf("SavedSpeed     : %u %%\n", g_cfg.savedSpeed);
-    Serial.printf("EnableOnBoot   : %s\n", g_cfg.enableOnBoot ? "SI" : "NO");
+    Serial.println("Boot motore    : OFF fisso");
     Serial.printf("Debug 485      : %s\n", g_debug485 ? "ATTIVO" : "DISATTIVO");
     Serial.println("----------------------------\n");
 }
@@ -461,17 +475,9 @@ static void processSerialCommand(const String &line) {
     }
 
     if (upper.startsWith("SETENBOOT ")) {
-        const String arg = upper.substring(10);
-        if (arg == "ON" || arg == "1") {
-            g_cfg.enableOnBoot = true;
-        } else if (arg == "OFF" || arg == "0") {
-            g_cfg.enableOnBoot = false;
-        } else {
-            Serial.println("ERR: usa SETENBOOT ON|OFF");
-            return;
-        }
+        g_cfg.enableOnBoot = false;
         saveConfig();
-        Serial.printf("OK: EnableOnBoot=%s\n", g_cfg.enableOnBoot ? "ON" : "OFF");
+        Serial.println("OK: avvio automatico disabilitato. Il motore parte sempre OFF.");
         return;
     }
 
@@ -569,7 +575,7 @@ void setup() {
     // Ripristina stato salvato
     if (g_cfg.configured) {
         applySpeed(g_cfg.savedSpeed);
-        if (g_cfg.enableOnBoot) applyEnable(true);
+        applyEnable(false);
         Serial.printf("[INFO] Config caricata: IP=%u GRP=%u SERIAL=%s SPD=%u%%\n",
                       g_cfg.rs485Address, g_cfg.group, g_cfg.serialId, g_speed);
     } else {
@@ -587,3 +593,5 @@ void loop() {
     updateLeds();
     delay(2);
 }
+
+

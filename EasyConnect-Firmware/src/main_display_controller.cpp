@@ -20,6 +20,7 @@
 // ITA: Driver WiFi Arduino per ESP32.
 // ENG: Arduino WiFi driver for ESP32.
 #include <WiFi.h>
+#include <esp_heap_caps.h>
 
 // ITA: Porta LVGL (init e lock thread-safe).
 // ENG: LVGL port (init and thread-safe lock).
@@ -39,6 +40,11 @@
 // ITA: Modulo orologio (RTC/NTP/fallback).
 // ENG: Clock module (RTC/NTP/fallback).
 #include "ui/ui_dc_clock.h"
+// ITA: Invio telemetria display verso API cloud.
+// ENG: Display telemetry dispatch to cloud APIs.
+#include "DisplayApi_Manager.h"
+
+const char* FW_VERSION = "1.1.26";
 
 // ITA: Handle I2C del sensore SHTC3 (NULL = non inizializzato).
 // ENG: I2C handle for SHTC3 sensor (NULL = not initialized).
@@ -51,19 +57,93 @@ static bool g_shtc3_ok = false;
 static unsigned long g_shtc3_poll_ms = 0;
 static bool g_wifi_display_guard_active = false;
 static unsigned long g_wifi_display_guard_start_ms = 0;
-static constexpr uint32_t k_wifi_guard_pclk_hz = 12U * 1000U * 1000U;
 static constexpr unsigned long k_wifi_guard_timeout_ms = 30000UL;
 static String g_serial_cli_line;
+
+// ─── Boot WiFi state machine ──────────────────────────────────────────────────
+enum class WifiBootState : uint8_t { IDLE, CONNECTING, RETRY_WAIT, DONE, ABORTED };
+static WifiBootState g_wifi_boot_state = WifiBootState::IDLE;
+static uint8_t g_wifi_boot_attempts = 0;
+static constexpr uint8_t k_wifi_boot_max_attempts = 3;
+static constexpr unsigned long k_wifi_boot_timeout_ms = 15000UL;
+static constexpr unsigned long k_wifi_boot_retry_wait_ms = 1500UL;
+static unsigned long g_wifi_boot_attempt_start_ms = 0;
+static unsigned long g_wifi_boot_retry_start_ms = 0;
+static String g_wifi_boot_ssid;
+static String g_wifi_boot_pass;
+
+static void display_wifi_log_heap(const char* tag) {
+    Serial.printf("[WIFI-BOOT] %s heap_int=%u heap_dma=%u dma_big=%u psram=%u\n",
+                  tag ? tag : "?",
+                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
+                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA),
+                  (unsigned)ESP.getFreePsram());
+}
+
+static void display_wifi_event_logger(WiFiEvent_t event, WiFiEventInfo_t info) {
+    switch (event) {
+        case ARDUINO_EVENT_WIFI_STA_START:
+            Serial.println("[WIFI-EVENT] STA_START");
+            break;
+        case ARDUINO_EVENT_WIFI_STA_CONNECTED:
+            Serial.printf("[WIFI-EVENT] STA_CONNECTED ssid='%s' channel=%u auth=%u\n",
+                          (const char*)info.wifi_sta_connected.ssid,
+                          (unsigned)info.wifi_sta_connected.channel,
+                          (unsigned)info.wifi_sta_connected.authmode);
+            break;
+        case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+            Serial.printf("[WIFI-EVENT] GOT_IP ip=%s\n", WiFi.localIP().toString().c_str());
+            break;
+        case ARDUINO_EVENT_WIFI_STA_DISCONNECTED: {
+            uint8_t reason = info.wifi_sta_disconnected.reason;
+            if (reason == 0) reason = WIFI_REASON_UNSPECIFIED;
+            Serial.printf("[WIFI-EVENT] STA_DISCONNECTED reason=%u/%s ssid='%s' rssi=%ld heap_int=%u heap_dma=%u dma_big=%u\n",
+                          (unsigned)reason,
+                          WiFi.disconnectReasonName((wifi_err_reason_t)reason),
+                          WiFi.SSID().c_str(),
+                          WiFi.RSSI(),
+                          (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                          (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
+                          (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
+            break;
+        }
+        case ARDUINO_EVENT_WIFI_SCAN_DONE:
+            Serial.printf("[WIFI-EVENT] SCAN_DONE status=%u number=%u\n",
+                          (unsigned)info.wifi_scan_done.status,
+                          (unsigned)info.wifi_scan_done.number);
+            break;
+        default:
+            break;
+    }
+}
+
+static void display_wifi_preinit_driver() {
+    display_wifi_log_heap("before_wifi_preinit");
+    WiFi.useStaticBuffers(true);
+    const bool sta_ok = WiFi.mode(WIFI_STA);
+    WiFi.setAutoReconnect(false);
+    if (sta_ok) {
+        WiFi.setSleep(false);
+        Serial.printf("[WIFI-BOOT] Driver WiFi STA pronto, connessione automatica disabilitata. mode=%d status=%d\n",
+                      (int)WiFi.getMode(),
+                      (int)WiFi.status());
+    } else {
+        Serial.printf("[WIFI-BOOT] ERRORE init driver WiFi STA. mode=%d status=%d\n",
+                      (int)WiFi.getMode(),
+                      (int)WiFi.status());
+    }
+    display_wifi_log_heap("after_wifi_preinit");
+}
 
 static void wifi_display_guard_set(bool enable) {
     if (g_wifi_display_guard_active == enable) return;
     g_wifi_display_guard_active = enable;
     if (enable) {
-        waveshare_rgb_lcd_set_pclk(k_wifi_guard_pclk_hz);
+        waveshare_rgb_lcd_activity_guard_acquire();
         g_wifi_display_guard_start_ms = millis();
     } else {
-        waveshare_rgb_lcd_set_pclk(EXAMPLE_LCD_PIXEL_CLOCK_HZ);
-        waveshare_rgb_lcd_request_restart();
+        waveshare_rgb_lcd_activity_guard_release();
     }
 }
 
@@ -141,6 +221,18 @@ static void rs485_cli_print_help() {
     Serial.println("  Abilita monitor TX/RX RS485 (richieste master + risposte slave).");
     Serial.println("485stopview");
     Serial.println("  Disabilita monitor TX/RX RS485.");
+    Serial.println("SETSERIAL <seriale>");
+    Serial.println("  Imposta seriale centralina display.");
+    Serial.println("SETAPIURL <url> / SETAPIKEY <key>");
+    Serial.println("  Imposta endpoint Antralux via seriale.");
+    Serial.println("SETCUSTURL <url> / SETCUSTKEY <key>");
+    Serial.println("  Imposta endpoint utente anche da seriale.");
+    Serial.println("INFO");
+    Serial.println("  Mostra seriale, API configurate, WiFi e ultimo invio.");
+    Serial.println("READSERIAL");
+    Serial.println("  Legge il seriale centralina display salvato.");
+    Serial.println("APISTATUS");
+    Serial.println("  Alias di INFO per la parte API.");
     Serial.println("=====================================================");
     Serial.println();
 }
@@ -293,6 +385,25 @@ static void rs485_cli_handle_view(bool enable) {
     Serial.printf("[485-CLI] Monitor RS485: %s\n", enable ? "ATTIVO" : "DISATTIVO");
 }
 
+static bool cli_get_value_after_command(const String& line, const String& upper,
+                                        const char* command, String& value) {
+    const String cmd = String(command);
+    if (!upper.startsWith(cmd)) return false;
+    if (line.length() <= cmd.length()) return false;
+
+    const char sep = line.charAt(cmd.length());
+    if (sep != ' ' && sep != ':' && sep != '=') return false;
+
+    value = line.substring(cmd.length() + 1);
+    value.trim();
+    return true;
+}
+
+static void display_cli_print_serial() {
+    const DisplayApiConfig cfg = displayApiLoadConfig();
+    Serial.printf("[DISPLAY] Seriale centralina: %s\n", cfg.serialNumber.c_str());
+}
+
 static void rs485_cli_handle_command(String line) {
     line.trim();
     if (line.length() == 0) return;
@@ -303,6 +414,49 @@ static void rs485_cli_handle_command(String line) {
     if (upper == "HELP" || upper == "?" || upper == "485" ||
         upper == "485HELP" || upper == "485 HELP" || upper == "485 - HELP") {
         rs485_cli_print_help();
+        return;
+    }
+
+    if (upper == "INFO" || upper == "APISTATUS") {
+        displayApiPrintStatus();
+        return;
+    }
+
+    if (upper == "READSERIAL") {
+        display_cli_print_serial();
+        return;
+    }
+
+    String value;
+    if (cli_get_value_after_command(line, upper, "SETSERIAL", value)) {
+        displayApiSetSerialNumber(value);
+        Serial.println("[DISPLAY-API] Seriale centralina salvato.");
+        return;
+    }
+
+    if (cli_get_value_after_command(line, upper, "SETAPIURL", value)) {
+        displayApiSetFactoryUrl(value);
+        Serial.println("[DISPLAY-API] URL API Antralux salvato.");
+        return;
+    }
+
+    if (cli_get_value_after_command(line, upper, "SETAPIKEY", value)) {
+        displayApiSetFactoryKey(value);
+        Serial.printf("[DISPLAY-API] API Key Antralux salvata (%u caratteri).\n",
+                      (unsigned)value.length());
+        return;
+    }
+
+    if (cli_get_value_after_command(line, upper, "SETCUSTURL", value)) {
+        displayApiSetCustomerUrl(value);
+        Serial.println("[DISPLAY-API] URL API utente salvato.");
+        return;
+    }
+
+    if (cli_get_value_after_command(line, upper, "SETCUSTKEY", value)) {
+        displayApiSetCustomerKey(value);
+        Serial.printf("[DISPLAY-API] API Key utente salvata (%u caratteri).\n",
+                      (unsigned)value.length());
         return;
     }
 
@@ -416,8 +570,9 @@ static void setup_display_wifi_from_saved_credentials() {
     if (!pref.begin("easy", true)) {
         // ITA: Se NVS non e disponibile, spegne il WiFi.
         // ENG: If NVS is unavailable, WiFi is turned off.
-        Serial.println("[WIFI] NVS non disponibile: WiFi disabilitato.");
-        WiFi.mode(WIFI_OFF);
+        Serial.println("[WIFI] NVS non disponibile: WiFi inattivo, driver mantenuto pronto per scansione.");
+        WiFi.setAutoReconnect(false);
+        WiFi.disconnect(false, false);
         return;
     }
 
@@ -438,14 +593,16 @@ static void setup_display_wifi_from_saved_credentials() {
     // ITA: Se manca configurazione valida, mantiene WiFi OFF.
     // ENG: If valid configuration is missing, keeps WiFi OFF.
     if (!wifi_enabled || ssid.length() == 0) {
-        WiFi.mode(WIFI_OFF);
-        Serial.println("[WIFI] WiFi display disabilitato o credenziali assenti.");
+        WiFi.setAutoReconnect(false);
+        WiFi.disconnect(false, false);
+        Serial.println("[WIFI] WiFi display disabilitato o credenziali assenti: STA pronta per scansione manuale.");
         return;
     }
 
     // ITA: Modalita station, riconnessione automatica, start connessione.
     // ENG: Station mode, auto-reconnect, start connection.
     WiFi.mode(WIFI_STA);
+    WiFi.setSleep(false);
     WiFi.setAutoReconnect(true);
     wifi_display_guard_set(true);
     WiFi.begin(ssid.c_str(), pass.c_str());
@@ -577,6 +734,12 @@ void setup() {
     delay(300);
     Serial.println("=== EasyConnect Display Controller ===");
 
+    // WiFi driver init deve avvenire PRIMA di lvgl_port_init per riservare
+    // memoria DMA contigua (~80KB). Dopo LVGL la heap DMA è troppo frammentata.
+    WiFi.useStaticBuffers(true);
+    WiFi.onEvent(display_wifi_event_logger);
+    display_wifi_preinit_driver();
+
     // ITA: Init touch e pannello RGB.
     // ENG: Initialize touch and RGB panel.
     esp_lcd_touch_handle_t tp_handle = touch_gt911_init();
@@ -591,8 +754,10 @@ void setup() {
     // ENG: Backlight ON + brightness management init + LVGL init.
     wavesahre_rgb_lcd_bl_on();
     ui_brightness_init();
+
     ESP_ERROR_CHECK(lvgl_port_init(panel_handle, tp_handle));
     Serial.println("[OK] Display + LVGL pronti");
+    display_wifi_log_heap("after_lvgl");
 
     // ITA: Inizializza interfaccia RS485 DOPO il display per evitare conflitti
     //      di pin: GPIO7=PCLK e GPIO21=G7 sull'S3 non sono usabili per RS485.
@@ -608,10 +773,35 @@ void setup() {
         ui_dc_splash_create();
         lvgl_port_unlock();
     }
+    display_wifi_log_heap("after_splash");
 
-    // ITA: Connessione WiFi da credenziali persistenti.
-    // ENG: WiFi connection from persisted credentials.
-    setup_display_wifi_from_saved_credentials();
+    // Tenta connessione automatica alla rete salvata (max k_wifi_boot_max_attempts tentativi).
+    // Se dopo tutti i tentativi non si connette, la connessione è possibile solo dalla pagina
+    // impostazioni. La pagina impostazioni può annullare il tentativo in corso via wifi_boot_abort().
+    {
+        Preferences pref;
+        if (pref.begin("easy", true)) {
+            const bool enabled = pref.getBool("dc_wifi_enabled", false);
+            g_wifi_boot_ssid = pref.getString("ssid", "");
+            g_wifi_boot_pass = pref.getString("pass", "");
+            pref.end();
+
+            if (enabled && g_wifi_boot_ssid.length() > 0) {
+                WiFi.setAutoReconnect(false);
+                WiFi.begin(g_wifi_boot_ssid.c_str(), g_wifi_boot_pass.c_str());
+                g_wifi_boot_state = WifiBootState::CONNECTING;
+                g_wifi_boot_attempts = 1;
+                g_wifi_boot_attempt_start_ms = millis();
+                wifi_display_guard_set(true);
+                Serial.printf("[WIFI-BOOT] Tentativo 1/%d a: %s\n",
+                              (int)k_wifi_boot_max_attempts, g_wifi_boot_ssid.c_str());
+            } else {
+                Serial.println("[WIFI-BOOT] WiFi disabilitato o credenziali assenti: in attesa dalla pagina impostazioni.");
+            }
+        } else {
+            Serial.println("[WIFI-BOOT] NVS non disponibile: in attesa dalla pagina impostazioni.");
+        }
+    }
 
     // ITA: Inizializza sensore SHTC3.
     // ENG: Initialize SHTC3 sensor.
@@ -634,6 +824,65 @@ void setup() {
     rs485_cli_print_help();
 }
 
+static void wifi_boot_service() {
+    if (g_wifi_boot_state == WifiBootState::RETRY_WAIT) {
+        if (millis() - g_wifi_boot_retry_start_ms >= k_wifi_boot_retry_wait_ms) {
+            WiFi.begin(g_wifi_boot_ssid.c_str(), g_wifi_boot_pass.c_str());
+            g_wifi_boot_attempt_start_ms = millis();
+            g_wifi_boot_state = WifiBootState::CONNECTING;
+            Serial.printf("[WIFI-BOOT] Tentativo %d/%d a: %s\n",
+                          (int)g_wifi_boot_attempts, (int)k_wifi_boot_max_attempts,
+                          g_wifi_boot_ssid.c_str());
+        }
+        return;
+    }
+    if (g_wifi_boot_state != WifiBootState::CONNECTING) return;
+
+    const wl_status_t st = WiFi.status();
+    if (st == WL_CONNECTED) {
+        g_wifi_boot_state = WifiBootState::DONE;
+        wifi_display_guard_set(false);
+        Serial.printf("[WIFI-BOOT] Connesso a %s, IP=%s\n",
+                      g_wifi_boot_ssid.c_str(), WiFi.localIP().toString().c_str());
+        return;
+    }
+
+    const bool failed = (st == WL_CONNECT_FAILED || st == WL_NO_SSID_AVAIL);
+    const bool timed_out = (millis() - g_wifi_boot_attempt_start_ms) >= k_wifi_boot_timeout_ms;
+    if (!failed && !timed_out) return;
+
+    Serial.printf("[WIFI-BOOT] Tentativo %d/%d fallito (status=%d)\n",
+                  (int)g_wifi_boot_attempts, (int)k_wifi_boot_max_attempts, (int)st);
+
+    if (g_wifi_boot_attempts >= k_wifi_boot_max_attempts) {
+        g_wifi_boot_state = WifiBootState::DONE;
+        wifi_display_guard_set(false);
+        WiFi.disconnect(false, false);
+        Serial.println("[WIFI-BOOT] Tutti i tentativi esauriti. Connessione disponibile dalla pagina impostazioni.");
+        return;
+    }
+
+    g_wifi_boot_attempts++;
+    WiFi.disconnect(false, false);
+    g_wifi_boot_retry_start_ms = millis();
+    g_wifi_boot_state = WifiBootState::RETRY_WAIT;
+}
+
+void wifi_boot_abort() {
+    if (g_wifi_boot_state != WifiBootState::CONNECTING &&
+        g_wifi_boot_state != WifiBootState::RETRY_WAIT) return;
+    g_wifi_boot_state = WifiBootState::ABORTED;
+    wifi_display_guard_set(false);
+    WiFi.setAutoReconnect(false);
+    WiFi.disconnect(false, false);
+    Serial.println("[WIFI-BOOT] Tentativo boot annullato dall'utente (scansione avviata).");
+}
+
+bool wifi_boot_is_active() {
+    return g_wifi_boot_state == WifiBootState::CONNECTING ||
+           g_wifi_boot_state == WifiBootState::RETRY_WAIT;
+}
+
 /**
  * ITA: Loop principale con polling periodico sensore ambiente.
  * ENG: Main loop with periodic environment sensor polling.
@@ -642,7 +891,9 @@ void loop() {
     const unsigned long now = millis();
 
     wifi_display_guard_service();
+    wifi_boot_service();
     rs485_cli_poll_serial();
+    displayApiService();
 
     // ITA: Polling ogni 2 secondi.
     // ENG: Poll every 2 seconds.
@@ -665,6 +916,8 @@ void loop() {
             ui_dc_home_set_environment(t, h, valid);
             lvgl_port_unlock();
         }
+
+        ui_air_safeguard_service(t, h, valid);
     }
 
     // ITA: Piccolo sleep per evitare busy-loop.

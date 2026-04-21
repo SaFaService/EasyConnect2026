@@ -28,6 +28,7 @@ $canReadSerials = in_array((string)($_SESSION['user_role'] ?? ''), ['admin', 'bu
         <a href="settings.php" class="btn btn-outline-light me-2"><i class="fas fa-cogs"></i> <?php echo $lang['navbar_plant_management']; ?></a>
         <?php if ($_SESSION['user_role'] === 'admin'): ?>
             <a href="firmware.php" class="btn btn-outline-light me-2"><i class="fas fa-cloud-upload-alt"></i> <?php echo $lang['navbar_firmware_management']; ?></a>
+            <a href="api_keys.php" class="btn btn-outline-light me-2"><i class="fas fa-key"></i> <?php echo $lang['navbar_api_keys'] ?? 'API Key'; ?></a>
         <?php endif; ?>
         <?php if ($canReadSerials || $canSerialLifecycle): ?>
             <a href="serials.php" class="btn btn-outline-light me-2"><i class="fas fa-barcode"></i> <?php echo $lang['navbar_serial_management']; ?></a>
