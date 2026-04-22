@@ -6,6 +6,7 @@
 // NVS namespace "easy_disp" — le chiavi esistenti non cambiano mai.
 
 #include "dc_data_model.h"
+#include <stddef.h>
 
 // ─── Lifecycle ───────────────────────────────────────────────────────────────
 
@@ -86,6 +87,11 @@ void dc_settings_wifi_ssid_get(char* out, size_t out_size);
 void dc_settings_api_customer_set(bool enabled, const char* url, const char* key);
 bool dc_settings_api_customer_enabled_get(void);
 void dc_settings_api_customer_url_get(char* out, size_t out_size);
+
+// NVS namespace: "easy_sys", key: "sys_pin_hash" (SHA-256 hex di 6 cifre)
+bool dc_settings_system_pin_is_set(void);
+bool dc_settings_system_pin_verify(const char* pin6);
+bool dc_settings_system_pin_set(const char* pin6);
 
 // ─── Backlight hardware ───────────────────────────────────────────────────────
 

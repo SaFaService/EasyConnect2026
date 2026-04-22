@@ -28,22 +28,31 @@ static void _snapshot_device(DcDeviceSnapshot& dst, const Rs485Device& src) {
     dst.type           = _map_dev_type(src);
 
     dst.relay_on       = src.relay_on;
-    dst.relay_mode     = DC_RELAY_MANUAL;
-    dst.safety_fault   = src.relay_safety_closed;
-    dst.feedback_fault = src.relay_feedback_fault_latched;
+    dst.relay_mode     = (DcRelayMode)constrain((int)src.relay_mode, 0, 5);
+    dst.safety_fault   = !src.relay_safety_closed;
+    dst.feedback_fault = src.relay_feedback_fault_latched ||
+                         (src.type == Rs485DevType::SENSOR &&
+                          src.sensor_profile == Rs485SensorProfile::AIR_010 &&
+                          src.sensor_feedback_fault_latched);
     dst.relay_starts   = 0;
     dst.uptime_hours   = 0;
 
+    const bool is_air_010 = (src.type == Rs485DevType::SENSOR &&
+                              src.sensor_profile == Rs485SensorProfile::AIR_010);
     dst.motor_enabled  = src.sensor_active;
-    dst.speed_pct      = 0;
+    // Per AIR_010 il parser RS485 codifica la velocità in dev.h (0–100 %)
+    dst.speed_pct      = is_air_010
+                         ? (uint8_t)constrain((int)(src.h + 0.5f), 0, 100)
+                         : 0;
 
     dst.pressure_pa    = src.p;
     dst.temp_c         = src.t;
-    dst.hum_rh         = src.h;
+    // dev.h su AIR_010 = velocità, non umidità: non esporre come campo T/H
+    dst.hum_rh         = is_air_010 ? 0.0f : src.h;
     dst.pressure_valid = (src.type == Rs485DevType::SENSOR &&
                           src.sensor_profile == Rs485SensorProfile::PRESSURE &&
                           src.data_valid);
-    dst.temp_valid     = (src.type == Rs485DevType::SENSOR && src.data_valid);
+    dst.temp_valid     = (!is_air_010 && src.type == Rs485DevType::SENSOR && src.data_valid);
     dst.hum_valid      = dst.temp_valid;
 
     strncpy(dst.sn, src.sn, sizeof(dst.sn) - 1);
@@ -68,8 +77,19 @@ static void _update_network(void) {
 }
 
 static void _update_wifi(void) {
-    switch (WiFi.status()) {
+    if (!g_dc_model.settings.wifi_enabled) {
+        g_dc_model.wifi.state            = DcWifiState::DC_WIFI_DISABLED;
+        g_dc_model.wifi.rssi             = 0;
+        g_dc_model.wifi.connected_since_ms = 0;
+        return;
+    }
+
+    const wl_status_t status = WiFi.status();
+    switch (status) {
         case WL_CONNECTED:
+            if (g_dc_model.wifi.state != DcWifiState::DC_WIFI_CONNECTED) {
+                g_dc_model.wifi.connected_since_ms = millis();
+            }
             g_dc_model.wifi.state = DcWifiState::DC_WIFI_CONNECTED;
             g_dc_model.wifi.rssi  = WiFi.RSSI();
             strncpy(g_dc_model.wifi.ssid, WiFi.SSID().c_str(), sizeof(g_dc_model.wifi.ssid) - 1);
@@ -79,17 +99,20 @@ static void _update_wifi(void) {
             break;
         case WL_IDLE_STATUS:
         case WL_SCAN_COMPLETED:
-            g_dc_model.wifi.state = DcWifiState::DC_WIFI_CONNECTING;
+            g_dc_model.wifi.state              = DcWifiState::DC_WIFI_CONNECTING;
+            g_dc_model.wifi.connected_since_ms = 0;
             break;
         case WL_NO_SSID_AVAIL:
         case WL_CONNECT_FAILED:
         case WL_CONNECTION_LOST:
         case WL_DISCONNECTED:
-            g_dc_model.wifi.state = DcWifiState::DC_WIFI_FAILED;
-            g_dc_model.wifi.rssi  = 0;
+            g_dc_model.wifi.state              = DcWifiState::DC_WIFI_FAILED;
+            g_dc_model.wifi.rssi               = 0;
+            g_dc_model.wifi.connected_since_ms = 0;
             break;
         default:
-            g_dc_model.wifi.state = DcWifiState::DC_WIFI_DISABLED;
+            g_dc_model.wifi.state              = DcWifiState::DC_WIFI_FAILED;
+            g_dc_model.wifi.connected_since_ms = 0;
             break;
     }
 }
@@ -318,6 +341,8 @@ static void _air_safeguard_stop_boost(const AirSafeguardMotorGroup& motor,
     s_air_safeguard.filter_ready = filter_ready;
     s_air_safeguard.temp_ema = temp_ema;
     s_air_safeguard.hum_ema = hum_ema;
+
+    memset(&g_dc_model.safeguard, 0, sizeof(g_dc_model.safeguard));
 }
 
 static int _air_safeguard_boost_target(float temp_ema, float hum_ema) {
@@ -434,6 +459,12 @@ void dc_air_safeguard_service(void) {
         s_air_safeguard.base_enabled = motor.enabled;
         s_air_safeguard.last_target_pct = motor.speed_pct;
         s_air_safeguard.last_command_ms = 0;
+        g_dc_model.safeguard.active          = true;
+        g_dc_model.safeguard.active_since_ms = now;
+        g_dc_model.safeguard.base_speed_pct  = motor.speed_pct;
+        g_dc_model.safeguard.duct_temp_ema   = s_air_safeguard.temp_ema;
+        g_dc_model.safeguard.duct_hum_ema    = s_air_safeguard.hum_ema;
+        g_dc_model.safeguard.boost_speed_pct = motor.speed_pct;
         Serial.printf("[AIR-SAFE] Attiva G1: T=%.1f/%dC RH=%.1f/%d%% base=%d%%\n",
                       s_air_safeguard.temp_ema, temp_max,
                       s_air_safeguard.hum_ema, hum_max,
@@ -472,6 +503,9 @@ void dc_air_safeguard_service(void) {
     if (_air_safeguard_command_group1(motor, target, true)) {
         s_air_safeguard.last_command_ms = now;
         s_air_safeguard.last_target_pct = target;
+        g_dc_model.safeguard.boost_speed_pct = target;
+        g_dc_model.safeguard.duct_temp_ema   = s_air_safeguard.temp_ema;
+        g_dc_model.safeguard.duct_hum_ema    = s_air_safeguard.hum_ema;
         Serial.printf("[AIR-SAFE] Boost G1 a %d%%: T=%.1fC RH=%.1f%%\n",
                       target, s_air_safeguard.temp_ema, s_air_safeguard.hum_ema);
     }

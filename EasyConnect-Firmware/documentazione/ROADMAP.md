@@ -1,51 +1,51 @@
-# EasyConnect Display Controller — ROADMAP Implementazione
+﻿# EasyConnect Display Controller â€” ROADMAP Implementazione
 
-> **Questo file è la guida operativa per ogni sessione di lavoro.**
+> **Questo file Ã¨ la guida operativa per ogni sessione di lavoro.**
 > Aggiornare lo stato dei task ad ogni sessione completata.
 > Per la visione architetturale completa: `documentazione/Architettura_DataModel_e_Template.md`
 
 ---
 
-## Stato attuale: FASE 1 — Task 1.5 prossimo
+## Stato attuale: FASE 2 Task 2.3 ✅ COMPLETATO → prossimo: FASE 3 Task 3.1
 
 ```
-FASE 1 [▓▓▓▓▓░░░░░]  5/11 giorni
-FASE 2 [░░░░░░░░░░]  non iniziata
-FASE 3 [░░░░░░░░░░]  non iniziata
-FASE 4 [░░░░░░░░░░]  non iniziata
+FASE 1 [â–“â–“â–“â–“â–“â–“â–“â–“â–“â–“]  completata
+FASE 2 [██████████]  completata
+FASE 3 [â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘]  non iniziata
+FASE 4 [â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘]  non iniziata
 ```
 
 ---
 
 ## Regole per ogni sessione di lavoro
 
-1. **Leggere questo file per primo** — capire dove si è rimasti
-2. **Leggere solo i file del task corrente** — non esplorare liberamente
-3. **Compilare mentalmente** prima di scrivere — nessuna modifica senza aver letto il file target
+1. **Leggere questo file per primo** â€” capire dove si Ã¨ rimasti
+2. **Leggere solo i file del task corrente** â€” non esplorare liberamente
+3. **Compilare mentalmente** prima di scrivere â€” nessuna modifica senza aver letto il file target
 4. **Aggiornare questo file** al termine di ogni sessione (stato task, prossimo task)
 5. **Non toccare** RS485, WebHandler, OTA_Manager, Calibration salvo richiesta esplicita
 6. **Al completamento di ogni task**: chiedere all'utente di eseguire i comandi git riportati nella sezione "Checkpoint git" del task prima di procedere al successivo
 
 ---
 
-## FASE 1 — Fondamenta DataModel / Controller
+## FASE 1 â€” Fondamenta DataModel / Controller
 
 **Obiettivo:** Separare completamente logica e UI. Al termine di questa fase, `ui_dc_home.cpp`
-non conterrà più chiamate dirette a RS485 o NVS.
+non conterrÃ  piÃ¹ chiamate dirette a RS485 o NVS.
 
-### Task 1.1 — Header contratti ✅ COMPLETATO
+### Task 1.1 â€” Header contratti âœ… COMPLETATO
 
 File creati (non modificare senza aggiornare la doc):
-- `include/dc_data_model.h` — struct DcDataModel e tutte le sotto-struct
-- `include/dc_controller.h` — API comandi (dc_cmd_*) e dc_controller_service()
-- `include/dc_settings.h`   — API impostazioni (dc_settings_*_get/set)
+- `include/dc_data_model.h` â€” struct DcDataModel e tutte le sotto-struct
+- `include/dc_controller.h` â€” API comandi (dc_cmd_*) e dc_controller_service()
+- `include/dc_settings.h`   â€” API impostazioni (dc_settings_*_get/set)
 
-### Task 1.2 — dc_settings.cpp ✅ COMPLETATO
+### Task 1.2 â€” dc_settings.cpp âœ… COMPLETATO
 
 > **Checkpoint git eseguito:**
 > ```
 > git add include/dc_data_model.h include/dc_controller.h include/dc_settings.h src/dc_settings.cpp src/ui/ui_dc_home.cpp
-> git commit -m "Phase1 Task1.2: dc_settings — NVS logic separated from UI"
+> git commit -m "Phase1 Task1.2: dc_settings â€” NVS logic separated from UI"
 > git tag phase1-task1.2
 > ```
 
@@ -54,7 +54,7 @@ File creati (non modificare senza aggiornare la doc):
 File da creare: `src/dc_settings.cpp`
 File da leggere prima di iniziare:
 - `include/dc_settings.h` (contratto da implementare)
-- `src/ui/ui_dc_home.cpp` righe 56–548 (logica NVS attuale da migrare)
+- `src/ui/ui_dc_home.cpp` righe 56â€“548 (logica NVS attuale da migrare)
 
 Operazioni:
 1. Creare `src/dc_settings.cpp` che implementa tutte le funzioni di `dc_settings.h`
@@ -63,42 +63,59 @@ Operazioni:
 4. Le funzioni `ui_brightness_*`, `ui_screensaver_*`, `ui_temperature_unit_*`,
    `ui_plant_name_*`, `ui_ventilation_*`, `ui_air_safeguard_*` in `ui_dc_home.cpp`
    diventano thin wrapper che chiamano il corrispondente `dc_settings_X_set/get()`
-5. Non eliminare ancora le funzioni `ui_*` — solo reindirizzarle (backward compat)
+5. Non eliminare ancora le funzioni `ui_*` â€” solo reindirizzarle (backward compat)
 
-NVS namespace: `easy_disp` (invariato — non rompere dati già salvati dai clienti)
+NVS namespace: `easy_disp` (invariato â€” non rompere dati giÃ  salvati dai clienti)
 NVS chiavi esistenti da preservare: `br_pct`, `scr_min`, `temp_u`, `plant_name`,
 `vent_min`, `vent_max`, `vent_steps`, `imm_bar`, `imm_pct`, `sg_en`, `sg_tmax`, `sg_hmax`
 
 Criteri di completamento:
 - `src/dc_settings.cpp` compila senza errori
-- `ui_dc_home.cpp` non contiene più chiamate dirette a `Preferences` / `g_ui_pref`
+- `ui_dc_home.cpp` non contiene piÃ¹ chiamate dirette a `Preferences` / `g_ui_pref`
 - I valori letti/scritti sono identici a prima (nessuna regressione NVS)
 
-### Task 1.3 — dc_controller.cpp (parte 1: snapshot RS485 + environment) ✅ COMPLETATO
+### Task 1.3 â€” dc_controller.cpp (parte 1: snapshot RS485 + environment) âœ… COMPLETATO
 
 > **Checkpoint git da eseguire:**
 > ```
 > git add src/dc_controller.cpp
-> git commit -m "Phase1 Task1.3: dc_controller — RS485/wifi/env snapshot"
+> git commit -m "Phase1 Task1.3: dc_controller â€” RS485/wifi/env snapshot"
 > git tag phase1-task1.3
 > ```
 
-### Task 1.4 — dc_controller.cpp (parte 2: air safeguard) ✅ COMPLETATO
+### Task 1.4 â€” dc_controller.cpp (parte 2: air safeguard) âœ… COMPLETATO
+
+### Task 1.4b â€” Fix build e snapshot âœ… COMPLETATO
+
+Problemi emersi da audit post-1.4:
+
+1. **build_src_filter** â€” `dc_settings.cpp` e `dc_controller.cpp` mancavano dalla build del target `controller_display` â†’ link error.
+2. **doppia definizione `g_dc_model`** â€” definita in `dc_settings.cpp` e `dc_controller.cpp`; rimossa da `dc_settings.cpp` (extern giÃ  in `dc_data_model.h`).
+3. **`_snapshot_device()` â€” AIR_010** â€” `speed_pct` restava sempre 0 (`dev.h` = velocitÃ  per AIR_010); `temp_valid`/`hum_valid` marcati erroneamente su AIR_010.
+4. **`dc_air_safeguard_service()`** â€” non aggiornava `g_dc_model.safeguard`; ora popola `active`, `duct_temp_ema`, `duct_hum_ema`, `boost_speed_pct`, `base_speed_pct`, `active_since_ms`.
+5. **`_update_wifi()`** â€” non rispettava `settings.wifi_enabled`; `connected_since_ms` mai aggiornato.
+
+> **Checkpoint git da eseguire al completamento:**
+> ```
+> git add platformio.ini src/dc_settings.cpp src/dc_controller.cpp
+> git commit -m "Phase1 Task1.4b: fix build, snapshot AIR_010, safeguard state, wifi"
+> git tag phase1-task1.4b
+> ```
 
 File da leggere prima di iniziare:
-- `src/ui/ui_dc_home.cpp` righe 1229–1356 (helper safeguard) + 1357–1530 (service)
+- `src/ui/ui_dc_home.cpp` righe 1229â€“1356 (helper safeguard) + 1357â€“1530 (service)
 - `include/dc_controller.h`
 
 Operazioni:
 1. Spostare le struct `AirSafeguardDuctSample`, `AirSafeguardMotorGroup`, `AirSafeguardRuntime`
    in `src/dc_controller.cpp` (sono implementation detail, non nel header)
 2. Spostare le funzioni `_air_safeguard_*` da `ui_dc_home.cpp` a `dc_controller.cpp`
-3. Rinominare `ui_air_safeguard_service()` → `dc_air_safeguard_service()` (implementazione in controller)
+3. Rinominare `ui_air_safeguard_service()` â†’ `dc_air_safeguard_service()` (implementazione in controller)
 4. In `ui_dc_home.cpp`: `ui_air_safeguard_service()` diventa stub che chiama `dc_air_safeguard_service()`
 5. In `main_display_controller.cpp`: la chiamata rimane invariata per ora
 
-⚠️ **Test: FLASH OBBLIGATORIO** — verificare che il safeguard si comporti identicamente.
-Testare: ventilatore a velocità ridotta → superare soglia → boost attivo → rientro.
+âš ï¸ **Test: FLASH OBBLIGATORIO** â€” verificare che il safeguard si comporti identicamente.
+Testare: ventilatore a velocitÃ  ridotta â†’ superare soglia â†’ boost attivo â†’ rientro.
 
 > **Checkpoint git da eseguire al completamento:**
 > ```
@@ -107,7 +124,7 @@ Testare: ventilatore a velocità ridotta → superare soglia → boost attivo �
 > git tag phase1-task1.4
 > ```
 
-### Task 1.5 — Aggiornamento main_display_controller.cpp 🔲 PROSSIMO
+### Task 1.5 â€” Aggiornamento main_display_controller.cpp âœ… COMPLETATO
 
 File da leggere prima di iniziare:
 - `src/main_display_controller.cpp` (tutto)
@@ -118,9 +135,9 @@ Operazioni:
 2. `loop()`: sostituire il blocco SHTC3 + `ui_dc_home_set_environment()` con
    `dc_controller_service(t, h, valid)` che fa tutto internamente
 3. La chiamata `ui_air_safeguard_service()` nel loop viene rimossa
-   (ora è dentro `dc_controller_service()`)
+   (ora Ã¨ dentro `dc_controller_service()`)
 
-⚠️ **Test: FLASH OBBLIGATORIO** — verificare comportamento completo del loop:
+âš ï¸ **Test: FLASH OBBLIGATORIO** â€” verificare comportamento completo del loop:
 WiFi boot, lettura SHTC3 in header, RS485 scan, safeguard attivo.
 
 > **Checkpoint git da eseguire al completamento:**
@@ -130,12 +147,12 @@ WiFi boot, lettura SHTC3 in header, RS485 scan, safeguard attivo.
 > git tag phase1-task1.5
 > ```
 
-### Task 1.6 — Aggiornamento ui_dc_home.cpp (lettura da DataModel) 🔲
+### Task 1.6 â€” Aggiornamento ui_dc_home.cpp (lettura da DataModel) âœ… COMPLETATO
 
-**Questo è il task più lungo e delicato della Fase 1.**
+**Questo Ã¨ il task piÃ¹ lungo e delicato della Fase 1.**
 
 File da leggere prima di iniziare:
-- `src/ui/ui_dc_home.cpp` (tutto — 2928 righe)
+- `src/ui/ui_dc_home.cpp` (tutto â€” 2928 righe)
 - `include/dc_data_model.h`
 - `include/dc_controller.h`
 
@@ -158,12 +175,12 @@ Attuale: `rs485_network_device_count() > 0`
 Target: `g_dc_model.network.device_count > 0`
 
 Criteri di completamento:
-- `ui_dc_home.cpp` non include più `rs485_network.h`
-- `ui_dc_home.cpp` non include più `<Preferences.h>`
-- Il firmware compila e il comportamento visivo è identico a prima
+- `ui_dc_home.cpp` non include piÃ¹ `rs485_network.h`
+- `ui_dc_home.cpp` non include piÃ¹ `<Preferences.h>`
+- Il firmware compila e il comportamento visivo Ã¨ identico a prima
 
-⚠️ **Test: FLASH + REGRESSIONE COMPLETA** — questo è il task più grande.
-Verificare: tile RS485, slider velocità, comandi relay, WiFi indicator, notifiche, safeguard.
+âš ï¸ **Test: FLASH + REGRESSIONE COMPLETA** â€” questo Ã¨ il task piÃ¹ grande.
+Verificare: tile RS485, slider velocitÃ , comandi relay, WiFi indicator, notifiche, safeguard.
 
 > **Checkpoint git da eseguire al completamento:**
 > ```
@@ -175,92 +192,172 @@ Verificare: tile RS485, slider velocità, comandi relay, WiFi indicator, notific
 
 ---
 
-## FASE 2 — UI condivisa e isolamento tema Classic
+## FASE 2 â€” UI condivisa e isolamento tema Classic
 
 *Iniziare solo dopo completamento Fase 1.*
 
-### Task 2.1 — Splash condivisa con progresso reale 🔲
-- Creare `src/ui/shared/ui_splash_shared.cpp/.h`
-- Aggiungere `boot_step` e `boot_step_label` a DcDataModel
-- 10 step reali mappati su operazioni di setup() (vedi doc architettura §10)
-- Rimuovere la splash attuale `ui_dc_splash.cpp` dopo migrazione
+### Task 2.1 â€” Splash condivisa con progresso reale âœ… COMPLETATO
 
-### Task 2.2 — Impostazioni condivise 🔲
-- Creare `src/ui/shared/ui_settings_shared.cpp/.h`
-- Struttura a 6 sezioni (Utente, Connessione, Setup Sistema, Ventilazione, Filtraggio, Sensori)
-- Sezione Sistema protetta da PIN 6 cifre (NVS `easy_sys`, chiave `sys_pin_hash`)
-- Rimuovere `ui_dc_settings.cpp` dopo migrazione
+> **Checkpoint git da eseguire:**
+> ```
+> git add src/ui/shared/ui_splash_shared.cpp src/ui/shared/ui_splash_shared.h src/main_display_controller.cpp platformio.ini documentazione/ROADMAP.md
+> git commit -m "Phase2 Task2.1: shared splash with real boot progress"
+> git tag phase2-task2.1
+> ```
 
-### Task 2.3 — Isolamento tema Classic 🔲
-- Creare directory `src/ui/theme_classic/`
-- Spostare (non copiare) `ui_dc_home.cpp` → `theme_classic/ui_tc_home.cpp`
-- Spostare `ui_dc_network.cpp` → `theme_classic/ui_tc_network.cpp`
-- Creare `theme_classic/ui_theme_classic.cpp` che registra la struct UiTheme
-- Aggiungere `include/ui_theme_interface.h` e `src/ui/ui_theme_registry.cpp`
+File creati:
+- `src/ui/shared/ui_splash_shared.cpp/.h` â€” splash condivisa, timer 150 ms legge g_dc_model.boot
+
+Modifiche:
+- `main_display_controller.cpp` â€” splash creata subito dopo LVGL; dc_boot_set_step() a ogni passo
+- `platformio.ini` â€” sostituito ui_dc_splash.cpp con ui/shared/ui_splash_shared.cpp
+
+Note post-migrazione:
+- `src/ui/ui_dc_splash.cpp` non Ã¨ piÃ¹ compilata; puÃ² essere eliminata dopo test su hardware.
+- rs485_network_boot_probe_start() spostata da splash a setup() (step 3).
+- Home si carica quando boot.complete==true E tâ‰¥3500 ms dalla splash creation.
+
+### Task 2.2 — Impostazioni condivise ✅ COMPLETATO
+
+> **Checkpoint git da eseguire:**
+> ```
+> git add include/dc_settings.h src/dc_settings.cpp src/ui/shared/ui_settings_shared.cpp src/ui/shared/ui_settings_shared.h src/ui/ui_dc_home.cpp src/ui/ui_dc_settings.h platformio.ini documentazione/ROADMAP.md
+> git commit -m "Phase2 Task2.2: shared settings with system PIN lock"
+> git tag phase2-task2.2
+> ```
+
+File creati:
+- `src/ui/shared/ui_settings_shared.cpp/.h` — nuova schermata impostazioni condivisa
+
+Modifiche:
+- `src/dc_settings.cpp/.h` — aggiunta gestione PIN sistema hashato in NVS `easy_sys` chiave `sys_pin_hash`
+- `src/ui/ui_dc_home.cpp` — apertura schermata shared
+- `src/ui/ui_dc_settings.h` — wrapper di compatibilità verso la schermata shared
+- `platformio.ini` — sostituito `ui/ui_dc_settings.cpp` con `ui/shared/ui_settings_shared.cpp`
+
+Note post-migrazione:
+- `src/ui/ui_dc_settings.cpp` rimosso dalla codebase
+- Le impostazioni sono ora organizzate in 6 sezioni: Utente, Connessione, Setup Sistema, Ventilazione, Filtraggio, Sensori
+- Data e ora sono confluite nella sezione Utente
+- La sezione Setup Sistema richiede PIN a 6 cifre; al primo accesso il PIN viene configurato e salvato come hash SHA-256
+- `controller_display` compila correttamente dopo la migrazione
+
+### Task 2.3 â€” Isolamento tema Classic âœ… COMPLETATO
+
+> **Checkpoint git da eseguire:**
+> ```
+> git add include/ui_theme_interface.h src/ui/ui_theme_registry.cpp src/ui/ui_dc_home.cpp src/ui/ui_dc_network.cpp src/ui/theme_classic/ui_tc_home.cpp src/ui/theme_classic/ui_tc_home.h src/ui/theme_classic/ui_tc_network.cpp src/ui/theme_classic/ui_tc_network.h src/ui/theme_classic/ui_theme_classic.cpp platformio.ini documentazione/ROADMAP.md
+> git commit -m "Phase2 Task2.3: isolate Classic theme behind registry"
+> git tag phase2-task2.3
+> git tag phase2-complete
+> ```
+
+File creati:
+- `include/ui_theme_interface.h` â€” contratto `UiTheme` + API registry/activate/create
+- `src/ui/ui_theme_registry.cpp` â€” registry temi con attivazione per `ui_theme_id`
+- `src/ui/theme_classic/ui_tc_home.h` / `ui_tc_network.h` â€” entrypoint tema Classic
+- `src/ui/theme_classic/ui_theme_classic.cpp` â€” registrazione tema Classic (id 0)
+
+Modifiche:
+- `src/ui/ui_dc_home.cpp` â€” wrapper compatibile che inoltra la creazione home al tema attivo
+- `src/ui/ui_dc_network.cpp` â€” wrapper compatibile che inoltra la creazione network al tema attivo
+- `src/ui/theme_classic/ui_tc_home.cpp` â€” implementazione Classic spostata fuori dal layer pubblico
+- `src/ui/theme_classic/ui_tc_network.cpp` â€” implementazione Classic spostata fuori dal layer pubblico
+- `platformio.ini` â€” build aggiornata con registry e file `theme_classic`
+
+Note post-migrazione:
+- L'API pubblica legacy `ui_dc_home_create()` / `ui_dc_network_create()` resta invariata per i call site esistenti
+- Il tema Classic Ã¨ registrato come `ui_theme_id = 0` ed Ã¨ fallback automatico se il tema richiesto non esiste
+- Build `controller_display` verificata con successo dopo il refactor
 
 ---
 
-## FASE 3 — CLI admin + API JSON v1.0
+## FASE 3 â€” CLI admin + API JSON v1.0
 
 *Iniziare solo dopo completamento Fase 2.*
 
-### Task 3.1 — CLI seriale livelli admin 🔲
+### Task 3.1 â€” CLI seriale livelli admin ðŸ”²
 - Aggiungere `src/dc_admin_cli.cpp/.h`
 - Due livelli: User (default) / Admin (AUTH + password)
 - Timeout sessione admin: 5 minuti
-- Password → SHA-256, salvata in NVS `easy_sys` chiave `adm_pw_hash`
-- Vedi elenco comandi in doc architettura §7
+- Password â†’ SHA-256, salvata in NVS `easy_sys` chiave `adm_pw_hash`
+- Vedi elenco comandi in doc architettura Â§7
 
-### Task 3.2 — JSON contract v1.0 🔲
+### Task 3.2 â€” JSON contract v1.0 ðŸ”²
 - Creare `src/dc_api_json.cpp/.h`
-- Funzione `dc_api_build_payload(char* buf, size_t len)` — serializza g_dc_model
-- Funzione `dc_api_parse_command(const char* json)` — esegue comandi pending
-- Struttura JSON: vedi doc architettura §8 (IMMUTABILE da questo punto in poi)
+- Funzione `dc_api_build_payload(char* buf, size_t len)` â€” serializza g_dc_model
+- Funzione `dc_api_parse_command(const char* json)` â€” esegue comandi pending
+- Struttura JSON: vedi doc architettura Â§8 (IMMUTABILE da questo punto in poi)
 - Integrare con DisplayApi_Manager esistente
 
-### Task 3.3 — OTA dal controller 🔲
+### Task 3.3 â€” OTA dal controller ðŸ”²
 - Integrare OTA trigger nella risposta API (campo `ota.update_available`)
-- Aggiungere overlay UI condiviso "Aggiornamento in corso…" (non dipende dal tema)
+- Aggiungere overlay UI condiviso "Aggiornamento in corsoâ€¦" (non dipende dal tema)
 - Trigger da CLI admin: `OTACHECK`, `OTASTART`
 
 ---
 
-## FASE 4 — Secondo template
+## FASE 4 â€” Secondo template
 
 *Iniziare solo dopo completamento Fase 3.*
 
-### Task 4.1 — Design grafico secondo tema 🔲
+### Task 4.1 â€” Design grafico secondo tema ðŸ”²
 - Da concordare con il cliente prima di scrivere codice
 - Definire: layout, palette, animazioni, widget custom
 
-### Task 4.2 — Implementazione tema 🔲
+### Task 4.2 â€” Implementazione tema ðŸ”²
 - Creare `src/ui/theme_X/`
 - Implementare le funzioni `create_home()` e `create_network()` della struct UiTheme
 - Il tema legge SOLO `g_dc_model`, chiama SOLO `dc_cmd_*`
 
-### Task 4.3 — Selezione tema in impostazioni 🔲
+### Task 4.3 â€” Selezione tema in impostazioni ðŸ”²
 - Aggiungere voce "Tema interfaccia" nella sezione Utente delle impostazioni
-- `dc_settings_theme_set(uint8_t id)` → salva in NVS + aggiorna g_dc_model.settings.ui_theme_id
+- `dc_settings_theme_set(uint8_t id)` â†’ salva in NVS + aggiorna g_dc_model.settings.ui_theme_id
 - Al boot: `ui_theme_activate(g_dc_model.settings.ui_theme_id)` dopo splash
+
+---
+
+### Task 1.7 â€” Unificazione WiFi/API/safety nel DataModel âœ… COMPLETATO
+
+**Obiettivo:** Chiudere i gap di coerenza trovati dall'analisi post-Fase1.
+
+Problemi risolti:
+1. **WiFi**: `ui_dc_settings.cpp` scriveva NVS direttamente bypassando `g_dc_model.settings.wifi_enabled`.
+   â†’ Rimossi `_wifi_pref_enabled_get/set` e `_wifi_pref_save_credentials`; sostituiti con
+     `dc_settings_wifi_set()` / `dc_settings_wifi_enabled_get()`.
+2. **API customer**: `DisplayApi_Manager` usava chiavi NVS `"custApiUrl"`/`"custApiKey"` diverse da
+   `dc_settings` (`"cust_url"`/`"cust_key"`). Aggiunto anche `_wifi_api_enabled()` â†’ DataModel.
+   â†’ `displayApiSetCustomerUrl/Key()` ora scrivono `"cust_url"`/`"cust_key"`;
+     `displayApiLoadConfig()` legge new key con fallback a old key per migrazione dati esistenti;
+     `_api_popup_submit()` aggiorna `g_dc_model.settings.api_customer_url` in real-time.
+3. **Safety/bypass**: variabili locali `g_system_bypass_active` / `g_system_safety_trip_active`
+   in `ui_dc_home.cpp` erano invisibili al DataModel.
+   â†’ Rimosse; sostituite con `g_dc_model.system_bypass_active` / `g_dc_model.system_safety_trip`.
+
+> **Checkpoint git da eseguire:**
+> ```
+> git add src/DisplayApi_Manager.cpp src/ui/ui_dc_settings.cpp src/ui/ui_dc_home.cpp documentazione/ROADMAP.md
+> git commit -m "Phase1 Task1.7: unify WiFi/API/safety via DataModel"
+> git tag phase1-task1.7
+> ```
 
 ---
 
 ## Note per la sessione corrente
 
-- Branch di lavoro consigliato: `refactor/datamodel-phase1`
-  (creare con: `git checkout -b refactor/datamodel-phase1`)
-- Branch di partenza: `freeze/controller_display-2026-04-03`
-- Prossimo task da eseguire: **Task 1.5 — main_display_controller.cpp**
+- Branch di lavoro corrente: `freeze/controller_display-2026-04-03`
+- Prossimo task da eseguire: **FASE 3 — Task 3.1 — CLI seriale livelli admin**
 - File da leggere all'inizio della prossima sessione:
   1. Questo file (ROADMAP.md)
-  2. `src/main_display_controller.cpp` (tutto)
-  3. `include/dc_controller.h`
+  2. `documentazione/Architettura_DataModel_e_Template.md` (Â§7 CLI admin)
+  3. `include/dc_settings.h`
+  4. `src/main_display_controller.cpp`
 
 ---
 
 ## Guida ai checkpoint git
 
-Ad ogni task completato Claude chiederà di eseguire questi comandi nel terminale PlatformIO.
+Ad ogni task completato Claude chiederÃ  di eseguire questi comandi nel terminale PlatformIO.
 Eseguirli **prima** di chiedere il task successivo. In caso di problemi:
 
 ```bash

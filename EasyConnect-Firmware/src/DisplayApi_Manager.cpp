@@ -9,6 +9,7 @@
 
 #include "rs485_network.h"
 #include "ui/ui_dc_home.h"
+#include "dc_data_model.h"
 
 extern const char* FW_VERSION;
 
@@ -66,11 +67,7 @@ static String _json_escape(const String& value) {
 }
 
 static bool _wifi_api_enabled() {
-    Preferences pref;
-    if (!pref.begin("easy", true)) return false;
-    const bool enabled = pref.getBool("dc_wifi_enabled", false);
-    pref.end();
-    return enabled;
+    return g_dc_model.settings.wifi_enabled;
 }
 
 static String _pref_get_string_if_key(Preferences& pref, const char* key, const char* fallback) {
@@ -89,8 +86,10 @@ DisplayApiConfig displayApiLoadConfig() {
     cfg.serialNumber = _pref_get_string_if_key(pref, "serialeID", "NON_SET");
     cfg.factoryUrl = _pref_get_string_if_key(pref, "api_url", "");
     cfg.factoryKey = _pref_get_string_if_key(pref, "apiKey", "");
-    cfg.customerUrl = _pref_get_string_if_key(pref, "custApiUrl", "");
-    cfg.customerKey = _pref_get_string_if_key(pref, "custApiKey", "");
+    cfg.customerUrl = pref.isKey("cust_url") ? _pref_get_string_if_key(pref, "cust_url", "")
+                                             : _pref_get_string_if_key(pref, "custApiUrl", "");
+    cfg.customerKey = pref.isKey("cust_key") ? _pref_get_string_if_key(pref, "cust_key", "")
+                                             : _pref_get_string_if_key(pref, "custApiKey", "");
     pref.end();
 
     cfg.serialNumber.trim();
@@ -131,13 +130,13 @@ void displayApiSetFactoryKey(const String& key) {
 void displayApiSetCustomerUrl(const String& url) {
     String v = url;
     v.trim();
-    _put_easy_string("custApiUrl", v);
+    _put_easy_string("cust_url", v);
 }
 
 void displayApiSetCustomerKey(const String& key) {
     String v = key;
     v.trim();
-    _put_easy_string("custApiKey", v);
+    _put_easy_string("cust_key", v);
 }
 
 static DisplayApiDispatchPlan _resolve_plan(const DisplayApiConfig& cfg) {

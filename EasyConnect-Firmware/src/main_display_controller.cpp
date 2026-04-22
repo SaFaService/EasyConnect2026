@@ -31,9 +31,8 @@
 // ITA: Helper I2C del progetto.
 // ENG: Project I2C helper.
 #include "display_port/i2c.h"
-// ITA: Splash screen del display controller.
-// ENG: Display controller splash screen.
-#include "ui/ui_dc_splash.h"
+// Splash condivisa con progresso boot reale.
+#include "ui/shared/ui_splash_shared.h"
 // ITA: Home UI del display controller.
 // ENG: Display controller home UI.
 #include "ui/ui_dc_home.h"
@@ -735,6 +734,7 @@ void setup() {
     Serial.begin(115200);
     delay(300);
     Serial.println("=== EasyConnect Display Controller ===");
+    dc_boot_set_step(0, "Avvio");
 
     // WiFi driver init deve avvenire PRIMA di lvgl_port_init per riservare
     // memoria DMA contigua (~80KB). Dopo LVGL la heap DMA è troppo frammentata.
@@ -742,8 +742,6 @@ void setup() {
     WiFi.onEvent(display_wifi_event_logger);
     display_wifi_preinit_driver();
 
-    // ITA: Init touch e pannello RGB.
-    // ENG: Initialize touch and RGB panel.
     esp_lcd_touch_handle_t tp_handle = touch_gt911_init();
     esp_lcd_panel_handle_t panel_handle = waveshare_esp32_s3_rgb_lcd_init();
 
@@ -751,39 +749,58 @@ void setup() {
         Serial.println("[ERRORE] Display non inizializzato - halt");
         halt_forever();
     }
+    dc_boot_set_step(1, "Display");
 
-    // ITA: Backlight ON + init gestione luminosita + init LVGL.
-    // ENG: Backlight ON + brightness management init + LVGL init.
     wavesahre_rgb_lcd_bl_on();
     ui_brightness_init();
-
     ESP_ERROR_CHECK(lvgl_port_init(panel_handle, tp_handle));
     Serial.println("[OK] Display + LVGL pronti");
     display_wifi_log_heap("after_lvgl");
+    dc_boot_set_step(2, "LVGL pronto");
 
-    // ITA: Inizializza interfaccia RS485 DOPO il display per evitare conflitti
-    //      di pin: GPIO7=PCLK e GPIO21=G7 sull'S3 non sono usabili per RS485.
-    //      I pin del display controller sono separati (vedere Pins.h).
-    // ENG: Initialize RS485 AFTER display to avoid pin conflicts.
-    rs485_network_init();
-    Serial.println("[OK] RS485 pronto (Serial1)");
-    Serial.println("Digita 'HELP' o '485 - HELP' per il menu comandi RS485.");
-
-    dc_settings_load();
-    dc_controller_init();
-    Serial.println("[OK] Controller inizializzato");
-
-    // ITA: Crea splash in sezione critica LVGL.
-    // ENG: Creates splash inside LVGL critical section.
+    // Splash creata subito dopo LVGL — mostra progresso boot in tempo reale.
     if (lvgl_port_lock(-1)) {
-        ui_dc_splash_create();
+        ui_splash_shared_create();
         lvgl_port_unlock();
     }
     display_wifi_log_heap("after_splash");
 
-    // Tenta connessione automatica alla rete salvata (max k_wifi_boot_max_attempts tentativi).
-    // Se dopo tutti i tentativi non si connette, la connessione è possibile solo dalla pagina
-    // impostazioni. La pagina impostazioni può annullare il tentativo in corso via wifi_boot_abort().
+    // RS485 init DOPO display (conflitti pin su S3).
+    rs485_network_init();
+    rs485_network_boot_probe_start();
+    Serial.println("[OK] RS485 pronto (Serial1)");
+    Serial.println("Digita 'HELP' o '485 - HELP' per il menu comandi RS485.");
+    dc_boot_set_step(3, "RS485 pronto");
+
+    // Step 4: sensore SHTC3
+    g_shtc3_ok = shtc3_init_sensor();
+    if (g_shtc3_ok) {
+        Serial.println("[OK] SHTC3 pronto (I2C)");
+    } else {
+        Serial.println("[WARN] SHTC3 non rilevato o non raggiungibile");
+    }
+    dc_boot_set_step(4, "Sensore SHTC3");
+
+    // Step 5: clock RTC/NTP
+    ui_dc_clock_init();
+    if (ui_dc_clock_has_rtc()) {
+        Serial.println("[OK] RTC rilevato su I2C");
+    } else {
+        Serial.println("[WARN] RTC non rilevato: fallback NTP/contatore attivo");
+    }
+    dc_boot_set_step(5, "Orologio");
+
+    // Step 6: impostazioni NVS
+    dc_settings_load();
+    dc_boot_set_step(6, "Impostazioni NVS");
+
+    // Step 7: controller (RS485 snapshot, safeguard, WiFi state machine)
+    dc_controller_init();
+    Serial.println("[OK] Controller inizializzato");
+    dc_boot_set_step(7, "Controller pronto");
+
+    // Step 9: tentativo connessione WiFi (asincrono — loop() gestisce il risultato)
+    dc_boot_set_step(9, "Connessione WiFi...");
     {
         Preferences pref;
         if (pref.begin("easy", true)) {
@@ -809,23 +826,9 @@ void setup() {
         }
     }
 
-    // ITA: Inizializza sensore SHTC3.
-    // ENG: Initialize SHTC3 sensor.
-    g_shtc3_ok = shtc3_init_sensor();
-    if (g_shtc3_ok) {
-        Serial.println("[OK] SHTC3 pronto (I2C)");
-    } else {
-        Serial.println("[WARN] SHTC3 non rilevato o non raggiungibile");
-    }
-
-    // ITA: Inizializza clock UI (RTC se presente, altrimenti fallback).
-    // ENG: Initializes UI clock (RTC if present, fallback otherwise).
-    ui_dc_clock_init();
-    if (ui_dc_clock_has_rtc()) {
-        Serial.println("[OK] RTC rilevato su I2C");
-    } else {
-        Serial.println("[WARN] RTC non rilevato: fallback NTP/contatore attivo");
-    }
+    // Step 10: boot completato — la splash carica Home al prossimo tick del timer
+    dc_boot_set_step(10, "Pronto");
+    dc_boot_complete();
 
     rs485_cli_print_help();
 }

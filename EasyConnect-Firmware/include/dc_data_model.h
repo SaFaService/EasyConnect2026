@@ -20,9 +20,12 @@ enum DcDeviceType : uint8_t {
 };
 
 enum DcRelayMode : uint8_t {
-    DC_RELAY_MANUAL = 0,
-    DC_RELAY_AUTO   = 1,
-    DC_RELAY_TIMER  = 2,
+    DC_RELAY_UNKNOWN = 0,
+    DC_RELAY_LIGHT   = 1,
+    DC_RELAY_UVC     = 2,
+    DC_RELAY_ELECTRO = 3,
+    DC_RELAY_GAS     = 4,
+    DC_RELAY_COMMAND = 5,
 };
 
 struct DcDeviceSnapshot {

@@ -2,15 +2,17 @@
 #include "dc_data_model.h"
 #include <Preferences.h>
 #include <Arduino.h>
+#include <mbedtls/sha256.h>
 #include "display_port/io_extension.h"
-
-DcDataModel g_dc_model = {};
 
 static Preferences s_pref_disp;
 static Preferences s_pref_easy;
+static Preferences s_pref_sys;
 static bool s_loaded          = false;
 static bool s_pref_disp_ready = false;
 static bool s_pref_easy_ready = false;
+static bool s_pref_sys_ready  = false;
+static char s_system_pin_hash[65] = "";
 
 // ─── Sanitize ────────────────────────────────────────────────────────────────
 
@@ -41,6 +43,53 @@ static int _san_vent_steps(int s) {
 static int _san_intake_diff(int pct) { return constrain(pct, 25, 90); }
 static int _san_sg_temp(int t)       { return constrain(t, 30, 120); }
 static int _san_sg_hum(int h)        { return constrain(h, 40, 100); }
+
+static bool _is_pin6_valid(const char* pin6) {
+    if (!pin6) return false;
+    for (int i = 0; i < 6; i++) {
+        const char c = pin6[i];
+        if (c < '0' || c > '9') return false;
+    }
+    return pin6[6] == '\0';
+}
+
+static bool _sha256_hex(const char* input, char* out, size_t out_size) {
+    if (!input || !out || out_size < 65) return false;
+
+    uint8_t digest[32] = {};
+    mbedtls_sha256_context ctx;
+    mbedtls_sha256_init(&ctx);
+
+    const int start_rc = mbedtls_sha256_starts(&ctx, 0);
+    const int update_rc = (start_rc == 0)
+                        ? mbedtls_sha256_update(&ctx,
+                                                reinterpret_cast<const unsigned char*>(input),
+                                                strlen(input))
+                        : -1;
+    const int finish_rc = (update_rc == 0) ? mbedtls_sha256_finish(&ctx, digest) : -1;
+    mbedtls_sha256_free(&ctx);
+
+    if (start_rc != 0 || update_rc != 0 || finish_rc != 0) {
+        out[0] = '\0';
+        return false;
+    }
+
+    for (size_t i = 0; i < sizeof(digest); i++) {
+        snprintf(out + (i * 2), out_size - (i * 2), "%02x", digest[i]);
+    }
+    out[64] = '\0';
+    return true;
+}
+
+static void _load_system_pin_hash_cache(void) {
+    s_system_pin_hash[0] = '\0';
+    if (!s_pref_sys_ready) return;
+
+    const String hash = s_pref_sys.getString("sys_pin_hash", "");
+    if (hash.length() != 64) return;
+
+    hash.toCharArray(s_system_pin_hash, sizeof(s_system_pin_hash));
+}
 
 // Active-low backlight: 100% UI brightness → 0% PWM duty
 static uint8_t _pct_to_hw(int ui_pct) {
@@ -106,6 +155,13 @@ void dc_settings_load(void) {
         s_pref_easy.getString("cust_url", "").toCharArray(s.api_customer_url, sizeof(s.api_customer_url));
     } else {
         Serial.println("[dc_settings] WARNING: easy NVS unavailable, using defaults");
+    }
+
+    s_pref_sys_ready = s_pref_sys.begin("easy_sys", false);
+    if (s_pref_sys_ready) {
+        _load_system_pin_hash_cache();
+    } else {
+        Serial.println("[dc_settings] WARNING: easy_sys NVS unavailable, system PIN disabled");
     }
 
     s_loaded = true;
@@ -300,4 +356,29 @@ void dc_settings_api_customer_url_get(char* out, size_t out_size) {
     if (!out || out_size == 0) return;
     strncpy(out, g_dc_model.settings.api_customer_url, out_size - 1);
     out[out_size - 1] = '\0';
+}
+
+bool dc_settings_system_pin_is_set(void) {
+    return s_system_pin_hash[0] != '\0';
+}
+
+bool dc_settings_system_pin_verify(const char* pin6) {
+    if (!_is_pin6_valid(pin6) || s_system_pin_hash[0] == '\0') return false;
+
+    char hash[65];
+    if (!_sha256_hex(pin6, hash, sizeof(hash))) return false;
+    return strcmp(hash, s_system_pin_hash) == 0;
+}
+
+bool dc_settings_system_pin_set(const char* pin6) {
+    if (!_is_pin6_valid(pin6) || !s_pref_sys_ready) return false;
+
+    char hash[65];
+    if (!_sha256_hex(pin6, hash, sizeof(hash))) return false;
+
+    if (!s_pref_sys.putString("sys_pin_hash", hash)) return false;
+
+    strncpy(s_system_pin_hash, hash, sizeof(s_system_pin_hash) - 1);
+    s_system_pin_hash[sizeof(s_system_pin_hash) - 1] = '\0';
+    return true;
 }

@@ -1,12 +1,13 @@
 /**
- * @file ui_dc_settings.cpp
- * @brief Pagina Impostazioni Display Controller
+ * @file ui_settings_shared.cpp
+ * @brief Pagina impostazioni condivisa tra tutti i temi.
  */
 
-#include "ui_dc_settings.h"
-#include "ui_dc_home.h"
-#include "ui_dc_clock.h"
-#include "ui_dc_maintenance.h"
+#include "ui_settings_shared.h"
+#include "dc_settings.h"
+#include "ui/ui_dc_home.h"
+#include "ui/ui_dc_clock.h"
+#include "ui/ui_dc_network.h"
 #include "display_port/rgb_lcd_port.h"
 #include "rs485_network.h"
 #include "DisplayApi_Manager.h"
@@ -22,14 +23,14 @@
 #include <stdint.h>
 #include <string.h>
 #include <time.h>
-#include "ui_filter_calib.h"
+#include "ui/ui_filter_calib.h"
 
 // Layout
 #define HEADER_H   60
 #define LEFT_W     300
 #define RIGHT_W    724
 #define CONTENT_H  540
-#define ITEM_H     (CONTENT_H / 7)
+#define ITEM_H     (CONTENT_H / 6)
 
 // Palette
 #define ST_BG          lv_color_hex(0xEEF3F8)
@@ -44,18 +45,16 @@
 
 // Menu
 static const char* const k_menu_labels[] = {
-    "Profilo\nDisplay",
-    "Data e\nOra",
-    "WiFi e\nRete Internet",
-    "Rete e\nSistema",
-    "Ventilazione\nImpianto",
-    "Filtraggio\nAria",
-    "Sensori\nDiagnostica",
+    "Utente",
+    "Connessione",
+    "Setup\nSistema",
+    "Ventilazione",
+    "Filtraggio",
+    "Sensori",
 };
 
 static const char* const k_menu_icons[] = {
     LV_SYMBOL_EDIT,
-    LV_SYMBOL_BELL,
     LV_SYMBOL_WIFI,
     LV_SYMBOL_SETTINGS,
     LV_SYMBOL_REFRESH,
@@ -65,7 +64,6 @@ static const char* const k_menu_icons[] = {
 
 static const uint32_t k_icon_clr[] = {
     0x3A6BC8,
-    0xD08A1A,
     0x1985D1,
     0xE84820,
     0x0FA8A8,
@@ -73,7 +71,7 @@ static const uint32_t k_icon_clr[] = {
     0x8C44B8,
 };
 
-static constexpr int k_menu_n = 7;
+static constexpr int k_menu_n = 6;
 
 // Stateful pointers
 static lv_obj_t* s_right_panel = NULL;
@@ -173,6 +171,25 @@ static lv_obj_t*   s_sys_plant_lbl = NULL;  // label "Periferiche impianto" valo
 static lv_obj_t*   s_sys_scan_btn  = NULL;  // pulsante Scansiona (per disabilitarlo)
 static lv_obj_t*   s_sys_save_btn  = NULL;  // pulsante Salva impianto
 static lv_timer_t* s_sys_timer     = NULL;  // timer polling stato scan
+static bool        s_system_unlocked = false;
+
+enum class SystemPinPopupMode : uint8_t {
+    VERIFY,
+    SET_NEW,
+};
+
+struct SystemPinPopupCtx {
+    lv_obj_t* mask;
+    lv_obj_t* ta;
+    lv_obj_t* title_lbl;
+    lv_obj_t* hint_lbl;
+    lv_obj_t* error_lbl;
+    lv_obj_t* action_btn_lbl;
+    SystemPinPopupMode mode;
+    bool confirm_step;
+    char first_pin[7];
+};
+static SystemPinPopupCtx* s_system_pin_popup_ctx = NULL;
 
 // Stato pannello "Filtraggio Aria"
 static lv_obj_t*   s_filt_status_lbl = NULL;
@@ -615,8 +632,8 @@ static void _vent_intake_percentage_cb(lv_event_t* e) {
 
 static void _vent_rebuild_timer_cb(lv_timer_t* t) {
     lv_timer_del(t);
-    if (s_active == 4 && s_right_panel) {
-        _show_content(4);
+    if (s_active == 3 && s_right_panel) {
+        _show_content(3);
     }
 }
 
@@ -1437,6 +1454,9 @@ static void _api_popup_submit(ApiTextPopupCtx* ctx) {
     const String value = String(lv_textarea_get_text(ctx->ta));
     if (strcmp(ctx->pref_key, "custApiUrl") == 0) {
         displayApiSetCustomerUrl(value);
+        strncpy(g_dc_model.settings.api_customer_url, value.c_str(),
+                sizeof(g_dc_model.settings.api_customer_url) - 1);
+        g_dc_model.settings.api_customer_url[sizeof(g_dc_model.settings.api_customer_url) - 1] = '\0';
         if (ctx->value_lbl) {
             const String label = _api_user_url_label();
             lv_label_set_text(ctx->value_lbl, label.c_str());
@@ -1616,21 +1636,6 @@ static void _api_customer_key_btn_cb(lv_event_t* e) {
                          cfg.customerKey.c_str(), "custApiKey", true, value_lbl);
 }
 
-static bool _wifi_pref_enabled_get() {
-    Preferences pref;
-    if (!pref.begin("easy", true)) return false;
-    const bool enabled = pref.getBool("dc_wifi_enabled", false);
-    pref.end();
-    return enabled;
-}
-
-static void _wifi_pref_enabled_set(bool enabled) {
-    Preferences pref;
-    if (!pref.begin("easy", false)) return;
-    pref.putBool("dc_wifi_enabled", enabled);
-    pref.end();
-}
-
 static void _wifi_pref_load_credentials(String& ssid, String& pass) {
     Preferences pref;
     ssid = "";
@@ -1638,14 +1643,6 @@ static void _wifi_pref_load_credentials(String& ssid, String& pass) {
     if (!pref.begin("easy", true)) return;
     ssid = pref.getString("ssid", "");
     pass = pref.getString("pass", "");
-    pref.end();
-}
-
-static void _wifi_pref_save_credentials(const char* ssid, const char* pass) {
-    Preferences pref;
-    if (!pref.begin("easy", false)) return;
-    pref.putString("ssid", ssid ? ssid : "");
-    pref.putString("pass", pass ? pass : "");
     pref.end();
 }
 
@@ -2116,8 +2113,7 @@ static void _wifi_start_scan() {
 static void _wifi_connect_start(const char* ssid, const char* pass) {
     if (!ssid || ssid[0] == '\0') return;
 
-    _wifi_pref_save_credentials(ssid, pass ? pass : "");
-    _wifi_pref_enabled_set(true);
+    dc_settings_wifi_set(true, ssid, pass);
     s_wifi_target_ssid = ssid;
     s_wifi_waiting_for_selection = false;
     s_wifi_scan_error = false;
@@ -2150,11 +2146,11 @@ static void _wifi_connect_start(const char* ssid, const char* pass) {
 
     const bool api_visible_now =
         s_wifi_sw && lv_obj_has_state(s_wifi_sw, LV_STATE_CHECKED) && WiFi.status() == WL_CONNECTED;
-    if (s_active == 2 && s_right_panel && api_visible_now != s_wifi_api_section_visible &&
+    if (s_active == 1 && s_right_panel && api_visible_now != s_wifi_api_section_visible &&
         !s_wifi_scan_pending && !s_wifi_connect_pending &&
         !(s_wifi_popup_ctx && s_wifi_popup_ctx->mask) &&
         !(s_api_popup_ctx && s_api_popup_ctx->mask)) {
-        _show_content(2);
+        _show_content(1);
     }
 }
 
@@ -2163,7 +2159,7 @@ static void _wifi_switch_cb(lv_event_t* e) {
 
     lv_obj_t* sw = lv_event_get_target(e);
     const bool enabled = lv_obj_has_state(sw, LV_STATE_CHECKED);
-    _wifi_pref_enabled_set(enabled);
+    dc_settings_wifi_set(enabled, g_dc_model.settings.wifi_ssid, nullptr);
 
     if (!enabled) {
         s_wifi_target_ssid = "";
@@ -2248,7 +2244,7 @@ static void _clear_network_state() {
     WiFi.scanDelete();
     WiFi.setAutoReconnect(false);
 
-    const bool wifi_pref_on = _wifi_pref_enabled_get();
+    const bool wifi_pref_on = dc_settings_wifi_enabled_get();
     if (wifi_pref_on && WiFi.status() != WL_CONNECTED) {
         // Uscita senza connessione attiva: riprova con le credenziali salvate.
         String saved_ssid, saved_pass;
@@ -2315,6 +2311,33 @@ static void _build_user_settings(lv_obj_t* parent) {
         lv_obj_add_event_cb(bm, _temp_unit_cb, LV_EVENT_VALUE_CHANGED, NULL);
     }
     make_switch_row(list, "Buzzer", true);
+
+    s_dt_row_auto = make_row(list, "Data e Ora automatica");
+    s_dt_auto_sw = lv_switch_create(s_dt_row_auto);
+    lv_obj_set_size(s_dt_auto_sw, 56, 28);
+    lv_obj_set_style_bg_color(s_dt_auto_sw, ST_ORANGE,
+                              (uint32_t)LV_PART_INDICATOR | (uint32_t)LV_STATE_CHECKED);
+    lv_obj_align(s_dt_auto_sw, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_add_event_cb(s_dt_auto_sw, _dt_auto_switch_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+    s_dt_tz_dd = make_dropdown_row(list, "GMT", ui_dc_clock_timezone_options(),
+                                   ui_dc_clock_timezone_index_get());
+    s_dt_row_tz = lv_obj_get_parent(s_dt_tz_dd);
+    lv_obj_set_style_bg_color(s_dt_tz_dd, ST_LEFT_BG, LV_STATE_DISABLED);
+    lv_obj_set_style_text_color(s_dt_tz_dd, ST_DIM, LV_STATE_DISABLED);
+    lv_obj_add_event_cb(s_dt_tz_dd, _dt_timezone_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+    s_dt_row_time = make_value_button_row(list, "Imposta Ora", "00:00:00",
+                                          &s_dt_time_btn, &s_dt_time_lbl);
+    lv_obj_add_event_cb(s_dt_time_btn, _dt_time_btn_cb, LV_EVENT_CLICKED, NULL);
+
+    s_dt_row_date = make_value_button_row(list, "Imposta Data", "--/--/----",
+                                          &s_dt_date_btn, &s_dt_date_lbl);
+    lv_obj_add_event_cb(s_dt_date_btn, _dt_date_btn_cb, LV_EVENT_CLICKED, NULL);
+
+    _refresh_datetime_value_labels();
+    _update_datetime_controls_state();
+    s_dt_timer = lv_timer_create(_dt_timer_cb, 1000, NULL);
 }
 
 // ─── Pannello "Filtraggio Aria" ───────────────────────────────────────────────
@@ -2332,7 +2355,7 @@ static void _filt_wiz_close(CalibWizCtx* ctx) {
 
 static void _filt_wiz_close_and_refresh(CalibWizCtx* ctx) {
     _filt_wiz_close(ctx);
-    if (s_active == 5 && s_right_panel) _show_content(5);
+    if (s_active == 4 && s_right_panel) _show_content(4);
 }
 
 static void _clear_filtering_state() {
@@ -2973,7 +2996,7 @@ static void _filt_reset_btn_cb(lv_event_t* e) {
     d.n              = 0;
     d.monitoring_en  = false;
     ui_filter_calib_apply(d);
-    if (s_active == 5 && s_right_panel) _show_content(5);
+    if (s_active == 4 && s_right_panel) _show_content(4);
 }
 
 static void _filt_timer_cb(lv_timer_t* /*t*/) {
@@ -3123,39 +3146,8 @@ static void _build_ventilation_settings(lv_obj_t* parent) {
     }
 }
 
-static void _build_datetime_settings(lv_obj_t* parent) {
-    lv_obj_t* list = make_scroll_list(parent);
-
-    s_dt_row_auto = make_row(list, "Data e Ora automatica");
-    s_dt_auto_sw = lv_switch_create(s_dt_row_auto);
-    lv_obj_set_size(s_dt_auto_sw, 56, 28);
-    lv_obj_set_style_bg_color(s_dt_auto_sw, ST_ORANGE,
-                              (uint32_t)LV_PART_INDICATOR | (uint32_t)LV_STATE_CHECKED);
-    lv_obj_align(s_dt_auto_sw, LV_ALIGN_RIGHT_MID, 0, 0);
-    lv_obj_add_event_cb(s_dt_auto_sw, _dt_auto_switch_cb, LV_EVENT_VALUE_CHANGED, NULL);
-
-    s_dt_tz_dd = make_dropdown_row(list, "GMT", ui_dc_clock_timezone_options(),
-                                   ui_dc_clock_timezone_index_get());
-    s_dt_row_tz = lv_obj_get_parent(s_dt_tz_dd);
-    lv_obj_set_style_bg_color(s_dt_tz_dd, ST_LEFT_BG, LV_STATE_DISABLED);
-    lv_obj_set_style_text_color(s_dt_tz_dd, ST_DIM, LV_STATE_DISABLED);
-    lv_obj_add_event_cb(s_dt_tz_dd, _dt_timezone_cb, LV_EVENT_VALUE_CHANGED, NULL);
-
-    s_dt_row_time = make_value_button_row(list, "Imposta Ora", "00:00:00",
-                                          &s_dt_time_btn, &s_dt_time_lbl);
-    lv_obj_add_event_cb(s_dt_time_btn, _dt_time_btn_cb, LV_EVENT_CLICKED, NULL);
-
-    s_dt_row_date = make_value_button_row(list, "Imposta Data", "--/--/----",
-                                          &s_dt_date_btn, &s_dt_date_lbl);
-    lv_obj_add_event_cb(s_dt_date_btn, _dt_date_btn_cb, LV_EVENT_CLICKED, NULL);
-
-    _refresh_datetime_value_labels();
-    _update_datetime_controls_state();
-    s_dt_timer = lv_timer_create(_dt_timer_cb, 1000, NULL);
-}
-
 static void _build_network_settings(lv_obj_t* parent) {
-    const bool wifi_enabled = _wifi_pref_enabled_get();
+    const bool wifi_enabled = dc_settings_wifi_enabled_get();
     Serial.printf("[WIFI-DIAG] network_page_open heap_int=%u heap_dma=%u dma_big=%u pref_enabled=%d mode=%d status=%d\n",
                   (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                   (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
@@ -3274,12 +3266,231 @@ static void _clear_system_state() {
     s_sys_save_btn  = NULL;
 }
 
+static void _sys_pin_popup_delete_cb(lv_event_t* e) {
+    if (lv_event_get_code(e) != LV_EVENT_DELETE) return;
+    SystemPinPopupCtx* ctx = static_cast<SystemPinPopupCtx*>(lv_event_get_user_data(e));
+    if (ctx == s_system_pin_popup_ctx) s_system_pin_popup_ctx = NULL;
+    delete ctx;
+}
+
+static void _sys_pin_popup_close(SystemPinPopupCtx* ctx) {
+    if (!ctx || !ctx->mask) return;
+    lv_obj_del(ctx->mask);
+}
+
+static void _sys_pin_popup_render(SystemPinPopupCtx* ctx) {
+    if (!ctx || !ctx->title_lbl || !ctx->hint_lbl || !ctx->action_btn_lbl) return;
+
+    if (ctx->mode == SystemPinPopupMode::VERIFY) {
+        lv_label_set_text(ctx->title_lbl, "Sblocco Setup Sistema");
+        lv_label_set_text(ctx->hint_lbl,
+                          "Inserire il PIN di sistema a 6 cifre per accedere alla sezione.");
+        lv_label_set_text(ctx->action_btn_lbl, "Sblocca");
+        return;
+    }
+
+    if (!ctx->confirm_step) {
+        lv_label_set_text(ctx->title_lbl, "Configura PIN di Sistema");
+        lv_label_set_text(ctx->hint_lbl, "Inserire un nuovo PIN numerico a 6 cifre.");
+        lv_label_set_text(ctx->action_btn_lbl, "Continua");
+    } else {
+        lv_label_set_text(ctx->title_lbl, "Conferma PIN di Sistema");
+        lv_label_set_text(ctx->hint_lbl,
+                          "Reinserire lo stesso PIN per confermare il salvataggio.");
+        lv_label_set_text(ctx->action_btn_lbl, "Salva PIN");
+    }
+}
+
+static void _sys_pin_popup_fail(SystemPinPopupCtx* ctx, const char* msg) {
+    if (!ctx) return;
+    if (ctx->error_lbl) lv_label_set_text(ctx->error_lbl, msg ? msg : "PIN non valido");
+    if (ctx->ta) lv_textarea_set_text(ctx->ta, "");
+}
+
+static void _sys_unlock_complete(void) {
+    s_system_unlocked = true;
+    if (s_active == 2 && s_right_panel) _show_content(2);
+}
+
+static void _sys_pin_popup_submit(SystemPinPopupCtx* ctx) {
+    if (!ctx || !ctx->ta) return;
+
+    const char* pin = lv_textarea_get_text(ctx->ta);
+    if (!pin || strlen(pin) != 6) {
+        _sys_pin_popup_fail(ctx, "Il PIN deve avere 6 cifre");
+        return;
+    }
+
+    if (ctx->mode == SystemPinPopupMode::VERIFY) {
+        if (!dc_settings_system_pin_verify(pin)) {
+            _sys_pin_popup_fail(ctx, "PIN non corretto");
+            return;
+        }
+        _sys_pin_popup_close(ctx);
+        _sys_unlock_complete();
+        return;
+    }
+
+    if (!ctx->confirm_step) {
+        strncpy(ctx->first_pin, pin, sizeof(ctx->first_pin) - 1);
+        ctx->first_pin[sizeof(ctx->first_pin) - 1] = '\0';
+        ctx->confirm_step = true;
+        if (ctx->error_lbl) lv_label_set_text(ctx->error_lbl, "");
+        if (ctx->ta) lv_textarea_set_text(ctx->ta, "");
+        _sys_pin_popup_render(ctx);
+        return;
+    }
+
+    if (strcmp(pin, ctx->first_pin) != 0) {
+        ctx->confirm_step = false;
+        ctx->first_pin[0] = '\0';
+        _sys_pin_popup_render(ctx);
+        _sys_pin_popup_fail(ctx, "I PIN non coincidono");
+        return;
+    }
+
+    if (!dc_settings_system_pin_set(pin)) {
+        ctx->confirm_step = false;
+        ctx->first_pin[0] = '\0';
+        _sys_pin_popup_render(ctx);
+        _sys_pin_popup_fail(ctx, "Salvataggio PIN non riuscito");
+        return;
+    }
+
+    _sys_pin_popup_close(ctx);
+    _sys_unlock_complete();
+}
+
+static void _sys_pin_popup_cancel_cb(lv_event_t* e) {
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    _sys_pin_popup_close(static_cast<SystemPinPopupCtx*>(lv_event_get_user_data(e)));
+}
+
+static void _sys_pin_popup_confirm_cb(lv_event_t* e) {
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    _sys_pin_popup_submit(static_cast<SystemPinPopupCtx*>(lv_event_get_user_data(e)));
+}
+
+static void _sys_pin_popup_keyboard_cb(lv_event_t* e) {
+    const lv_event_code_t code = lv_event_get_code(e);
+    SystemPinPopupCtx* ctx = static_cast<SystemPinPopupCtx*>(lv_event_get_user_data(e));
+    if (code == LV_EVENT_READY) {
+        _sys_pin_popup_submit(ctx);
+    } else if (code == LV_EVENT_CANCEL) {
+        _sys_pin_popup_close(ctx);
+    }
+}
+
+static void _sys_open_pin_popup(SystemPinPopupMode mode) {
+    lv_obj_t* parent = lv_scr_act();
+    if (!parent) return;
+
+    if (s_system_pin_popup_ctx && s_system_pin_popup_ctx->mask) {
+        lv_obj_del(s_system_pin_popup_ctx->mask);
+    }
+
+    SystemPinPopupCtx* ctx = new SystemPinPopupCtx();
+    if (!ctx) return;
+    memset(ctx, 0, sizeof(*ctx));
+    ctx->mode = mode;
+
+    lv_obj_t* mask = lv_obj_create(parent);
+    ctx->mask = mask;
+    s_system_pin_popup_ctx = ctx;
+    lv_obj_add_event_cb(mask, _sys_pin_popup_delete_cb, LV_EVENT_DELETE, ctx);
+    lv_obj_set_size(mask, 1024, 600);
+    lv_obj_set_style_bg_color(mask, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(mask, LV_OPA_70, 0);
+    lv_obj_set_style_border_width(mask, 0, 0);
+    lv_obj_set_style_radius(mask, 0, 0);
+    lv_obj_set_style_pad_all(mask, 0, 0);
+    lv_obj_clear_flag(mask, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t* top = lv_obj_create(mask);
+    lv_obj_set_size(top, 1024, 154);
+    lv_obj_set_pos(top, 0, 0);
+    lv_obj_set_style_bg_color(top, ST_WHITE, 0);
+    lv_obj_set_style_bg_opa(top, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(top, 0, 0);
+    lv_obj_set_style_pad_left(top, 20, 0);
+    lv_obj_set_style_pad_right(top, 20, 0);
+    lv_obj_set_style_pad_top(top, 14, 0);
+    lv_obj_set_style_pad_bottom(top, 12, 0);
+    lv_obj_clear_flag(top, LV_OBJ_FLAG_SCROLLABLE);
+
+    ctx->title_lbl = lv_label_create(top);
+    lv_obj_set_style_text_font(ctx->title_lbl, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(ctx->title_lbl, ST_TEXT, 0);
+    lv_obj_align(ctx->title_lbl, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    ctx->hint_lbl = lv_label_create(top);
+    lv_obj_set_width(ctx->hint_lbl, 560);
+    lv_label_set_long_mode(ctx->hint_lbl, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_font(ctx->hint_lbl, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(ctx->hint_lbl, ST_DIM, 0);
+    lv_obj_align(ctx->hint_lbl, LV_ALIGN_TOP_LEFT, 0, 36);
+
+    lv_obj_t* btn_cancel = lv_btn_create(top);
+    lv_obj_set_size(btn_cancel, 150, 44);
+    lv_obj_align(btn_cancel, LV_ALIGN_TOP_RIGHT, -190, 0);
+    lv_obj_set_style_bg_color(btn_cancel, ST_LEFT_BG, 0);
+    lv_obj_set_style_border_color(btn_cancel, ST_BORDER, 0);
+    lv_obj_set_style_border_width(btn_cancel, 1, 0);
+    lv_obj_set_style_shadow_width(btn_cancel, 0, 0);
+    lv_obj_add_event_cb(btn_cancel, _sys_pin_popup_cancel_cb, LV_EVENT_CLICKED, ctx);
+    lv_obj_t* lbl_cancel = lv_label_create(btn_cancel);
+    lv_label_set_text(lbl_cancel, "Annulla");
+    lv_obj_set_style_text_color(lbl_cancel, ST_TEXT, 0);
+    lv_obj_center(lbl_cancel);
+
+    lv_obj_t* btn_action = lv_btn_create(top);
+    lv_obj_set_size(btn_action, 170, 44);
+    lv_obj_align(btn_action, LV_ALIGN_TOP_RIGHT, 0, 0);
+    lv_obj_set_style_bg_color(btn_action, ST_ORANGE, 0);
+    lv_obj_set_style_bg_color(btn_action, ST_ORANGE2, LV_STATE_PRESSED);
+    lv_obj_set_style_border_width(btn_action, 0, 0);
+    lv_obj_set_style_shadow_width(btn_action, 0, 0);
+    lv_obj_add_event_cb(btn_action, _sys_pin_popup_confirm_cb, LV_EVENT_CLICKED, ctx);
+    ctx->action_btn_lbl = lv_label_create(btn_action);
+    lv_obj_set_style_text_color(ctx->action_btn_lbl, lv_color_white(), 0);
+    lv_obj_center(ctx->action_btn_lbl);
+
+    ctx->ta = lv_textarea_create(top);
+    lv_obj_set_size(ctx->ta, 320, 46);
+    lv_obj_align(ctx->ta, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    lv_textarea_set_one_line(ctx->ta, true);
+    lv_textarea_set_password_mode(ctx->ta, true);
+    lv_textarea_set_max_length(ctx->ta, 6);
+    lv_textarea_set_placeholder_text(ctx->ta, "PIN sistema");
+    lv_obj_set_style_text_font(ctx->ta, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_border_color(ctx->ta, ST_BORDER, 0);
+    lv_obj_set_style_radius(ctx->ta, 8, 0);
+    lv_obj_set_style_pad_left(ctx->ta, 14, 0);
+    lv_obj_set_style_pad_right(ctx->ta, 14, 0);
+
+    ctx->error_lbl = lv_label_create(top);
+    lv_label_set_text(ctx->error_lbl, "");
+    lv_obj_set_style_text_font(ctx->error_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(ctx->error_lbl, lv_color_hex(0xC0392B), 0);
+    lv_obj_align_to(ctx->error_lbl, ctx->ta, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 6);
+
+    lv_obj_t* kb = lv_keyboard_create(mask);
+    lv_obj_set_size(kb, 1024, 446);
+    lv_obj_set_pos(kb, 0, 154);
+    lv_keyboard_set_mode(kb, LV_KEYBOARD_MODE_NUMBER);
+    lv_keyboard_set_textarea(kb, ctx->ta);
+    lv_obj_add_event_cb(kb, _sys_pin_popup_keyboard_cb, LV_EVENT_READY, ctx);
+    lv_obj_add_event_cb(kb, _sys_pin_popup_keyboard_cb, LV_EVENT_CANCEL, ctx);
+
+    _sys_pin_popup_render(ctx);
+    lv_obj_move_foreground(mask);
+}
+
 static void _sys_timer_cb(lv_timer_t* /*t*/) {
     const Rs485ScanState state = rs485_network_scan_state();
     const int count            = rs485_network_device_count();
     const int plant_count      = rs485_network_plant_device_count();
 
-    // Aggiorna label contatore
     if (s_sys_count_lbl) {
         char buf[8];
         lv_snprintf(buf, sizeof(buf), "%d", count);
@@ -3291,14 +3502,12 @@ static void _sys_timer_cb(lv_timer_t* /*t*/) {
         lv_label_set_text(s_sys_plant_lbl, buf);
     }
 
-    // Aggiorna pulsante Scansiona
     if (s_sys_scan_btn) {
         lv_obj_t* lbl = lv_obj_get_child(s_sys_scan_btn, 0);
         if (state == Rs485ScanState::RUNNING) {
             if (lbl) {
                 char buf[28];
-                lv_snprintf(buf, sizeof(buf), "Scan %d/200",
-                            rs485_network_scan_progress());
+                lv_snprintf(buf, sizeof(buf), "Scan %d/200", rs485_network_scan_progress());
                 lv_label_set_text(lbl, buf);
             }
             lv_obj_add_state(s_sys_scan_btn, LV_STATE_DISABLED);
@@ -3313,32 +3522,57 @@ static void _sys_timer_cb(lv_timer_t* /*t*/) {
     }
 }
 
-static void _sys_scan_confirm_cb(void* /*user_data*/) {
-    rs485_network_scan_start();
-    if (s_sys_timer) lv_timer_reset(s_sys_timer);
-}
-
 static void _sys_scan_click_cb(lv_event_t* e) {
     if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
-    ui_dc_maintenance_request_pin("Scansione periferiche", "Avvia scansione",
-                                  _sys_scan_confirm_cb, NULL);
-}
-
-static void _sys_save_confirm_cb(void* /*user_data*/) {
-    (void)rs485_network_save_current_as_plant();
+    rs485_network_scan_start();
     if (s_sys_timer) lv_timer_reset(s_sys_timer);
 }
 
 static void _sys_save_click_cb(lv_event_t* e) {
     if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
-    ui_dc_maintenance_request_pin("Salvataggio impianto", "Salva impianto",
-                                  _sys_save_confirm_cb, NULL);
+    (void)rs485_network_save_current_as_plant();
+    if (s_sys_timer) lv_timer_reset(s_sys_timer);
 }
 
-static void _build_system_setup(lv_obj_t* parent) {
+static void _sys_unlock_click_cb(lv_event_t* e) {
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    _sys_open_pin_popup(dc_settings_system_pin_is_set()
+                        ? SystemPinPopupMode::VERIFY
+                        : SystemPinPopupMode::SET_NEW);
+}
+
+static void _sys_change_pin_click_cb(lv_event_t* e) {
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    _sys_open_pin_popup(SystemPinPopupMode::SET_NEW);
+}
+
+static void _sys_open_network_click_cb(lv_event_t* e) {
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    lv_obj_t* net = ui_dc_network_create();
+    lv_scr_load_anim(net, LV_SCR_LOAD_ANIM_NONE, 0, 0, true);
+}
+
+static void _build_system_locked(lv_obj_t* parent) {
+    lv_obj_t* list = make_scroll_list(parent);
+    make_info_row(list, "Accesso", "Richiede PIN sistema");
+    make_info_row(list, "Protezione", dc_settings_system_pin_is_set()
+                                       ? "PIN configurato"
+                                       : "PIN da configurare");
+    make_info_row(list, "Seriale centralina", g_dc_model.device_serial);
+    make_info_row(list, "Versione Firmware", g_dc_model.fw_version);
+
+    lv_obj_t* unlock_btn = make_action_row_button(
+        list,
+        dc_settings_system_pin_is_set() ? "Sblocco sezione" : "Configurazione PIN",
+        dc_settings_system_pin_is_set() ? "Sblocca"
+                                        : "Configura");
+    lv_obj_set_width(unlock_btn, 190);
+    lv_obj_add_event_cb(unlock_btn, _sys_unlock_click_cb, LV_EVENT_CLICKED, NULL);
+}
+
+static void _build_system_unlocked(lv_obj_t* parent) {
     lv_obj_t* list = make_scroll_list(parent);
 
-    // Row: Periferiche fotografia impianto
     {
         lv_obj_t* row = make_row(list, "Periferiche impianto");
         s_sys_plant_lbl = lv_label_create(row);
@@ -3350,7 +3584,6 @@ static void _build_system_setup(lv_obj_t* parent) {
         lv_obj_align(s_sys_plant_lbl, LV_ALIGN_RIGHT_MID, 0, 0);
     }
 
-    // Row: Periferiche presenti a runtime
     {
         lv_obj_t* row = make_row(list, "Periferiche runtime");
         s_sys_count_lbl = lv_label_create(row);
@@ -3362,26 +3595,38 @@ static void _build_system_setup(lv_obj_t* parent) {
         lv_obj_align(s_sys_count_lbl, LV_ALIGN_RIGHT_MID, 0, 0);
     }
 
-    // Row: Scansione Periferiche (pulsante con feedback progresso)
-    s_sys_scan_btn = make_action_row_button(list, "Scansione Periferiche",
+    s_sys_scan_btn = make_action_row_button(list, "Scansione periferiche",
                                             LV_SYMBOL_REFRESH " Scansiona");
     lv_obj_add_event_cb(s_sys_scan_btn, _sys_scan_click_cb, LV_EVENT_CLICKED, NULL);
     if (rs485_network_scan_state() == Rs485ScanState::RUNNING) {
         lv_obj_add_state(s_sys_scan_btn, LV_STATE_DISABLED);
     }
 
-    s_sys_save_btn = make_action_row_button(list, "Salvataggio Impianto",
+    s_sys_save_btn = make_action_row_button(list, "Salvataggio impianto",
                                             LV_SYMBOL_SAVE " Salva");
     lv_obj_add_event_cb(s_sys_save_btn, _sys_save_click_cb, LV_EVENT_CLICKED, NULL);
     if (rs485_network_scan_state() == Rs485ScanState::RUNNING) {
         lv_obj_add_state(s_sys_save_btn, LV_STATE_DISABLED);
     }
 
-    make_info_row(list, "Versione Firmware", "v1.0.0");
+    lv_obj_t* devices_btn = make_action_row_button(list, "Dispositivi RS485",
+                                                   LV_SYMBOL_SETTINGS " Apri");
+    lv_obj_add_event_cb(devices_btn, _sys_open_network_click_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t* pin_btn = make_action_row_button(list, "PIN di sistema",
+                                               LV_SYMBOL_EDIT " Cambia");
+    lv_obj_add_event_cb(pin_btn, _sys_change_pin_click_cb, LV_EVENT_CLICKED, NULL);
+
+    make_info_row(list, "Seriale centralina", g_dc_model.device_serial);
+    make_info_row(list, "Versione Firmware", g_dc_model.fw_version);
     make_info_row(list, "MCU", "ESP32-S3");
 
-    // Timer polling stato scan (ogni 500 ms)
     s_sys_timer = lv_timer_create(_sys_timer_cb, 500, NULL);
+}
+
+static void _build_system_setup(lv_obj_t* parent) {
+    if (s_system_unlocked) _build_system_unlocked(parent);
+    else _build_system_locked(parent);
 }
 
 static void _show_content(int idx) {
@@ -3395,12 +3640,11 @@ static void _show_content(int idx) {
 
     switch (idx) {
         case 0: _build_user_settings(s_right_panel); break;
-        case 1: _build_datetime_settings(s_right_panel); break;
-        case 2: _build_network_settings(s_right_panel); break;
-        case 3: _build_system_setup(s_right_panel); break;
-        case 4: _build_ventilation_settings(s_right_panel); break;
-        case 5: _build_filtering_settings(s_right_panel); break;
-        case 6: make_placeholder(s_right_panel, "Sensori\n\nDa configurare"); break;
+        case 1: _build_network_settings(s_right_panel); break;
+        case 2: _build_system_setup(s_right_panel); break;
+        case 3: _build_ventilation_settings(s_right_panel); break;
+        case 4: _build_filtering_settings(s_right_panel); break;
+        case 5: make_placeholder(s_right_panel, "Sensori\n\nDa configurare"); break;
         default: break;
     }
 }
@@ -3413,18 +3657,24 @@ static void _on_settings_delete(lv_event_t* /*e*/) {
     if (s_plant_popup_ctx && s_plant_popup_ctx->mask) {
         lv_obj_del(s_plant_popup_ctx->mask);
     }
+    if (s_system_pin_popup_ctx && s_system_pin_popup_ctx->mask) {
+        lv_obj_del(s_system_pin_popup_ctx->mask);
+    }
+    s_system_unlocked = false;
     s_plant_name_btn = NULL;
     s_plant_name_lbl = NULL;
 }
 
 // Public builder
-lv_obj_t* ui_dc_settings_create(void) {
+lv_obj_t* ui_settings_shared_create(void) {
     s_right_panel = NULL;
     s_active = 0;
+    s_system_unlocked = false;
     s_plant_name_btn = NULL;
     s_plant_name_lbl = NULL;
     _clear_datetime_state();
     _clear_network_state();
+    _clear_system_state();
     _clear_filtering_state();
 
     lv_obj_t* scr = lv_obj_create(NULL);
