@@ -125,6 +125,7 @@ void dc_settings_load(void) {
     s.ota_auto_enabled     = false;
     strncpy(s.ota_channel, "stable", sizeof(s.ota_channel) - 1);
     s.ota_channel[sizeof(s.ota_channel) - 1] = '\0';
+    s.plant_configured     = false;
 
     s_pref_disp_ready = s_pref_disp.begin("easy_disp", false);
     if (s_pref_disp_ready) {
@@ -143,6 +144,12 @@ void dc_settings_load(void) {
         s.safeguard_enabled    = s_pref_disp.getBool("sg_en", false);
         s.safeguard_temp_max_c = _san_sg_temp((int)s_pref_disp.getUChar("sg_tmax", 75));
         s.safeguard_hum_max_rh = _san_sg_hum((int)s_pref_disp.getUChar("sg_hmax", 85));
+        s.plant_configured     = s_pref_disp.getBool("plant_cfgd", false);
+        // Auto-detect per impianti esistenti: nome diverso dal default → configurato
+        if (!s.plant_configured && strcmp(s.plant_name, "Il mio Impianto") != 0) {
+            s.plant_configured = true;
+            s_pref_disp.putBool("plant_cfgd", true);
+        }
     } else {
         Serial.println("[dc_settings] WARNING: easy_disp NVS unavailable, using defaults");
     }
@@ -229,6 +236,16 @@ void dc_settings_theme_set(uint8_t theme_id) {
 
 uint8_t dc_settings_theme_get(void) {
     return g_dc_model.settings.ui_theme_id;
+}
+
+void dc_settings_plant_configured_set(bool configured) {
+    if (g_dc_model.settings.plant_configured == configured) return;
+    g_dc_model.settings.plant_configured = configured;
+    if (s_pref_disp_ready) s_pref_disp.putBool("plant_cfgd", configured);
+}
+
+bool dc_settings_plant_configured_get(void) {
+    return g_dc_model.settings.plant_configured;
 }
 
 // ─── Ventilazione ─────────────────────────────────────────────────────────────

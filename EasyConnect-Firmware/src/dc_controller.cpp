@@ -2,6 +2,7 @@
 #include "dc_data_model.h"
 #include "dc_settings.h"
 #include "rs485_network.h"
+#include "ui/ui_dc_clock.h"
 #include <Arduino.h>
 #include <Preferences.h>
 #include <WiFi.h>
@@ -9,6 +10,15 @@
 #include <math.h>
 
 DcDataModel g_dc_model = {};
+
+static constexpr long DC_NTP_RTC_DRIFT_THRESHOLD_S = 30;
+static constexpr unsigned long DC_NTP_RESYNC_PERIOD_MS = 3600000UL;
+static constexpr unsigned long DC_NTP_SYNC_TIMEOUT_MS = 5000UL;
+
+static bool s_ntp_sync_pending = false;
+static bool s_ntp_synced_once = false;
+static unsigned long s_ntp_sync_started_ms = 0;
+static unsigned long s_ntp_last_sync_ms = 0;
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -131,6 +141,11 @@ void dc_controller_init(void) {
     const uint64_t mac = ESP.getEfuseMac();
     snprintf(g_dc_model.device_serial, sizeof(g_dc_model.device_serial),
              "%04X%08X", (uint16_t)(mac >> 32), (uint32_t)mac);
+
+    s_ntp_sync_pending = false;
+    s_ntp_synced_once = false;
+    s_ntp_sync_started_ms = 0;
+    s_ntp_last_sync_ms = 0;
 }
 
 void dc_controller_service(float temp_c, float hum_rh, bool env_valid) {
@@ -141,6 +156,7 @@ void dc_controller_service(float temp_c, float hum_rh, bool env_valid) {
 
     _update_network();
     _update_wifi();
+    dc_clock_sync_ntp();
     dc_air_safeguard_service();
 }
 
@@ -175,6 +191,59 @@ void dc_wifi_reconnect(void) {
 void dc_wifi_abort(void) {
     WiFi.disconnect(false);
     g_dc_model.wifi.state = DcWifiState::DC_WIFI_FAILED;
+}
+
+void dc_clock_sync_ntp(void) {
+    const unsigned long now = millis();
+
+    if (!ui_dc_clock_is_auto_enabled()) {
+        s_ntp_sync_pending = false;
+        s_ntp_synced_once = false;
+        s_ntp_sync_started_ms = 0;
+        s_ntp_last_sync_ms = 0;
+        return;
+    }
+
+    if (g_dc_model.wifi.state != DcWifiState::DC_WIFI_CONNECTED) {
+        s_ntp_sync_pending = false;
+        s_ntp_sync_started_ms = 0;
+        return;
+    }
+
+    const bool sync_due = !s_ntp_synced_once ||
+                          (unsigned long)(now - s_ntp_last_sync_ms) >= DC_NTP_RESYNC_PERIOD_MS;
+
+    if (!s_ntp_sync_pending) {
+        if (!sync_due) return;
+
+        ui_dc_clock_ntp_begin();
+        s_ntp_sync_pending = true;
+        s_ntp_sync_started_ms = now;
+        Serial.println("[CLOCK] Avvio sincronizzazione NTP.");
+        return;
+    }
+
+    long rtc_drift_s = 0;
+    bool rtc_updated = false;
+    if (ui_dc_clock_ntp_try_finish(DC_NTP_RTC_DRIFT_THRESHOLD_S, &rtc_drift_s, &rtc_updated)) {
+        s_ntp_sync_pending = false;
+        s_ntp_synced_once = true;
+        s_ntp_last_sync_ms = now;
+
+        if (ui_dc_clock_has_rtc()) {
+            Serial.printf("[CLOCK] NTP sincronizzato. Drift RTC=%lds%s\n",
+                          rtc_drift_s,
+                          rtc_updated ? " -> RTC aggiornato" : "");
+        } else {
+            Serial.println("[CLOCK] NTP sincronizzato.");
+        }
+        return;
+    }
+
+    if ((unsigned long)(now - s_ntp_sync_started_ms) >= DC_NTP_SYNC_TIMEOUT_MS) {
+        s_ntp_sync_pending = false;
+        Serial.println("[CLOCK] Timeout sincronizzazione NTP.");
+    }
 }
 
 void dc_ota_check(void) {

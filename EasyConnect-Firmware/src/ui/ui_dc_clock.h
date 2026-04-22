@@ -21,11 +21,10 @@
  *      If NTP not available, starts from 01/01/2026 00:00:00 and counts forward
  *
  * Modalità automatica vs manuale / Automatic vs manual mode:
- *   - Se è presente un RTC, l'utente può attivare la modalità automatica
- *     (NTP + scrittura sull'RTC). Se non c'è RTC, la modalità automatica
- *     è forzatamente disabilitata.
- *   - If RTC is present, the user can enable automatic mode
- *     (NTP + write to RTC). If no RTC, automatic mode is forcibly disabled.
+ *   - La modalità automatica usa NTP quando il WiFi è disponibile.
+ *     Se è presente un RTC, la sync NTP può anche aggiornarlo.
+ *   - Automatic mode uses NTP whenever WiFi is available.
+ *     If an RTC is present, NTP sync can update it as well.
  *
  * Conteggio del tempo / Time counting:
  *   - Il clock non usa la RTC per ogni query: memorizza un epoch UTC di base
@@ -67,10 +66,10 @@
  *   - Applies the timezone (setenv TZ + tzset)
  *   - Prova l'RTC; se presente, legge l'ora da esso
  *   - Probes RTC; if present, reads time from it
- *   - Se RTC assente: forza auto=false, tenta NTP
- *   - If RTC absent: forces auto=false, tries NTP
- *   - Se RTC presente e auto=true: tenta NTP (scrittura sull'RTC se ok)
- *   - If RTC present and auto=true: tries NTP (writes to RTC if ok)
+ *   - Se RTC assente: usa il contatore software come fallback iniziale
+ *   - If RTC is absent: uses the software counter as initial fallback
+ *   - La sync NTP viene poi orchestrata dal controller quando il WiFi è connesso
+ *   - NTP sync is then orchestrated by the controller once WiFi is connected
  *   - Fallback finale: 2026-01-01 00:00:00
  *   - Final fallback: 2026-01-01 00:00:00
  */
@@ -91,10 +90,10 @@ bool ui_dc_clock_has_rtc(void);
  * @brief Restituisce true se la modalità "data/ora automatica" è attiva.
  *        Returns true if "automatic date/time" mode is active.
  *
- * La modalità automatica usa NTP per sincronizzarsi. Richiede un RTC presente:
- * se non c'è RTC, questa funzione restituisce sempre false.
- * Automatic mode uses NTP to synchronize. Requires RTC present:
- * if no RTC, this function always returns false.
+ * La modalità automatica usa NTP per sincronizzarsi quando il WiFi è disponibile.
+ * Un RTC è opzionale e serve solo come backup persistente.
+ * Automatic mode uses NTP when WiFi is available.
+ * An RTC is optional and is used only as persistent backup.
  */
 bool ui_dc_clock_is_auto_enabled(void);
 
@@ -102,13 +101,10 @@ bool ui_dc_clock_is_auto_enabled(void);
  * @brief Abilita/disabilita la modalità data/ora automatica (NTP).
  *        Enables/disables automatic date/time mode (NTP).
  *
- * Se viene abilitata e l'RTC è presente, tenta immediatamente una
- * sincronizzazione NTP. Il risultato viene salvato in NVS.
- * If enabled and RTC is present, immediately attempts NTP sync.
- * The result is saved to NVS.
- *
- * Se l'RTC non è presente, la funzione forza enabled=false e salva.
- * If no RTC is present, the function forces enabled=false and saves.
+ * Il risultato viene salvato in NVS. La sincronizzazione vera e propria
+ * viene eseguita dal controller in modo non bloccante quando il WiFi è pronto.
+ * The setting is persisted to NVS. Actual synchronization is performed by
+ * the controller in a non-blocking way when WiFi is ready.
  *
  * @param enabled  true = modalità auto, false = orario manuale.
  *                 true = automatic mode, false = manual time.
@@ -188,6 +184,30 @@ bool ui_dc_clock_get_local_tm(struct tm* out_tm);
  */
 bool ui_dc_clock_set_manual_local(int year, int month, int day,
                                   int hour, int minute, int second);
+
+/**
+ * @brief Avvia una richiesta NTP non bloccante usando il timezone corrente.
+ *        Starts a non-blocking NTP request using the current timezone.
+ */
+void ui_dc_clock_ntp_begin(void);
+
+/**
+ * @brief Prova a completare una sync NTP già avviata.
+ *        Tries to complete an already started NTP sync.
+ *
+ * Se l'ora NTP è disponibile, aggiorna il contatore software e, se presente,
+ * confronta l'RTC con la soglia indicata prima di riscriverlo.
+ * If NTP time is available, updates the software counter and, if present,
+ * compares the RTC against the provided threshold before rewriting it.
+ *
+ * @param rtc_drift_threshold_s  Soglia drift RTC in secondi.
+ * @param out_rtc_drift_s        Drift assoluto RTC vs NTP, se disponibile.
+ * @param out_rtc_updated        True se l'RTC è stato riscritto da NTP.
+ * @return true se la sync è completata con successo, false se ancora pendente o fallita.
+ */
+bool ui_dc_clock_ntp_try_finish(long rtc_drift_threshold_s,
+                                long* out_rtc_drift_s,
+                                bool* out_rtc_updated);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helper di formattazione per le label UI

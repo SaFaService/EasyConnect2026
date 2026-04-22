@@ -1026,21 +1026,20 @@ static void _refresh_datetime_value_labels() {
 }
 
 static void _update_datetime_controls_state() {
-    const bool has_rtc = ui_dc_clock_has_rtc();
     const bool auto_on = ui_dc_clock_is_auto_enabled();
 
     if (s_dt_auto_sw) {
         if (auto_on) lv_obj_add_state(s_dt_auto_sw, LV_STATE_CHECKED);
         else lv_obj_clear_state(s_dt_auto_sw, LV_STATE_CHECKED);
-        _set_control_enabled(s_dt_auto_sw, has_rtc);
+        _set_control_enabled(s_dt_auto_sw, true);
     }
 
-    _set_control_enabled(s_dt_tz_dd, has_rtc && auto_on);
+    _set_control_enabled(s_dt_tz_dd, auto_on);
     _set_control_enabled(s_dt_time_btn, !auto_on);
     _set_control_enabled(s_dt_date_btn, !auto_on);
 
-    _set_row_enabled(s_dt_row_auto, has_rtc);
-    _set_row_enabled(s_dt_row_tz, has_rtc && auto_on);
+    _set_row_enabled(s_dt_row_auto, true);
+    _set_row_enabled(s_dt_row_tz, auto_on);
     _set_row_enabled(s_dt_row_time, !auto_on);
     _set_row_enabled(s_dt_row_date, !auto_on);
 }
@@ -1289,6 +1288,7 @@ static void _plant_popup_close(PlantNamePopupCtx* ctx) {
 static void _plant_popup_submit(PlantNamePopupCtx* ctx) {
     if (!ctx || !ctx->ta) return;
     ui_plant_name_set(lv_textarea_get_text(ctx->ta));
+    dc_settings_plant_configured_set(true);
     _refresh_plant_name_row();
     _plant_popup_close(ctx);
 }
@@ -3476,7 +3476,9 @@ static void _sys_open_pin_popup(SystemPinPopupMode mode) {
 
     lv_obj_t* kb = lv_keyboard_create(mask);
     lv_obj_set_size(kb, 1024, 446);
-    lv_obj_set_pos(kb, 0, 154);
+    lv_obj_align(kb, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_style_bg_color(kb, ST_LEFT_BG, 0);
+    lv_obj_set_style_anim_time(kb, 0, LV_PART_ITEMS);
     lv_keyboard_set_mode(kb, LV_KEYBOARD_MODE_NUMBER);
     lv_keyboard_set_textarea(kb, ctx->ta);
     lv_obj_add_event_cb(kb, _sys_pin_popup_keyboard_cb, LV_EVENT_READY, ctx);

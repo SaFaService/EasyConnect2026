@@ -335,7 +335,7 @@ void setup() {
     if (ui_dc_clock_has_rtc()) {
         Serial.println("[OK] RTC rilevato su I2C");
     } else {
-        Serial.println("[WARN] RTC non rilevato: fallback NTP/contatore attivo");
+        Serial.println("[WARN] RTC non rilevato: clock software attivo, sync NTP se WiFi disponibile");
     }
     dc_boot_set_step(5, "Orologio");
 
@@ -347,6 +347,21 @@ void setup() {
     dc_controller_init();
     Serial.println("[OK] Controller inizializzato");
     dc_boot_set_step(7, "Controller pronto");
+
+    // Prima lettura SHTC3 — popola g_dc_model.environment prima del caricamento Home.
+    // Senza questo, la Home si apre con temp/hum a zero finché il loop non effettua
+    // il primo polling (ritardo fino a 2 secondi).
+    {
+        float t = 0.0f, h = 0.0f;
+        const bool valid = g_shtc3_ok && shtc3_read(t, h);
+        dc_controller_service(t, h, valid);
+        g_shtc3_poll_ms = millis();
+        if (valid) {
+            Serial.printf("[OK] SHTC3 prima lettura: T=%.1fC RH=%.1f%%\n", t, h);
+        } else {
+            Serial.println("[WARN] SHTC3 prima lettura non disponibile: placeholder attivo");
+        }
+    }
 
     // Step 8: selezione tema UI (il tema è già caricato in g_dc_model.settings.ui_theme_id
     //         da dc_settings_load; qui la splash registra il passo per coerenza con §10.2)

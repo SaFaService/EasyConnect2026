@@ -383,7 +383,7 @@ Criteri di completamento:
 
 ---
 
-### Fix B — Sensore Temp/Hum (SHTC3) non visualizzato sulla Home all'avvio 📲
+### Fix B — Sensore Temp/Hum (SHTC3) non visualizzato sulla Home all'avvio ✅ COMPLETATO
 
 **Problema:** All'avvio, la Home non mostra la temperatura/umidità finché non arriva il primo
 aggiornamento periodico dal loop. Il valore resta vuoto o a zero per i primi secondi.
@@ -412,7 +412,7 @@ Operazioni:
 
 ---
 
-### Fix C — Tastiera PIN di configurazione non occupa tutto lo spazio disponibile 📲
+### Fix C — Tastiera PIN di configurazione non occupa tutto lo spazio disponibile ✅ COMPLETATO
 
 **Problema:** Nella schermata di inserimento PIN (Setup Sistema in impostazioni condivise),
 la tastiera numerica non si estende per tutta l'area rimanente sotto il campo di input,
@@ -441,7 +441,7 @@ Operazioni:
 
 ---
 
-### Fix D — All'avvio con impianto configurato, entrare direttamente nella Home 📲
+### Fix D — All'avvio con impianto configurato, entrare direttamente nella Home ✅ COMPLETATO
 
 **Problema:** Se l'impianto è già configurato e ci sono periferiche salvate in NVS, al termine
 della splash viene mostrata la schermata "iniziale" con le tre icone (modalità primo avvio)
@@ -473,7 +473,7 @@ Operazioni:
 
 ---
 
-### Fix E — Sincronizzazione orologio: NTP + RTC I²C con priorità internet 📲
+### Fix E — Sincronizzazione orologio: NTP + RTC I²C con priorità internet ✅ COMPLETATO
 
 **Problema:** Attualmente se non è presente un RTC su I²C l'orologio funziona in modalità
 software (millis-based). Non viene tentata la sincronizzazione NTP anche quando WiFi è disponibile.
@@ -551,16 +551,211 @@ Operazioni:
 
 ---
 
+## FASE 5 — CLI seriale debug estesa
+
+*Priorità bassa. Iniziare solo dopo completamento Fase 4.*
+
+**Obiettivo:** Estendere `dc_admin_cli.cpp` con comandi di diagnostica strutturati, utili durante
+il collaudo e il supporto sul campo. Tutti i messaggi emessi dalla CLI devono essere prefissati
+con timestamp `[YYYY-MM-DD HH:MM:SS]` per poter correlare gli eventi con log esterni.
+
+### Task 5.1 — Timestamp su tutti i messaggi CLI 📲
+
+**Prerequisito di tutto il resto della fase.** Aggiungere prima questo, poi i comandi.
+
+File da leggere prima di iniziare:
+- `src/dc_admin_cli.cpp` (struttura attuale dei `Serial.print`)
+- `src/dc_admin_cli.h`
+
+Operazioni:
+1. Aggiungere in `dc_admin_cli.cpp` la funzione statica `_cli_ts() → const char*` che
+   restituisce una stringa `"[YYYY-MM-DD HH:MM:SS] "` letta da `g_dc_model.clock` (o da
+   `gettimeofday` se disponibile).
+2. Sostituire tutti i `Serial.print` / `Serial.println` nel file con la macro
+   `CLI_PRINT(x)` / `CLI_PRINTLN(x)` definita localmente come `Serial.print(_cli_ts()); Serial.print(x)`.
+3. Verificare che i prompt interattivi (es. `"> "`) **non** abbiano il timestamp — solo le
+   risposte ai comandi e i log autonomi lo devono avere.
+
+> **Checkpoint git da eseguire:**
+> ```
+> git add src/dc_admin_cli.cpp src/dc_admin_cli.h
+> git commit -m "Phase5 Task5.1: add timestamp prefix to all CLI output"
+> git tag phase5-task5.1
+> ```
+
+---
+
+### Task 5.2 — Comandi User (senza PIN) 📲
+
+File da leggere prima di iniziare:
+- `src/dc_admin_cli.cpp` (sezione comandi User esistenti)
+- `include/dc_data_model.h` (campi da esporre)
+- `platformio.ini` (macro `FW_VERSION_STR` — deve esistere dopo Fix A)
+
+**Comando `INFO`**
+
+Risponde con un blocco compatto di informazioni sulla scheda:
+
+```
+[timestamp] === EasyConnect Display Controller ===
+[timestamp] Firmware   : <FW_VERSION_STR>
+[timestamp] Chip ID    : <ESP.getChipId() hex>
+[timestamp] Flash      : <ESP.getFlashChipSize() / 1024> kB
+[timestamp] Heap free  : <ESP.getFreeHeap()> B
+[timestamp] Uptime     : <giorni>d <ore>h <min>m <sec>s
+[timestamp] IP         : <g_dc_model.wifi.ip_str>
+[timestamp] SSID       : <g_dc_model.wifi.ssid> (<g_dc_model.wifi.rssi> dBm)
+[timestamp] Ora corrente: <timestamp da g_dc_model.clock>
+[timestamp] Nome impianto: <g_dc_model.settings.plant_name>
+```
+
+**Comando `READSERIAL`**
+
+Legge e stampa il numero di serie univoco della centralina:
+- Fonte primaria: NVS namespace `easy_sys`, chiave `serial_no` (se impostato in produzione)
+- Fonte fallback: eFuse MAC address ESP32 formattato come `EC-XXXXXXXXXXXX`
+
+> **Checkpoint git da eseguire:**
+> ```
+> git add src/dc_admin_cli.cpp
+> git commit -m "Phase5 Task5.2: add INFO and READSERIAL user commands"
+> git tag phase5-task5.2
+> ```
+
+---
+
+### Task 5.3 — Comandi Admin: configurazione scheda 📲
+
+*Il PIN Admin è già gestito dal meccanismo esistente (Task 3.1). Questi comandi richiedono
+livello Admin attivo.*
+
+File da leggere prima di iniziare:
+- `src/dc_admin_cli.cpp` (struttura dispatch Admin)
+- `include/dc_settings.h` (funzioni set/get disponibili)
+
+| Comando | Descrizione |
+|---------|-------------|
+| `SETNAME <nome>` | Imposta il nome impianto — chiama `dc_settings_plant_name_set()` |
+| `SETBRIGHT <0-100>` | Imposta luminosità backlight — chiama `dc_settings_brightness_set()` |
+| `SETSCRSAVER <min>` | Imposta timeout screensaver in minuti (0 = disabilitato) |
+| `SETTEMPUNIT <C\|F>` | Imposta unità temperatura |
+| `SETPIN` | Cambia PIN admin: chiede nuovo PIN due volte, salva hash SHA-256 |
+| `FACTORYRESET` | Ripristino impostazioni di fabbrica — richiede conferma interattiva `"YES"` |
+
+Operazioni:
+1. Per ogni comando, aggiungere il case nel dispatcher Admin di `_cli_process_line()`.
+2. `FACTORYRESET` deve chiedere `"Confermare con YES: "`, attendere la risposta sulla seriale
+   e procedere solo se riceve esattamente `"YES"` — altrimenti stampare `"Annullato."`.
+3. `SETPIN` deve chiedere il nuovo PIN due volte e procedere solo se corrispondono.
+
+> **Checkpoint git da eseguire:**
+> ```
+> git add src/dc_admin_cli.cpp
+> git commit -m "Phase5 Task5.3: admin config commands (SETNAME, SETBRIGHT, SETSCRSAVER, SETTEMPUNIT, SETPIN, FACTORYRESET)"
+> git tag phase5-task5.3
+> ```
+
+---
+
+### Task 5.4 — Comandi Admin: debug WiFi 📲
+
+File da leggere prima di iniziare:
+- `src/dc_admin_cli.cpp`
+- `src/dc_controller.cpp` (sezione `_update_wifi()` — per capire cosa è già nel DataModel)
+
+| Comando | Descrizione |
+|---------|-------------|
+| `WIFISTATUS` | SSID, IP, gateway, netmask, RSSI, DNS primario, uptime connessione |
+| `WIFISCAN` | Scansiona reti visibili — mostra SSID, RSSI, canale, sicurezza; max 10 risultati |
+| `WIFIPING <host>` | Ping verso `<host>` (default `8.8.8.8`); mostra 4 RTT e media. Non bloccante >2 s |
+| `NTPSYNC` | Forza sincronizzazione NTP; mostra ora prima e dopo, offset in secondi e se RTC è stato aggiornato |
+
+Note implementative:
+- `WIFISCAN`: usare `WiFi.scanNetworks()` in modalità sincrona (accettabile qui — comandi manuali);
+  stampare risultati ordinati per RSSI decrescente.
+- `WIFIPING`: usare `Ping.ping()` da `ESP32Ping` o implementare con raw socket; timeout 500 ms per ping.
+- `NTPSYNC`: chiamare `dc_clock_sync_ntp()` (Fix E) e attendere max 5 s; stampare esito.
+
+> **Checkpoint git da eseguire:**
+> ```
+> git add src/dc_admin_cli.cpp
+> git commit -m "Phase5 Task5.4: admin WiFi debug commands (WIFISTATUS, WIFISCAN, WIFIPING, NTPSYNC)"
+> git tag phase5-task5.4
+> ```
+
+---
+
+### Task 5.5 — Comandi Admin: debug API 📲
+
+File da leggere prima di iniziare:
+- `src/dc_admin_cli.cpp`
+- `src/DisplayApi_Manager.cpp` (struttura delle ultime risposta/richiesta)
+- `include/dc_data_model.h` (campi `g_dc_model.api`)
+
+| Comando | Descrizione |
+|---------|-------------|
+| `APISTATUS` | URL configurato, chiave mascherata (`****ultime4cifre`), stato connessione, HTTP code ultimo invio, timestamp ultimo invio riuscito |
+| `APIPAYLOAD` | Dump dell'ultimo payload JSON inviato (pretty-print; troncato a 1024 char se più lungo) |
+| `APITEST` | Invia un payload di test al server configurato; mostra HTTP code e i primi 256 byte della risposta |
+| `APICLEAR` | Cancella URL e chiave API da NVS — richiede conferma `"YES"` |
+
+Note implementative:
+- La chiave API in `APISTATUS` va sempre mascherata — mai stampare in chiaro.
+- `APIPAYLOAD`: se `g_dc_model.api.last_payload` non esiste ancora, stampare `"Nessun payload disponibile."`.
+- `APITEST`: eseguire in modo non bloccante con timeout 10 s; stampare `"Timeout."` se non risponde.
+
+> **Checkpoint git da eseguire:**
+> ```
+> git add src/dc_admin_cli.cpp src/DisplayApi_Manager.cpp include/dc_data_model.h
+> git commit -m "Phase5 Task5.5: admin API debug commands (APISTATUS, APIPAYLOAD, APITEST, APICLEAR)"
+> git tag phase5-task5.5
+> ```
+
+---
+
+### Task 5.6 — Comandi Admin: debug RS485 📲
+
+File da leggere prima di iniziare:
+- `src/dc_admin_cli.cpp`
+- `src/dc_controller.cpp` (sezione snapshot RS485)
+- `include/dc_data_model.h` (struct `DcNetworkState`, `DcDeviceSnapshot`)
+
+| Comando | Descrizione |
+|---------|-------------|
+| `RS485STATUS` | Stato rete: device count, timestamp ultimo scan, errori CRC accumulati, bus idle/busy |
+| `RS485SCAN` | Forza una nuova scansione RS485; mostra dispositivi trovati con ID, tipo, stato online |
+| `RS485DEV <id>` | Dettaglio dispositivo `id`: tipo, online, tutti i campi del snapshot (velocità, temperatura, stati relay, ecc.) |
+| `RS485LOG <on\|off>` | Abilita/disabilita logging frame RS485 raw su Serial in tempo reale. Auto-spegnimento dopo 5 minuti se dimenticato attivo. |
+
+Note implementative:
+- `RS485SCAN`: usare `dc_cmd_rs485_scan()` già esistente; attendere fino a 3 s per la risposta
+  e poi leggere `g_dc_model.network`.
+- `RS485DEV <id>`: iterare `g_dc_model.network.devices[]` cercando `device_id == id`;
+  se non trovato stampare `"Dispositivo <id> non presente nel DataModel."`.
+- `RS485LOG`: aggiungere un flag `g_rs485_log_enabled` in `dc_controller.cpp` letto da
+  `_snapshot_device()` per emettere i frame grezzi; il timer di auto-spegnimento usa `millis()`.
+
+> **Checkpoint git da eseguire:**
+> ```
+> git add src/dc_admin_cli.cpp src/dc_controller.cpp include/dc_data_model.h
+> git commit -m "Phase5 Task5.6: admin RS485 debug commands (RS485STATUS, RS485SCAN, RS485DEV, RS485LOG)"
+> git tag phase5-task5.6
+> git tag phase5-complete
+> ```
+
+---
+
 ## Note per la sessione corrente
 
 - Branch di lavoro corrente: `freeze/controller_display-2026-04-03`
-- Prossimo task da eseguire: **Fix B — Sensore Temp/Hum non visualizzato all'avvio**
-- Ordine consigliato Fix: B → C → D → E → Task 3.3
+- Prossimo task da eseguire: **Task 3.3 — OTA dal controller**
+- Ordine consigliato Fix: Task 3.3
 - File da leggere all'inizio della prossima sessione:
   1. Questo file (ROADMAP.md)
-  2. `src/main_display_controller.cpp` (Fix B)
-  3. `src/dc_controller.cpp` (Fix B)
-  4. `src/ui/shared/ui_splash_shared.cpp` (Fix B)
+  2. `src/DisplayApi_Manager.cpp` (Task 3.3 — integrazione trigger OTA/API)
+  3. `src/dc_admin_cli.cpp` (Task 3.3 — trigger OTACHECK/OTASTART)
+  4. `src/ui/shared/` (Task 3.3 — overlay aggiornamento condiviso)
+  5. `include/dc_data_model.h` (Task 3.3 — stato OTA condiviso)
 
 ---
 

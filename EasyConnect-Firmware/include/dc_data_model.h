@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <time.h>
 
 #define DC_MAX_DEVICES 32
 #define DC_MAX_NOTIF   32
@@ -165,6 +166,9 @@ struct DcSettings {
     // OTA
     bool         ota_auto_enabled;
     char         ota_channel[16];
+
+    // Configurazione impianto
+    bool         plant_configured;
 };
 
 // ─── Notifiche ────────────────────────────────────────────────────────────────

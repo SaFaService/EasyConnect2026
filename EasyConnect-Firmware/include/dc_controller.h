@@ -40,6 +40,9 @@ void dc_wifi_reconnect(void);
 // Interrompe il tentativo di connessione WiFi in corso.
 void dc_wifi_abort(void);
 
+// Avvia/poll una sincronizzazione NTP non bloccante quando il WiFi è disponibile.
+void dc_clock_sync_ntp(void);
+
 // Verifica disponibilità aggiornamento OTA (async — risultato in g_dc_model.api).
 void dc_ota_check(void);
 

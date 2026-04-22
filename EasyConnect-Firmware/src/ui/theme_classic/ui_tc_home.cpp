@@ -2246,7 +2246,7 @@ lv_obj_t* ui_tc_home_create(void) {
     const bool devices_found = g_dc_model.network.device_count > 0;
     const bool has_air_speed_panel = _count_air_speed_controls() > 0;
     _refresh_plant_name_label(devices_found);
-    if (tile_count > 0 || has_pressure_panel) {
+    if (tile_count > 0 || has_pressure_panel || g_dc_model.settings.plant_configured) {
         lv_obj_t* body = lv_obj_create(scr);
         lv_obj_set_size(body, 1024, 540);
         lv_obj_set_pos(body, 0, HEADER_H);

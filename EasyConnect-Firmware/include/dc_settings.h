@@ -32,6 +32,10 @@ DcTempUnit dc_settings_temp_unit_get(void);
 void dc_settings_plant_name_set(const char* name);
 void dc_settings_plant_name_get(char* out, size_t out_size);
 
+// NVS key: "plant_cfgd" — true = impianto già configurato (salta schermata primo avvio)
+void dc_settings_plant_configured_set(bool configured);
+bool dc_settings_plant_configured_get(void);
+
 // NVS key: "ui_theme" — 0=Classic, 1=Compact, …
 void dc_settings_theme_set(uint8_t theme_id);
 uint8_t dc_settings_theme_get(void);

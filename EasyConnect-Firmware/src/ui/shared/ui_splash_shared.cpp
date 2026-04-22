@@ -2,6 +2,7 @@
 #include "ui/ui_dc_home.h"
 #include "DisplayLogoAsset.h"
 #include "dc_data_model.h"
+#include "dc_settings.h"
 #include "lvgl.h"
 
 // ─── Palette (identica a ui_dc_splash.cpp) ───────────────────────────────────
@@ -81,7 +82,11 @@ static void _boot_sync_timer(lv_timer_t* t) {
     lv_timer_del(t);
 
     lv_obj_t* home = ui_dc_home_create();
-    lv_scr_load_anim(home, LV_SCR_LOAD_ANIM_NONE, 0, 0, true);
+    if (dc_settings_plant_configured_get()) {
+        lv_scr_load_anim(home, LV_SCR_LOAD_ANIM_FADE_ON, 220, 0, true);
+    } else {
+        lv_scr_load_anim(home, LV_SCR_LOAD_ANIM_NONE, 0, 0, true);
+    }
 }
 
 // ─── Costruzione splash ───────────────────────────────────────────────────────

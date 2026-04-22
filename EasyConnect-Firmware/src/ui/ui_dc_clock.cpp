@@ -383,6 +383,15 @@ static bool _set_from_local_tm(struct tm* local_tm) {
     return true;
 }
 
+static bool _tm_to_epoch_local(const struct tm& tm_local, time_t* out_epoch) {
+    struct tm tmp = tm_local;
+    tmp.tm_isdst = -1;
+    const time_t epoch = mktime(&tmp);
+    if (epoch < 0) return false;
+    if (out_epoch) *out_epoch = epoch;
+    return true;
+}
+
 // ─── Driver RTC DS3231/DS1307 ─────────────────────────────────────────────────
 // Driver per la comunicazione I2C con il chip RTC.
 // Driver for I2C communication with the RTC chip.
@@ -651,36 +660,13 @@ static bool _rtc_write_local_tm(const struct tm& tm_local) {
  *
  * @return `true` se la sincronizzazione ha avuto successo / `true` if sync succeeded
  */
-static bool _sync_from_ntp_once() {
+static void _begin_ntp_sync() {
     // configTzTime: configura stack NTP dell'ESP-IDF con timezone POSIX e server
     // configTzTime: configures ESP-IDF NTP stack with POSIX timezone and servers
     configTzTime(k_timezones[g_tz_index].tz,
                  "pool.ntp.org",          // Server principale (pool globale)
                  "time.google.com",        // Fallback 1
                  "time.cloudflare.com");   // Fallback 2
-
-    struct tm tm_local = {};
-    for (int i = 0; i < 10; i++) {
-        // getLocalTime: attende fino a 500ms per l'ora NTP, poi ritorna
-        // getLocalTime: waits up to 500ms for NTP time, then returns
-        if (getLocalTime(&tm_local, 500)) {
-            // Verifica che l'epoch sia valido (> 0)
-            // Verify the epoch is valid (> 0)
-            const time_t epoch = time(nullptr);  // Legge l'epoch di sistema aggiornato da NTP
-            if (epoch <= 0) return false;
-
-            // Aggiorna il contatore software con il nuovo epoch
-            // Update the software counter with the new epoch
-            _set_base_epoch_utc(epoch);
-
-            // Se l'RTC è presente, aggiornalo con l'ora NTP
-            // If RTC is present, update it with NTP time
-            if (g_has_rtc) _rtc_write_local_tm(tm_local);
-            return true;
-        }
-        delay(150);  // Piccola pausa tra i tentativi / Small pause between attempts
-    }
-    return false;  // NTP non disponibile dopo 10 tentativi
 }
 
 /**
@@ -754,23 +740,23 @@ void ui_dc_clock_init(void) {
         have_time = _set_from_local_tm(&tm_local);
     }
 
-    if (!g_has_rtc) {
+    if (false) {
         // 3b. Senza RTC: sincronizzazione automatica non è affidabile
         //     (non c'è dove persistere l'ora tra i riavvii)
         //     Without RTC: automatic sync is unreliable
         //     (there's nowhere to persist time between reboots)
         // Requirement: automatic date/time unavailable without RTC.
-        g_auto_enabled = false;
-        _save_auto_pref();
+        // Auto mode remains whatever was loaded from NVS.
+        // NTP sync is deferred until WiFi becomes available.
         // Tenta comunque NTP per avere un'ora iniziale corretta questa sessione
         // Still attempt NTP to have a correct initial time for this session
-        have_time = _sync_from_ntp_once();
+        // NTP sync deferred until controller detects WiFi connectivity.
     } else if (g_auto_enabled) {
         // 3c. RTC presente E auto abilitato: sincronizza con NTP (e aggiorna l'RTC)
         // 3c. RTC present AND auto enabled: sync with NTP (and update the RTC)
         // NB: il risultato viene ignorato — l'ora dall'RTC è già valida come fallback
         // NB: result is discarded — the time from RTC is already valid as fallback
-        (void)_sync_from_ntp_once();
+        // NTP sync deferred until controller detects WiFi connectivity.
     }
 
     // 4. Fallback finale: imposta 2026-01-01 00:00:00
@@ -815,7 +801,7 @@ bool ui_dc_clock_is_auto_enabled(void) {
  * @param enabled  `true` per abilitare, `false` per disabilitare / `true` to enable, `false` to disable
  */
 void ui_dc_clock_set_auto_enabled(bool enabled) {
-    if (!g_has_rtc) {
+    if (false) {
         // Forza auto_enabled = false se non c'è RTC
         // Force auto_enabled = false if no RTC
         g_auto_enabled = false;
@@ -827,7 +813,7 @@ void ui_dc_clock_set_auto_enabled(bool enabled) {
     if (g_auto_enabled) {
         // Tenta subito la sincronizzazione (bloccante fino a 5s)
         // Immediately attempt sync (blocking up to 5s)
-        (void)_sync_from_ntp_once();
+        // NTP sync deferred until controller detects WiFi connectivity.
     }
 }
 
@@ -880,7 +866,7 @@ void ui_dc_clock_timezone_index_set(int index) {
     if (g_auto_enabled) {
         // Re-sincronizza NTP con il nuovo timezone
         // Re-sync NTP with the new timezone
-        (void)_sync_from_ntp_once();
+        // NTP sync deferred until controller detects WiFi connectivity.
     }
 }
 
@@ -964,6 +950,51 @@ bool ui_dc_clock_set_manual_local(int year, int month, int day,
  * @param out       Buffer di output / Output buffer
  * @param out_size  Dimensione del buffer (min. 9 byte: "23:59:59\0") / Buffer size (min. 9 bytes)
  */
+void ui_dc_clock_ntp_begin(void) {
+    _begin_ntp_sync();
+}
+
+bool ui_dc_clock_ntp_try_finish(long rtc_drift_threshold_s,
+                                long* out_rtc_drift_s,
+                                bool* out_rtc_updated) {
+    if (out_rtc_drift_s) *out_rtc_drift_s = 0;
+    if (out_rtc_updated) *out_rtc_updated = false;
+
+    struct tm ntp_local = {};
+    if (!getLocalTime(&ntp_local, 0)) return false;
+
+    const time_t ntp_epoch = time(nullptr);
+    if (ntp_epoch <= 0) return false;
+
+    _set_base_epoch_utc(ntp_epoch);
+
+    if (!g_has_rtc) return true;
+    if (rtc_drift_threshold_s < 0) rtc_drift_threshold_s = 0;
+
+    long rtc_drift_s = 0;
+    bool rtc_updated = false;
+    struct tm rtc_local = {};
+    if (_rtc_read_local_tm(&rtc_local)) {
+        time_t rtc_epoch = 0;
+        if (_tm_to_epoch_local(rtc_local, &rtc_epoch)) {
+            long long drift_s = (long long)ntp_epoch - (long long)rtc_epoch;
+            if (drift_s < 0) drift_s = -drift_s;
+            rtc_drift_s = (long)drift_s;
+            if (rtc_drift_s > rtc_drift_threshold_s) {
+                rtc_updated = _rtc_write_local_tm(ntp_local);
+            }
+        } else {
+            rtc_updated = _rtc_write_local_tm(ntp_local);
+        }
+    } else {
+        rtc_updated = _rtc_write_local_tm(ntp_local);
+    }
+
+    if (out_rtc_drift_s) *out_rtc_drift_s = rtc_drift_s;
+    if (out_rtc_updated) *out_rtc_updated = rtc_updated;
+    return true;
+}
+
 void ui_dc_clock_format_time_hms(char* out, size_t out_size) {
     if (!out || out_size == 0) return;
     struct tm tm_local = {};
