@@ -167,7 +167,7 @@ lv_obj_t* ui_splash_shared_create(void) {
 
     // Versione firmware
     lv_obj_t* ver = lv_label_create(scr);
-    lv_label_set_text(ver, "v1.0.0");
+    lv_label_set_text(ver, FW_VERSION_STR);
     lv_obj_set_style_text_font(ver, &lv_font_montserrat_12, 0);
     lv_obj_set_style_text_color(ver, lv_color_hex(0xBBCCDD), 0);
     lv_obj_align(ver, LV_ALIGN_BOTTOM_MID, 0, -24);

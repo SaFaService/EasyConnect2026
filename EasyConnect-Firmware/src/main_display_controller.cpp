@@ -36,6 +36,7 @@
 // ITA: Home UI del display controller.
 // ENG: Display controller home UI.
 #include "ui/ui_dc_home.h"
+#include "ui_theme_interface.h"
 // ITA: Modulo orologio (RTC/NTP/fallback).
 // ENG: Clock module (RTC/NTP/fallback).
 #include "ui/ui_dc_clock.h"
@@ -160,62 +161,6 @@ static void wifi_display_guard_service() {
     if (done || timed_out) {
         wifi_display_guard_set(false);
     }
-}
-
-/**
- * ITA: Legge credenziali da NVS e avvia connessione WiFi se abilitata.
- * ENG: Reads credentials from NVS and starts WiFi connection if enabled.
- */
-static void setup_display_wifi_from_saved_credentials() {
-    // ITA: Oggetto helper per namespace NVS.
-    // ENG: Helper object for NVS namespace access.
-    Preferences pref;
-
-    // ITA: Apre namespace "easy" in sola lettura.
-    // ENG: Opens "easy" namespace in read-only mode.
-    if (!pref.begin("easy", true)) {
-        // ITA: Se NVS non e disponibile, spegne il WiFi.
-        // ENG: If NVS is unavailable, WiFi is turned off.
-        Serial.println("[WIFI] NVS non disponibile: WiFi inattivo, driver mantenuto pronto per scansione.");
-        WiFi.setAutoReconnect(false);
-        WiFi.disconnect(false, false);
-        return;
-    }
-
-    // ITA: Flag utente: WiFi display abilitato/disabilitato.
-    // ENG: User flag: display WiFi enabled/disabled.
-    const bool wifi_enabled = pref.getBool("dc_wifi_enabled", false);
-    // ITA: SSID salvato.
-    // ENG: Saved SSID.
-    const String ssid = pref.getString("ssid", "");
-    // ITA: Password salvata.
-    // ENG: Saved password.
-    const String pass = pref.getString("pass", "");
-
-    // ITA: Chiude la sessione NVS.
-    // ENG: Closes NVS session.
-    pref.end();
-
-    // ITA: Se manca configurazione valida, mantiene WiFi OFF.
-    // ENG: If valid configuration is missing, keeps WiFi OFF.
-    if (!wifi_enabled || ssid.length() == 0) {
-        WiFi.setAutoReconnect(false);
-        WiFi.disconnect(false, false);
-        Serial.println("[WIFI] WiFi display disabilitato o credenziali assenti: STA pronta per scansione manuale.");
-        return;
-    }
-
-    // ITA: Modalita station, riconnessione automatica, start connessione.
-    // ENG: Station mode, auto-reconnect, start connection.
-    WiFi.mode(WIFI_STA);
-    WiFi.setSleep(false);
-    WiFi.setAutoReconnect(true);
-    wifi_display_guard_set(true);
-    WiFi.begin(ssid.c_str(), pass.c_str());
-
-    // ITA: Log diagnostico SSID target.
-    // ENG: Diagnostic log with target SSID.
-    Serial.printf("[WIFI] Tentativo connessione automatica a: %s\n", ssid.c_str());
 }
 
 /**
@@ -402,6 +347,11 @@ void setup() {
     dc_controller_init();
     Serial.println("[OK] Controller inizializzato");
     dc_boot_set_step(7, "Controller pronto");
+
+    // Step 8: selezione tema UI (il tema è già caricato in g_dc_model.settings.ui_theme_id
+    //         da dc_settings_load; qui la splash registra il passo per coerenza con §10.2)
+    ui_theme_activate(g_dc_model.settings.ui_theme_id);
+    dc_boot_set_step(8, "Tema UI");
 
     // Step 9: tentativo connessione WiFi (asincrono — loop() gestisce il risultato)
     dc_boot_set_step(9, "Connessione WiFi...");

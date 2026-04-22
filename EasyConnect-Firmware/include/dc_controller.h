@@ -40,9 +40,6 @@ void dc_wifi_reconnect(void);
 // Interrompe il tentativo di connessione WiFi in corso.
 void dc_wifi_abort(void);
 
-// Restituisce true se la state machine WiFi di boot è ancora attiva.
-bool dc_wifi_boot_is_active(void);
-
 // Verifica disponibilità aggiornamento OTA (async — risultato in g_dc_model.api).
 void dc_ota_check(void);
 

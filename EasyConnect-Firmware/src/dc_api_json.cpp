@@ -392,8 +392,14 @@ bool dc_api_build_payload(char* buf, size_t len) {
     json += "],";
     json += "\"safeguard\":{";
     json += "\"active\":" + _json_bool(g_dc_model.safeguard.active) + ",";
-    json += "\"duct_temp_c\":" + String(g_dc_model.safeguard.duct_temp_ema, 1) + ",";
-    json += "\"duct_hum_rh\":" + String(g_dc_model.safeguard.duct_hum_ema, 1) + ",";
+    // Bug 9: quando inattivo i valori EMA sono 0.0 — emettere null per evitare ambiguità con il client
+    if (g_dc_model.safeguard.active) {
+        json += "\"duct_temp_c\":" + String(g_dc_model.safeguard.duct_temp_ema, 1) + ",";
+        json += "\"duct_hum_rh\":" + String(g_dc_model.safeguard.duct_hum_ema, 1) + ",";
+    } else {
+        json += "\"duct_temp_c\":null,";
+        json += "\"duct_hum_rh\":null,";
+    }
     json += "\"boost_speed_pct\":" + String(g_dc_model.safeguard.boost_speed_pct);
     json += "}";
     json += "}";

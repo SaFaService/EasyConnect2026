@@ -177,11 +177,6 @@ void dc_wifi_abort(void) {
     g_dc_model.wifi.state = DcWifiState::DC_WIFI_FAILED;
 }
 
-bool dc_wifi_boot_is_active(void) {
-    // Task 1.5: collegato alla state machine WiFi del main
-    return false;
-}
-
 void dc_ota_check(void) {
     // Task 3.3
 }

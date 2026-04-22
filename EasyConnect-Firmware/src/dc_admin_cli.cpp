@@ -21,6 +21,7 @@ static String s_cli_line;
 static bool s_admin_session = false;
 static unsigned long s_last_activity_ms = 0;
 static char s_admin_hash[kSha256HexLen + 1] = "";
+static bool s_wifi_scan_pending = false;
 
 static bool cli_sha256_hex(const char* input, char* out, size_t out_size) {
     if (!input || !out || out_size < (kSha256HexLen + 1)) return false;
@@ -495,6 +496,11 @@ static void cli_handle_set_admin_password(const String& raw_args) {
 }
 
 static void cli_handle_wifi_scan() {
+    if (s_wifi_scan_pending) {
+        Serial.println("[ADMIN-CLI] Scansione WiFi gia' in corso.");
+        return;
+    }
+
     if (wifi_boot_is_active()) {
         wifi_boot_abort();
     }
@@ -506,30 +512,22 @@ static void cli_handle_wifi_scan() {
         return;
     }
 
-    Serial.println("[ADMIN-CLI] Scansione WiFi in corso...");
-    const int16_t count = WiFi.scanNetworks(false, true);
-    if (count < 0) {
-        Serial.printf("[ADMIN-CLI] WiFi scan fallita (rc=%d).\n", (int)count);
+    // Bug 5: scansione asincrona — non blocca il main loop
+    const int16_t rc = WiFi.scanNetworks(/*async=*/true, /*show_hidden=*/true);
+    if (rc == WIFI_SCAN_FAILED) {
+        Serial.println("[ADMIN-CLI] Avvio scansione WiFi fallito.");
         return;
     }
-
-    Serial.printf("[ADMIN-CLI] Reti trovate: %d\n", (int)count);
-    for (int i = 0; i < count; i++) {
-        const bool open = WiFi.encryptionType(i) == WIFI_AUTH_OPEN;
-        Serial.printf("  %2d. %s  RSSI=%d  %s\n",
-                      i + 1,
-                      WiFi.SSID(i).c_str(),
-                      WiFi.RSSI(i),
-                      open ? "OPEN" : "SECURE");
-    }
-    WiFi.scanDelete();
+    s_wifi_scan_pending = true;
+    Serial.println("[ADMIN-CLI] Scansione WiFi avviata. Risultati disponibili a breve...");
 }
 
 static void cli_handle_wifi_connect(const String& raw_args) {
     String ssid;
     String pass;
-    if (!cli_split_first_token(raw_args, ssid, pass) || ssid.length() == 0 || pass.length() == 0) {
-        Serial.println("[ADMIN-CLI] Uso: WIFICONNECT <ssid> <pass>");
+    // Bug 7: pass può essere vuota per reti aperte; split su primo token
+    if (!cli_split_first_token(raw_args, ssid, pass) || ssid.length() == 0) {
+        Serial.println("[ADMIN-CLI] Uso: WIFICONNECT <ssid> [pass]");
         return;
     }
 
@@ -537,7 +535,7 @@ static void cli_handle_wifi_connect(const String& raw_args) {
         wifi_boot_abort();
     }
 
-    dc_settings_wifi_set(true, ssid.c_str(), pass.c_str());
+    dc_settings_wifi_set(true, ssid.c_str(), pass.length() > 0 ? pass.c_str() : "");
     if ((WiFi.getMode() & WIFI_STA) == 0) {
         WiFi.mode(WIFI_STA);
     }
@@ -545,11 +543,8 @@ static void cli_handle_wifi_connect(const String& raw_args) {
     WiFi.setAutoReconnect(true);
     WiFi.disconnect(false, false);
     delay(100);
-    WiFi.begin(ssid.c_str(), pass.c_str());
-
-    g_dc_model.wifi.state = DcWifiState::DC_WIFI_CONNECTING;
-    ssid.toCharArray(g_dc_model.wifi.ssid, sizeof(g_dc_model.wifi.ssid));
-    g_dc_model.wifi.ip[0] = '\0';
+    WiFi.begin(ssid.c_str(), pass.length() > 0 ? pass.c_str() : nullptr);
+    // Bug 3: g_dc_model.wifi aggiornato da _update_wifi() al prossimo tick del controller
     Serial.printf("[ADMIN-CLI] Connessione WiFi avviata verso '%s'.\n", ssid.c_str());
 }
 
@@ -561,11 +556,7 @@ static void cli_handle_wifi_disable() {
     dc_settings_wifi_set(false, "", "");
     WiFi.setAutoReconnect(false);
     WiFi.disconnect(false, false);
-
-    g_dc_model.wifi.state = DcWifiState::DC_WIFI_DISABLED;
-    g_dc_model.wifi.rssi = 0;
-    g_dc_model.wifi.ssid[0] = '\0';
-    g_dc_model.wifi.ip[0] = '\0';
+    // Bug 3: g_dc_model.wifi.state aggiornato da _update_wifi() al prossimo tick del controller
     Serial.println("[ADMIN-CLI] WiFi disabilitato e credenziali rimosse.");
 }
 
@@ -574,39 +565,8 @@ static void cli_handle_factory_reset(const String& upper_line) {
         Serial.println("[ADMIN-CLI] Comando distruttivo. Conferma con: FACTORYRESET CONFIRM");
         return;
     }
-
-    bool ok = true;
-    Preferences pref;
-
-    if (pref.begin("easy", false)) {
-        ok = pref.clear() && ok;
-        pref.end();
-    } else {
-        ok = false;
-    }
-
-    if (pref.begin("easy_disp", false)) {
-        ok = pref.clear() && ok;
-        pref.end();
-    } else {
-        ok = false;
-    }
-
-    if (pref.begin("easy_sys", false)) {
-        ok = pref.clear() && ok;
-        pref.end();
-    } else {
-        ok = false;
-    }
-
-    if (!ok) {
-        Serial.println("[ADMIN-CLI] Factory reset incompleto: errore accesso NVS.");
-        return;
-    }
-
-    Serial.println("[ADMIN-CLI] Factory reset completato. Riavvio...");
-    delay(250);
-    ESP.restart();
+    Serial.println("[ADMIN-CLI] Factory reset in corso...");
+    dc_factory_reset();
 }
 
 static void cli_handle_pending_command(const char* command, const char* note) {
@@ -865,8 +825,39 @@ void dc_admin_cli_init(void) {
     cli_print_help();
 }
 
+static void cli_service_wifi_scan(void) {
+    if (!s_wifi_scan_pending) return;
+
+    const int16_t result = WiFi.scanComplete();
+    if (result == WIFI_SCAN_RUNNING) return;
+
+    s_wifi_scan_pending = false;
+
+    if (result == WIFI_SCAN_FAILED || result < 0) {
+        Serial.printf("[ADMIN-CLI] Scansione WiFi fallita (rc=%d).\n", (int)result);
+    } else {
+        Serial.printf("[ADMIN-CLI] Reti trovate: %d\n", (int)result);
+        for (int i = 0; i < result; i++) {
+            const bool open = WiFi.encryptionType(i) == WIFI_AUTH_OPEN;
+            Serial.printf("  %2d. %s  RSSI=%d  %s\n",
+                          i + 1,
+                          WiFi.SSID(i).c_str(),
+                          WiFi.RSSI(i),
+                          open ? "OPEN" : "SECURE");
+        }
+        WiFi.scanDelete();
+    }
+
+    // Bug 8: se il WiFi era abilitato, tenta di riconnettersi dopo la scansione
+    if (dc_settings_wifi_enabled_get()) {
+        dc_wifi_reconnect();
+        Serial.println("[ADMIN-CLI] Riconnessione WiFi avviata dopo la scansione.");
+    }
+}
+
 void dc_admin_cli_service(void) {
     cli_service_timeout();
+    cli_service_wifi_scan();
 
     while (Serial.available()) {
         const char c = (char)Serial.read();
