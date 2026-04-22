@@ -43,6 +43,8 @@
 // ITA: Invio telemetria display verso API cloud.
 // ENG: Display telemetry dispatch to cloud APIs.
 #include "DisplayApi_Manager.h"
+#include "dc_settings.h"
+#include "dc_controller.h"
 
 const char* FW_VERSION = "1.1.26";
 
@@ -767,6 +769,10 @@ void setup() {
     Serial.println("[OK] RS485 pronto (Serial1)");
     Serial.println("Digita 'HELP' o '485 - HELP' per il menu comandi RS485.");
 
+    dc_settings_load();
+    dc_controller_init();
+    Serial.println("[OK] Controller inizializzato");
+
     // ITA: Crea splash in sezione critica LVGL.
     // ENG: Creates splash inside LVGL critical section.
     if (lvgl_port_lock(-1)) {
@@ -910,14 +916,7 @@ void loop() {
         float h = 0.0f;
         const bool valid = g_shtc3_ok && shtc3_read(t, h);
 
-        // ITA: Aggiornamento UI protetto da lock LVGL.
-        // ENG: UI update protected by LVGL lock.
-        if (lvgl_port_lock(100)) {
-            ui_dc_home_set_environment(t, h, valid);
-            lvgl_port_unlock();
-        }
-
-        ui_air_safeguard_service(t, h, valid);
+        dc_controller_service(t, h, valid);
     }
 
     // ITA: Piccolo sleep per evitare busy-loop.
