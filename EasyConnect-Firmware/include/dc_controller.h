@@ -49,6 +49,9 @@ void dc_ota_check(void);
 // Avvia download e installazione OTA.
 void dc_ota_start(void);
 
+// Cancella la configurazione persistita e riavvia il controller.
+void dc_factory_reset(void);
+
 // ─── Air safeguard ───────────────────────────────────────────────────────────
 
 // Logica di controllo safeguard temperatura/umidità gruppo 1.

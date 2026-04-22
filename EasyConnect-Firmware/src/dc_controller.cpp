@@ -3,6 +3,7 @@
 #include "dc_settings.h"
 #include "rs485_network.h"
 #include <Arduino.h>
+#include <Preferences.h>
 #include <WiFi.h>
 #include <string.h>
 #include <math.h>
@@ -187,6 +188,41 @@ void dc_ota_check(void) {
 
 void dc_ota_start(void) {
     // Task 3.3
+}
+
+void dc_factory_reset(void) {
+    bool ok = true;
+    Preferences pref;
+
+    if (pref.begin("easy", false)) {
+        ok = pref.clear() && ok;
+        pref.end();
+    } else {
+        ok = false;
+    }
+
+    if (pref.begin("easy_disp", false)) {
+        ok = pref.clear() && ok;
+        pref.end();
+    } else {
+        ok = false;
+    }
+
+    if (pref.begin("easy_sys", false)) {
+        ok = pref.clear() && ok;
+        pref.end();
+    } else {
+        ok = false;
+    }
+
+    if (!ok) {
+        Serial.println("[DC-CTRL] Factory reset incompleto: errore accesso NVS.");
+        return;
+    }
+
+    Serial.println("[DC-CTRL] Factory reset completato. Riavvio...");
+    delay(250);
+    ESP.restart();
 }
 
 // ─── Air safeguard (implementation detail) ────────────────────────────────────

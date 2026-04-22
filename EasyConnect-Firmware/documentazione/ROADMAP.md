@@ -6,12 +6,12 @@
 
 ---
 
-## Stato attuale: FASE 2 Task 2.3 ✅ COMPLETATO → prossimo: FASE 3 Task 3.1
+## Stato attuale: FASE 3 Task 3.2 ✅ COMPLETATO → prossimo: FASE 3 Task 3.3
 
 ```
 FASE 1 [â–“â–“â–“â–“â–“â–“â–“â–“â–“â–“]  completata
 FASE 2 [██████████]  completata
-FASE 3 [â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘]  non iniziata
+FASE 3 [â–“â–“â–“â–“â–‘â–‘â–‘â–‘â–‘â–‘]  in corso
 FASE 4 [â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘]  non iniziata
 ```
 
@@ -276,19 +276,51 @@ Note post-migrazione:
 
 *Iniziare solo dopo completamento Fase 2.*
 
-### Task 3.1 â€” CLI seriale livelli admin ðŸ”²
-- Aggiungere `src/dc_admin_cli.cpp/.h`
-- Due livelli: User (default) / Admin (AUTH + password)
-- Timeout sessione admin: 5 minuti
-- Password â†’ SHA-256, salvata in NVS `easy_sys` chiave `adm_pw_hash`
-- Vedi elenco comandi in doc architettura Â§7
+### Task 3.1 â€” CLI seriale livelli admin âœ… COMPLETATO
 
-### Task 3.2 â€” JSON contract v1.0 ðŸ”²
-- Creare `src/dc_api_json.cpp/.h`
-- Funzione `dc_api_build_payload(char* buf, size_t len)` â€” serializza g_dc_model
-- Funzione `dc_api_parse_command(const char* json)` â€” esegue comandi pending
-- Struttura JSON: vedi doc architettura Â§8 (IMMUTABILE da questo punto in poi)
-- Integrare con DisplayApi_Manager esistente
+> **Checkpoint git da eseguire:**
+> ```
+> git add src/dc_admin_cli.cpp src/dc_admin_cli.h src/main_display_controller.cpp platformio.ini documentazione/ROADMAP.md
+> git commit -m "Phase3 Task3.1: add admin serial CLI with auth levels"
+> git tag phase3-task3.1
+> ```
+
+File creati:
+- `src/dc_admin_cli.cpp/.h` â€” nuova CLI seriale modulare con livelli User/Admin
+
+Modifiche:
+- `src/main_display_controller.cpp` â€” rimossa la CLI inline; setup/loop ora delegano a `dc_admin_cli_*`
+- `platformio.ini` â€” aggiunto `dc_admin_cli.cpp` alla build `controller_display`
+
+Note post-implementazione:
+- Livello default `User`; sblocco `Admin` via `AUTH <password>` con timeout di inattivita di 5 minuti
+- Password admin hashata SHA-256 in NVS namespace `easy_sys`, chiave `adm_pw_hash`
+- Se `adm_pw_hash` non esiste, la password di default e derivata dal seriale centralina
+- I comandi architetturali non ancora supportati dai task successivi (`CAL*`, `SETGROUP`, `SETRELAYTYPE`, `OTA*`, `OTACHANNEL`) sono esposti e rispondono esplicitamente come pending
+- Build `controller_display` verificata con successo dopo la migrazione
+
+### Task 3.2 â€” JSON contract v1.0 âœ… COMPLETATO
+
+> **Checkpoint git da eseguire:**
+> ```
+> git add src/dc_api_json.cpp src/dc_api_json.h src/DisplayApi_Manager.cpp src/dc_controller.cpp include/dc_controller.h platformio.ini documentazione/ROADMAP.md
+> git commit -m "Phase3 Task3.2: implement JSON API contract v1.0"
+> git tag phase3-task3.2
+> ```
+
+File creati:
+- `src/dc_api_json.cpp/.h` â€” builder payload v1.0 e parser comandi API con livelli Customer/Factory
+
+Modifiche:
+- `src/DisplayApi_Manager.cpp` â€” usa `dc_api_build_payload()`, aggiorna `g_dc_model.api` e processa `pending_commands`
+- `src/dc_controller.cpp` / `include/dc_controller.h` â€” aggiunta API `dc_factory_reset()` per il comando remoto omonimo
+- `platformio.ini` â€” aggiunto `dc_api_json.cpp` alla build `controller_display`
+
+Note post-implementazione:
+- Il payload telemetria e il parsing comandi leggono solo `g_dc_model` e chiamano solo `dc_cmd_*` / `dc_settings_*`
+- I comandi `relay_set`, `motor_enable`, `motor_speed`, `settings_set`, `rs485_scan` e `factory_reset` sono gestiti
+- I comandi OTA e quelli di calibrazione/gruppo restano esplicitamente pending fino ai task successivi
+- Build `controller_display` da verificare dopo integrazione
 
 ### Task 3.3 â€” OTA dal controller ðŸ”²
 - Integrare OTA trigger nella risposta API (campo `ota.update_available`)
@@ -346,12 +378,12 @@ Problemi risolti:
 ## Note per la sessione corrente
 
 - Branch di lavoro corrente: `freeze/controller_display-2026-04-03`
-- Prossimo task da eseguire: **FASE 3 — Task 3.1 — CLI seriale livelli admin**
+- Prossimo task da eseguire: **FASE 3 — Task 3.3 — OTA dal controller**
 - File da leggere all'inizio della prossima sessione:
   1. Questo file (ROADMAP.md)
-  2. `documentazione/Architettura_DataModel_e_Template.md` (Â§7 CLI admin)
-  3. `include/dc_settings.h`
-  4. `src/main_display_controller.cpp`
+  2. `documentazione/Architettura_DataModel_e_Template.md` (Â§8 JSON API, Â§9 OTA)
+  3. `src/dc_api_json.cpp`
+  4. `src/DisplayApi_Manager.cpp`
 
 ---
 

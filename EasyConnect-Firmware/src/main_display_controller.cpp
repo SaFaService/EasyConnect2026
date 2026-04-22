@@ -42,6 +42,7 @@
 // ITA: Invio telemetria display verso API cloud.
 // ENG: Display telemetry dispatch to cloud APIs.
 #include "DisplayApi_Manager.h"
+#include "dc_admin_cli.h"
 #include "dc_settings.h"
 #include "dc_controller.h"
 
@@ -59,7 +60,6 @@ static unsigned long g_shtc3_poll_ms = 0;
 static bool g_wifi_display_guard_active = false;
 static unsigned long g_wifi_display_guard_start_ms = 0;
 static constexpr unsigned long k_wifi_guard_timeout_ms = 30000UL;
-static String g_serial_cli_line;
 
 // ─── Boot WiFi state machine ──────────────────────────────────────────────────
 enum class WifiBootState : uint8_t { IDLE, CONNECTING, RETRY_WAIT, DONE, ABORTED };
@@ -159,401 +159,6 @@ static void wifi_display_guard_service() {
     const bool timed_out = (millis() - g_wifi_display_guard_start_ms) >= k_wifi_guard_timeout_ms;
     if (done || timed_out) {
         wifi_display_guard_set(false);
-    }
-}
-
-static int rs485_split_csv(const String& src, String* out, int max_items) {
-    if (!out || max_items <= 0) return 0;
-
-    int count = 0;
-    int start = 0;
-    while (count < max_items) {
-        const int comma = src.indexOf(',', start);
-        if (comma < 0) {
-            out[count++] = src.substring(start);
-            break;
-        }
-        out[count++] = src.substring(start, comma);
-        start = comma + 1;
-    }
-    return count;
-}
-
-static const char* rs485_type_to_text(Rs485DevType t) {
-    switch (t) {
-        case Rs485DevType::SENSOR: return "SENSOR";
-        case Rs485DevType::RELAY:  return "RELAY";
-        default:                   return "UNKNOWN";
-    }
-}
-
-static bool rs485_parse_id_arg(const String& raw, uint8_t& out_id) {
-    String t = raw;
-    t.trim();
-    if (t.length() == 0) return false;
-
-    for (int i = 0; i < (int)t.length(); i++) {
-        const char c = t.charAt(i);
-        if (c < '0' || c > '9') return false;
-    }
-
-    const int id = t.toInt();
-    if (id < 1 || id > 200) return false;
-    out_id = (uint8_t)id;
-    return true;
-}
-
-static void rs485_cli_print_help() {
-    Serial.println();
-    Serial.println("========== MENU RS485 (Display Controller) ==========");
-    Serial.println("HELP | 485help");
-    Serial.println("  Mostra questo menu.");
-    Serial.println("485ping <id>  (alias: 485pin <id>)");
-    Serial.println("  Interroga la periferica con '?<id>!' e verifica risposta.");
-    Serial.println("485info <id>");
-    Serial.println("  Mostra info complete della scheda (raw + campi decodificati).");
-    Serial.println("485scan");
-    Serial.println("  Avvia scansione asincrona indirizzi 1..200.");
-    Serial.println("485status");
-    Serial.println("  Stato scansione corrente.");
-    Serial.println("485list");
-    Serial.println("  Elenca le periferiche trovate nell'ultima scansione.");
-    Serial.println("485view");
-    Serial.println("  Abilita monitor TX/RX RS485 (richieste master + risposte slave).");
-    Serial.println("485stopview");
-    Serial.println("  Disabilita monitor TX/RX RS485.");
-    Serial.println("SETSERIAL <seriale>");
-    Serial.println("  Imposta seriale centralina display.");
-    Serial.println("SETAPIURL <url> / SETAPIKEY <key>");
-    Serial.println("  Imposta endpoint Antralux via seriale.");
-    Serial.println("SETCUSTURL <url> / SETCUSTKEY <key>");
-    Serial.println("  Imposta endpoint utente anche da seriale.");
-    Serial.println("INFO");
-    Serial.println("  Mostra seriale, API configurate, WiFi e ultimo invio.");
-    Serial.println("READSERIAL");
-    Serial.println("  Legge il seriale centralina display salvato.");
-    Serial.println("APISTATUS");
-    Serial.println("  Alias di INFO per la parte API.");
-    Serial.println("=====================================================");
-    Serial.println();
-}
-
-static void rs485_cli_print_scan_status() {
-    const Rs485ScanState st = rs485_network_scan_state();
-    if (st == Rs485ScanState::RUNNING) {
-        Serial.printf("[485-CLI] Scansione in corso: %d/200\n", rs485_network_scan_progress());
-        return;
-    }
-    if (st == Rs485ScanState::DONE) {
-        Serial.printf("[485-CLI] Scansione completata. Trovati: %d\n", rs485_network_device_count());
-        return;
-    }
-    Serial.println("[485-CLI] Nessuna scansione attiva.");
-}
-
-static void rs485_cli_print_sensor_details(const String* tok, int n, const String& raw) {
-    if (n < 7) {
-        Serial.println("[485-CLI] Risposta SENSOR inattesa.");
-        Serial.println("[485-CLI] RAW: " + raw + "!");
-        return;
-    }
-
-    const float p_pa = tok[3].toFloat();
-    const float p_mbar = p_pa / 100.0f;
-    Serial.printf("  Temperatura: %s C\n", tok[1].c_str());
-    Serial.printf("  Umidita': %s %%\n", tok[2].c_str());
-    Serial.printf("  Pressione: %.2f Pa (%.2f mbar)\n", p_pa, p_mbar);
-    Serial.printf("  Sicurezza: %s\n", tok[4].c_str());
-    Serial.printf("  Gruppo: %s\n", tok[5].c_str());
-    Serial.printf("  Seriale: %s\n", tok[6].c_str());
-    if (n > 7) Serial.printf("  FW: %s\n", tok[7].c_str());
-}
-
-static void rs485_cli_print_relay_details(const String* tok, int n, const String& raw) {
-    if (n < 12) {
-        Serial.println("[485-CLI] Risposta RELAY inattesa.");
-        Serial.println("[485-CLI] RAW: " + raw + "!");
-        return;
-    }
-
-    Serial.printf("  Modalita': %s\n", tok[2].c_str());
-    Serial.printf("  Relay ON: %s\n", tok[3].c_str());
-    Serial.printf("  Safety closed: %s\n", tok[4].c_str());
-    Serial.printf("  Feedback ok: %s\n", tok[5].c_str());
-    Serial.printf("  Avvii relay: %s\n", tok[6].c_str());
-    Serial.printf("  Ore ON: %s\n", tok[7].c_str());
-    Serial.printf("  Gruppo: %s\n", tok[8].c_str());
-    Serial.printf("  Seriale: %s\n", tok[9].c_str());
-    Serial.printf("  Stato: %s\n", tok[10].c_str());
-    Serial.printf("  FW: %s\n", tok[11].c_str());
-    if (n > 12) Serial.printf("  Limite vita (h): %s\n", tok[12].c_str());
-    if (n > 13) Serial.printf("  Vita scaduta: %s\n", tok[13].c_str());
-    if (n > 14) Serial.printf("  Fault feedback latched: %s\n", tok[14].c_str());
-}
-
-static void rs485_cli_handle_ping(const String& arg) {
-    uint8_t id = 0;
-    if (!rs485_parse_id_arg(arg, id)) {
-        Serial.println("[485-CLI] Uso: 485ping <id>  (id 1..200)");
-        return;
-    }
-
-    String raw;
-    const bool ok = rs485_network_ping(id, raw);
-    if (!ok) {
-        if (raw == "BUSY_SCAN") {
-            Serial.println("[485-CLI] Bus occupato da scansione in corso. Riprova a scansione finita.");
-        } else if (raw == "BUSY") {
-            Serial.println("[485-CLI] Bus RS485 occupato. Riprova.");
-        } else if (raw == "ERR,INIT") {
-            Serial.println("[485-CLI] RS485 non inizializzato.");
-        } else if (raw == "ERR,ADDR") {
-            Serial.println("[485-CLI] ID non valido. Range: 1..200.");
-        } else {
-            Serial.printf("[485-CLI] PING %u -> OFFLINE/NO_RESPONSE\n", id);
-            if (raw.length() > 0) {
-                Serial.println("[485-CLI] RAW RX: " + raw + "!");
-            }
-        }
-        return;
-    }
-
-    Serial.printf("[485-CLI] PING %u -> ONLINE\n", id);
-    Serial.println("[485-CLI] RAW: " + raw + "!");
-}
-
-static void rs485_cli_handle_info(const String& arg) {
-    uint8_t id = 0;
-    if (!rs485_parse_id_arg(arg, id)) {
-        Serial.println("[485-CLI] Uso: 485info <id>  (id 1..200)");
-        return;
-    }
-
-    String raw;
-    Rs485Device dev;
-    const bool ok = rs485_network_query_device(id, dev, raw);
-    if (!ok) {
-        if (raw == "BUSY_SCAN") {
-            Serial.println("[485-CLI] Bus occupato da scansione in corso. Riprova a scansione finita.");
-        } else if (raw == "BUSY") {
-            Serial.println("[485-CLI] Bus RS485 occupato. Riprova.");
-        } else if (raw == "ERR,INIT") {
-            Serial.println("[485-CLI] RS485 non inizializzato.");
-        } else if (raw == "ERR,ADDR") {
-            Serial.println("[485-CLI] ID non valido. Range: 1..200.");
-        } else {
-            Serial.printf("[485-CLI] INFO %u -> OFFLINE/NO_RESPONSE\n", id);
-            if (raw.length() > 0) {
-                Serial.println("[485-CLI] RAW RX: " + raw + "!");
-            }
-        }
-        return;
-    }
-
-    Serial.printf("[485-CLI] INFO periferica ID %u\n", id);
-    Serial.println("[485-CLI] RAW: " + raw + "!");
-    Serial.printf("  Tipo: %s\n", rs485_type_to_text(dev.type));
-    Serial.printf("  Seriale: %s\n", dev.sn);
-    Serial.printf("  FW: %s\n", dev.version);
-
-    String tok[20];
-    const int n = rs485_split_csv(raw, tok, 20);
-    if (raw.startsWith("OK,RELAY,")) {
-        rs485_cli_print_relay_details(tok, n, raw);
-    } else if (raw.startsWith("OK,")) {
-        rs485_cli_print_sensor_details(tok, n, raw);
-    }
-}
-
-static void rs485_cli_handle_list() {
-    const int count = rs485_network_device_count();
-    if (count <= 0) {
-        Serial.println("[485-CLI] Nessun device in cache. Eseguire prima: 485scan");
-        return;
-    }
-
-    Serial.printf("[485-CLI] Dispositivi in cache: %d\n", count);
-    for (int i = 0; i < count; i++) {
-        Rs485Device dev;
-        if (!rs485_network_get_device(i, dev)) continue;
-        Serial.printf("  ID=%u  TYPE=%s  SN=%s  FW=%s\n",
-                      dev.address, rs485_type_to_text(dev.type), dev.sn, dev.version);
-    }
-}
-
-static void rs485_cli_handle_view(bool enable) {
-    rs485_network_set_monitor_enabled(enable);
-    Serial.printf("[485-CLI] Monitor RS485: %s\n", enable ? "ATTIVO" : "DISATTIVO");
-}
-
-static bool cli_get_value_after_command(const String& line, const String& upper,
-                                        const char* command, String& value) {
-    const String cmd = String(command);
-    if (!upper.startsWith(cmd)) return false;
-    if (line.length() <= cmd.length()) return false;
-
-    const char sep = line.charAt(cmd.length());
-    if (sep != ' ' && sep != ':' && sep != '=') return false;
-
-    value = line.substring(cmd.length() + 1);
-    value.trim();
-    return true;
-}
-
-static void display_cli_print_serial() {
-    const DisplayApiConfig cfg = displayApiLoadConfig();
-    Serial.printf("[DISPLAY] Seriale centralina: %s\n", cfg.serialNumber.c_str());
-}
-
-static void rs485_cli_handle_command(String line) {
-    line.trim();
-    if (line.length() == 0) return;
-
-    String upper = line;
-    upper.toUpperCase();
-
-    if (upper == "HELP" || upper == "?" || upper == "485" ||
-        upper == "485HELP" || upper == "485 HELP" || upper == "485 - HELP") {
-        rs485_cli_print_help();
-        return;
-    }
-
-    if (upper == "INFO" || upper == "APISTATUS") {
-        displayApiPrintStatus();
-        return;
-    }
-
-    if (upper == "READSERIAL") {
-        display_cli_print_serial();
-        return;
-    }
-
-    String value;
-    if (cli_get_value_after_command(line, upper, "SETSERIAL", value)) {
-        displayApiSetSerialNumber(value);
-        Serial.println("[DISPLAY-API] Seriale centralina salvato.");
-        return;
-    }
-
-    if (cli_get_value_after_command(line, upper, "SETAPIURL", value)) {
-        displayApiSetFactoryUrl(value);
-        Serial.println("[DISPLAY-API] URL API Antralux salvato.");
-        return;
-    }
-
-    if (cli_get_value_after_command(line, upper, "SETAPIKEY", value)) {
-        displayApiSetFactoryKey(value);
-        Serial.printf("[DISPLAY-API] API Key Antralux salvata (%u caratteri).\n",
-                      (unsigned)value.length());
-        return;
-    }
-
-    if (cli_get_value_after_command(line, upper, "SETCUSTURL", value)) {
-        displayApiSetCustomerUrl(value);
-        Serial.println("[DISPLAY-API] URL API utente salvato.");
-        return;
-    }
-
-    if (cli_get_value_after_command(line, upper, "SETCUSTKEY", value)) {
-        displayApiSetCustomerKey(value);
-        Serial.printf("[DISPLAY-API] API Key utente salvata (%u caratteri).\n",
-                      (unsigned)value.length());
-        return;
-    }
-
-    if (!upper.startsWith("485")) {
-        Serial.println("[485-CLI] Comando non riconosciuto. Usa HELP.");
-        return;
-    }
-
-    String tail = line.substring(3);
-    tail.trim();
-    if (tail.startsWith("-")) {
-        tail = tail.substring(1);
-        tail.trim();
-    }
-    if (tail.length() == 0) {
-        rs485_cli_print_help();
-        return;
-    }
-
-    String cmd;
-    String arg;
-    const int space_idx = tail.indexOf(' ');
-    if (space_idx >= 0) {
-        cmd = tail.substring(0, space_idx);
-        arg = tail.substring(space_idx + 1);
-        arg.trim();
-    } else {
-        cmd = tail;
-    }
-    cmd.toUpperCase();
-
-    if (cmd == "PING" || cmd == "PIN") {
-        rs485_cli_handle_ping(arg);
-        return;
-    }
-    if (cmd == "INFO") {
-        rs485_cli_handle_info(arg);
-        return;
-    }
-    if (cmd == "SCAN") {
-        if (rs485_network_scan_state() == Rs485ScanState::RUNNING) {
-            rs485_cli_print_scan_status();
-        } else {
-            rs485_network_scan_start();
-            Serial.println("[485-CLI] Scansione RS485 avviata (1..200).");
-        }
-        return;
-    }
-    if (cmd == "STATUS") {
-        rs485_cli_print_scan_status();
-        return;
-    }
-    if (cmd == "LIST") {
-        rs485_cli_handle_list();
-        return;
-    }
-    if (cmd == "VIEW") {
-        rs485_cli_handle_view(true);
-        return;
-    }
-    if (cmd == "STOPVIEW") {
-        rs485_cli_handle_view(false);
-        return;
-    }
-
-    Serial.println("[485-CLI] Comando sconosciuto. Usa: 485help");
-}
-
-static void rs485_cli_poll_serial() {
-    while (Serial.available()) {
-        const char c = (char)Serial.read();
-
-        if (c == '\r' || c == '\n') {
-            if (g_serial_cli_line.length() > 0) {
-                Serial.println();
-                const String line = g_serial_cli_line;
-                g_serial_cli_line = "";
-                rs485_cli_handle_command(line);
-            }
-            continue;
-        }
-
-        if (c == '\b' || c == 127) {
-            if (g_serial_cli_line.length() > 0) {
-                g_serial_cli_line.remove(g_serial_cli_line.length() - 1);
-                Serial.print("\b \b");
-            }
-            continue;
-        }
-
-        if (c >= 32 && c <= 126) {
-            if (g_serial_cli_line.length() < 160) {
-                g_serial_cli_line += c;
-                Serial.write(c);
-            }
-        }
     }
 }
 
@@ -769,7 +374,6 @@ void setup() {
     rs485_network_init();
     rs485_network_boot_probe_start();
     Serial.println("[OK] RS485 pronto (Serial1)");
-    Serial.println("Digita 'HELP' o '485 - HELP' per il menu comandi RS485.");
     dc_boot_set_step(3, "RS485 pronto");
 
     // Step 4: sensore SHTC3
@@ -830,7 +434,7 @@ void setup() {
     dc_boot_set_step(10, "Pronto");
     dc_boot_complete();
 
-    rs485_cli_print_help();
+    dc_admin_cli_init();
 }
 
 static void wifi_boot_service() {
@@ -901,7 +505,7 @@ void loop() {
 
     wifi_display_guard_service();
     wifi_boot_service();
-    rs485_cli_poll_serial();
+    dc_admin_cli_service();
     displayApiService();
 
     // ITA: Polling ogni 2 secondi.

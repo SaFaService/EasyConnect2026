@@ -7,13 +7,11 @@
 #include <esp_heap_caps.h>
 #include <mbedtls/platform.h>
 
-#include "rs485_network.h"
-#include "ui/ui_dc_home.h"
+#include "dc_api_json.h"
 #include "dc_data_model.h"
 
-extern const char* FW_VERSION;
-
 static constexpr unsigned long kDisplayApiIntervalMs = 60000UL;
+static constexpr size_t kDisplayApiPayloadMaxLen = 12288U;
 
 struct DisplayApiEndpoint {
     const char* name;
@@ -37,6 +35,7 @@ static uint32_t s_posts_session = 0;
 static int s_last_http_code = 0;
 static String s_last_target;
 static volatile bool s_send_busy = false;
+static char s_payload_buffer[kDisplayApiPayloadMaxLen] = {};
 
 bool displayApiIsBusy() { return s_send_busy; }
 
@@ -46,26 +45,6 @@ static String _u64_to_string(uint64_t value) {
     return String(buf);
 }
 
-static String _json_escape(const String& value) {
-    String out;
-    out.reserve(value.length() + 8);
-    for (size_t i = 0; i < value.length(); i++) {
-        const char c = value.charAt(i);
-        switch (c) {
-            case '\\': out += "\\\\"; break;
-            case '"':  out += "\\\""; break;
-            case '\n': out += "\\n"; break;
-            case '\r': out += "\\r"; break;
-            case '\t': out += "\\t"; break;
-            default:
-                if ((uint8_t)c < 0x20) out += ' ';
-                else out += c;
-                break;
-        }
-    }
-    return out;
-}
-
 static bool _wifi_api_enabled() {
     return g_dc_model.settings.wifi_enabled;
 }
@@ -73,6 +52,115 @@ static bool _wifi_api_enabled() {
 static String _pref_get_string_if_key(Preferences& pref, const char* key, const char* fallback) {
     if (!pref.isKey(key)) return String(fallback ? fallback : "");
     return pref.getString(key, fallback ? fallback : "");
+}
+
+static String _status_error_text(const char* prefix, int code) {
+    String out = prefix ? String(prefix) : String("HTTP");
+    out += " ";
+    out += String(code);
+    return out;
+}
+
+static bool _response_get_string(const String& src, const char* key, String& out) {
+    const String tag = "\"" + String(key) + "\":\"";
+    int p = src.indexOf(tag);
+    if (p < 0) return false;
+    p += tag.length();
+
+    out = "";
+    bool escape = false;
+    for (int i = p; i < src.length(); i++) {
+        const char c = src[i];
+        if (escape) {
+            out += c;
+            escape = false;
+            continue;
+        }
+        if (c == '\\') {
+            escape = true;
+            continue;
+        }
+        if (c == '"') return true;
+        out += c;
+    }
+    return false;
+}
+
+static void _set_api_error_text(const String& text) {
+    text.toCharArray(g_dc_model.api.last_error, sizeof(g_dc_model.api.last_error));
+}
+
+static int _extract_pending_commands(const String& response, String* out_commands, int max_commands) {
+    if (!out_commands || max_commands <= 0) return 0;
+
+    const int label_pos = response.indexOf("\"pending_commands\"");
+    if (label_pos < 0) return 0;
+
+    const int array_pos = response.indexOf('[', label_pos);
+    if (array_pos < 0) return 0;
+
+    bool in_string = false;
+    bool escape = false;
+    int object_depth = 0;
+    int object_start = -1;
+    int count = 0;
+
+    for (int i = array_pos + 1; i < response.length(); i++) {
+        const char c = response[i];
+        if (in_string) {
+            if (escape) escape = false;
+            else if (c == '\\') escape = true;
+            else if (c == '"') in_string = false;
+            continue;
+        }
+
+        if (c == '"') {
+            in_string = true;
+            continue;
+        }
+        if (c == '{') {
+            if (object_depth == 0) object_start = i;
+            object_depth++;
+            continue;
+        }
+        if (c == '}') {
+            if (object_depth > 0) {
+                object_depth--;
+                if (object_depth == 0 && object_start >= 0) {
+                    out_commands[count++] = response.substring(object_start, i + 1);
+                    object_start = -1;
+                    if (count >= max_commands) break;
+                }
+            }
+            continue;
+        }
+        if (c == ']' && object_depth == 0) {
+            break;
+        }
+    }
+
+    return count;
+}
+
+static void _process_response_commands(const DisplayApiEndpoint& endpoint, const String& response) {
+    if (response.length() == 0) return;
+
+    String status;
+    if (_response_get_string(response, "status", status) && status.length() > 0 && status != "ok") {
+        _set_api_error_text(status);
+    }
+
+    String commands[8];
+    const int command_count = _extract_pending_commands(response, commands, 8);
+    for (int i = 0; i < command_count; i++) {
+        const bool ok = dc_api_parse_command_with_access(
+            commands[i].c_str(),
+            endpoint.customer ? DC_API_ACCESS_CUSTOMER : DC_API_ACCESS_FACTORY);
+        Serial.printf("[DISPLAY-API] pending_command[%d] %s (%s)\n",
+                      i,
+                      ok ? "OK" : "KO",
+                      endpoint.name);
+    }
 }
 
 DisplayApiConfig displayApiLoadConfig() {
@@ -160,163 +248,16 @@ static DisplayApiDispatchPlan _resolve_plan(const DisplayApiConfig& cfg) {
     return plan;
 }
 
-static bool _compute_delta_p(float& out_delta_p) {
-    bool g1_found = false;
-    bool g2_found = false;
-    float g1 = 0.0f;
-    float g2 = 0.0f;
-
-    const int count = rs485_network_device_count();
-    for (int i = 0; i < count; i++) {
-        Rs485Device dev;
-        if (!rs485_network_get_device(i, dev)) continue;
-        if (!dev.online || !dev.data_valid) continue;
-        if (dev.type != Rs485DevType::SENSOR) continue;
-        if (dev.sensor_profile == Rs485SensorProfile::AIR_010) continue;
-
-        if (!g1_found && dev.group == 1) {
-            g1 = dev.p;
-            g1_found = true;
-        } else if (!g2_found && dev.group == 2) {
-            g2 = dev.p;
-            g2_found = true;
-        }
-    }
-
-    if (g1_found && g2_found) {
-        out_delta_p = g1 - g2;
-        return true;
-    }
-    out_delta_p = 0.0f;
-    return false;
-}
-
-static String _device_type_text(const Rs485Device& dev) {
-    if (dev.type == Rs485DevType::RELAY) return "relay";
-    if (dev.type == Rs485DevType::SENSOR && dev.sensor_profile == Rs485SensorProfile::AIR_010) return "air_010";
-    if (dev.type == Rs485DevType::SENSOR) return "sensor";
-    return "unknown";
-}
-
-static String _build_payload(const DisplayApiConfig& cfg) {
-    char plant_name[48] = {};
-    ui_plant_name_get(plant_name, sizeof(plant_name));
-
-    float delta_p = 0.0f;
-    const bool delta_valid = _compute_delta_p(delta_p);
-
-    const uint32_t uptime_s = millis() / 1000UL;
-    const uint32_t heap_free = ESP.getFreeHeap();
-    const uint32_t heap_min = ESP.getMinFreeHeap();
-    const uint32_t heap_total = ESP.getHeapSize();
-    const uint32_t psram_free = ESP.getFreePsram();
-    const uint32_t psram_total = ESP.getPsramSize();
-    const uint32_t sketch_used = ESP.getSketchSize();
-    const uint32_t sketch_free = ESP.getFreeSketchSpace();
-    const uint32_t cpu_mhz = getCpuFrequencyMhz();
-    const long rssi = WiFi.RSSI();
-    const int runtime_count = rs485_network_device_count();
-    const int plant_count = rs485_network_plant_device_count();
-
-    String json = "{";
-    json.reserve(2300 + (runtime_count * 360));
-    json += "\"master_sn\":\"" + _json_escape(cfg.serialNumber) + "\",";
-    json += "\"fw_ver\":\"" + _json_escape(String(FW_VERSION)) + "\",";
-    json += "\"master_mode\":3,";
-    json += "\"plant_kind\":\"display\",";
-    json += "\"plant_name\":\"" + _json_escape(String(plant_name)) + "\",";
-    json += "\"delta_p\":";
-    json += delta_valid ? String(delta_p, 2) : "null";
-    json += ",";
-    json += "\"rssi\":" + String(rssi) + ",";
-    json += "\"traffic\":{";
-    json += "\"api_tx_session\":" + _u64_to_string(s_tx_bytes_session) + ",";
-    json += "\"api_rx_session\":" + _u64_to_string(s_rx_bytes_session) + ",";
-    json += "\"api_posts_session\":" + String(s_posts_session);
-    json += "},";
-    json += "\"resources\":{";
-    json += "\"uptime_s\":" + String(uptime_s) + ",";
-    json += "\"cpu_mhz\":" + String(cpu_mhz) + ",";
-    json += "\"heap_free\":" + String(heap_free) + ",";
-    json += "\"heap_min\":" + String(heap_min) + ",";
-    json += "\"heap_total\":" + String(heap_total) + ",";
-    json += "\"psram_free\":" + String(psram_free) + ",";
-    json += "\"psram_total\":" + String(psram_total) + ",";
-    json += "\"sketch_used\":" + String(sketch_used) + ",";
-    json += "\"sketch_free\":" + String(sketch_free);
-    json += "},";
-    json += "\"display\":{";
-    json += "\"wifi_enabled\":" + String(_wifi_api_enabled() ? 1 : 0) + ",";
-    json += "\"wifi_ssid\":\"" + _json_escape(WiFi.SSID()) + "\",";
-    json += "\"ip\":\"" + _json_escape(WiFi.localIP().toString()) + "\",";
-    json += "\"runtime_devices\":" + String(runtime_count) + ",";
-    json += "\"plant_devices\":" + String(plant_count);
-    json += "},";
-    json += "\"slaves\":[";
-
-    bool first = true;
-    for (int i = 0; i < runtime_count; i++) {
-        Rs485Device dev;
-        if (!rs485_network_get_device(i, dev)) continue;
-
-        if (!first) json += ",";
-        json += "{";
-        json += "\"id\":" + String(dev.address) + ",";
-        json += "\"sn\":\"" + _json_escape(String(dev.sn)) + "\",";
-        json += "\"ver\":\"" + _json_escape(String(dev.version)) + "\",";
-        json += "\"grp\":" + String(dev.group) + ",";
-        json += "\"online485\":" + String(dev.online ? 1 : 0) + ",";
-        json += "\"in_plant\":" + String(dev.in_plant ? 1 : 0) + ",";
-        json += "\"data_valid\":" + String(dev.data_valid ? 1 : 0) + ",";
-        json += "\"comm_failures\":" + String(dev.comm_failures) + ",";
-        json += "\"device_type\":\"" + _device_type_text(dev) + "\"";
-
-        if (dev.type == Rs485DevType::SENSOR) {
-            json += ",\"p\":";
-            json += (dev.online && dev.data_valid) ? String(dev.p, 2) : "null";
-            json += ",\"t\":";
-            json += (dev.online && dev.data_valid) ? String(dev.t, 2) : "null";
-            json += ",\"h\":";
-            json += (dev.online && dev.data_valid) ? String(dev.h, 2) : "null";
-            json += ",\"sic\":" + String(dev.sensor_active ? 1 : 0);
-            json += ",\"sensor_profile\":" + String((int)dev.sensor_profile);
-            json += ",\"sensor_mode\":" + String(dev.sensor_mode);
-            if (dev.sensor_profile == Rs485SensorProfile::AIR_010) {
-                json += ",\"motor_speed\":" + String(dev.h, 0);
-                json += ",\"motor_enabled\":" + String(dev.sensor_active ? 1 : 0);
-                json += ",\"motor_feedback_ok\":" + String(dev.sensor_feedback_ok ? 1 : 0);
-                json += ",\"motor_feedback_fault\":" + String(dev.sensor_feedback_fault_latched ? 1 : 0);
-                json += ",\"motor_state\":\"" + _json_escape(String(dev.sensor_state)) + "\"";
-            }
-        } else if (dev.type == Rs485DevType::RELAY) {
-            json += ",\"relay_mode\":" + String(dev.relay_mode);
-            json += ",\"relay_online\":" + String(dev.online ? 1 : 0);
-            json += ",\"relay_on\":" + String(dev.relay_on ? 1 : 0);
-            json += ",\"relay_safety_closed\":" + String(dev.relay_safety_closed ? 1 : 0);
-            json += ",\"relay_feedback_ok\":" + String(dev.relay_feedback_ok ? 1 : 0);
-            json += ",\"relay_feedback_fault\":" + String(dev.relay_feedback_fault_latched ? 1 : 0);
-            json += ",\"relay_lifetime_alarm\":" + String(dev.relay_life_expired ? 1 : 0);
-            json += ",\"relay_state\":\"" + _json_escape(String(dev.relay_state)) + "\"";
-        }
-
-        if (!dev.online) {
-            json += ",\"err485\":1";
-        }
-        json += "}";
-        first = false;
-    }
-
-    json += "]}";
-    return json;
-}
-
 static void* _mbedtls_calloc_psram(size_t n, size_t size) {
     void* p = heap_caps_calloc(n, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!p) p = heap_caps_calloc(n, size, MALLOC_CAP_DEFAULT);
     return p;
 }
 
-static int _post_payload(const DisplayApiEndpoint& endpoint, const String& payload, String& response) {
+static int _post_payload(const DisplayApiEndpoint& endpoint,
+                         const char* payload,
+                         size_t payload_len,
+                         String& response) {
     mbedtls_platform_set_calloc_free(_mbedtls_calloc_psram, heap_caps_free);
 
     WiFiClientSecure client;
@@ -329,7 +270,7 @@ static int _post_payload(const DisplayApiEndpoint& endpoint, const String& paylo
                   (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                   (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
                   (unsigned)ESP.getFreePsram(),
-                  (unsigned)payload.length());
+                  (unsigned)payload_len);
 
     if (!http.begin(client, endpoint.url)) {
         response = "";
@@ -338,7 +279,7 @@ static int _post_payload(const DisplayApiEndpoint& endpoint, const String& paylo
 
     http.addHeader("Content-Type", "application/json");
     http.addHeader("X-API-KEY", endpoint.key);
-    const int code = http.POST(payload);
+    const int code = http.POST((uint8_t*)payload, payload_len);
     response = (code > 0) ? http.getString() : "";
     http.end();
     return code;
@@ -353,38 +294,71 @@ static void _send_now() {
     const DisplayApiConfig cfg = displayApiLoadConfig();
     const DisplayApiDispatchPlan plan = _resolve_plan(cfg);
     if (plan.count == 0) {
+        g_dc_model.api.state = DcApiState::IDLE;
         s_send_busy = false;
         return;
     }
 
-    const String payload = _build_payload(cfg);
+    const unsigned long now = millis();
+    g_dc_model.api.state = DcApiState::SENDING;
+    g_dc_model.api.last_attempt_ms = now;
+    g_dc_model.api.last_http_code = 0;
+    g_dc_model.api.last_error[0] = '\0';
+
+    if (!dc_api_build_payload(s_payload_buffer, sizeof(s_payload_buffer))) {
+        g_dc_model.api.state = DcApiState::ERROR;
+        g_dc_model.api.error_count++;
+        _set_api_error_text("payload_too_large");
+        s_send_busy = false;
+        Serial.println("[DISPLAY-API] Payload JSON troppo grande per il buffer.");
+        return;
+    }
+
+    const size_t payload_len = strlen(s_payload_buffer);
     if (plan.sameKey) {
         Serial.println("[DISPLAY-API] API key Antralux e utente identiche: invio singolo.");
     }
 
+    bool any_success = false;
     for (int i = 0; i < plan.count; i++) {
         const DisplayApiEndpoint& endpoint = plan.endpoints[i];
         String response;
-        const int code = _post_payload(endpoint, payload, response);
+        const int code = _post_payload(endpoint, s_payload_buffer, payload_len, response);
         s_last_http_code = code;
         s_last_target = endpoint.name;
+        g_dc_model.api.last_http_code = code;
+
         if (code != -9999) {
-            s_tx_bytes_session += (uint64_t)payload.length();
+            s_tx_bytes_session += (uint64_t)payload_len;
             s_posts_session++;
+            g_dc_model.api.send_count++;
         }
         if (response.length() > 0) {
             s_rx_bytes_session += (uint64_t)response.length();
         }
 
         if (code >= 200 && code < 300) {
+            any_success = true;
+            _process_response_commands(endpoint, response);
             Serial.printf("[DISPLAY-API] Invio OK (%s, HTTP %d)\n", endpoint.name, code);
         } else if (code == 401 || code == 403) {
+            g_dc_model.api.error_count++;
+            _set_api_error_text(_status_error_text("auth", code));
             Serial.printf("[DISPLAY-API] Accesso negato (%s, HTTP %d): verificare API key.\n",
                           endpoint.name, code);
         } else {
+            g_dc_model.api.error_count++;
+            _set_api_error_text(_status_error_text("http", code));
             Serial.printf("[DISPLAY-API] Invio fallito (%s, HTTP %d)\n", endpoint.name, code);
         }
         delay(40);
+    }
+
+    if (any_success) {
+        g_dc_model.api.state = DcApiState::OK;
+        g_dc_model.api.last_ok_ms = now;
+    } else {
+        g_dc_model.api.state = DcApiState::ERROR;
     }
     s_send_busy = false;
 }
@@ -392,6 +366,7 @@ static void _send_now() {
 void displayApiService() {
     if (!_wifi_api_enabled() || WiFi.status() != WL_CONNECTED) {
         s_first_connected_seen = false;
+        if (!s_send_busy) g_dc_model.api.state = DcApiState::IDLE;
         return;
     }
     if (WiFi.scanComplete() == WIFI_SCAN_RUNNING) return;
@@ -428,7 +403,13 @@ void displayApiPrintStatus() {
         Serial.println("Key Utente     : NON IMPOSTATA");
     }
     Serial.printf("Endpoint attivi: %d%s\n", plan.count, plan.sameKey ? " (dedup key)" : "");
+    Serial.printf("Stato runtime  : %d\n", (int)g_dc_model.api.state);
     Serial.printf("Ultimo HTTP    : %d (%s)\n", s_last_http_code, s_last_target.c_str());
     Serial.printf("POST sessione  : %lu\n", (unsigned long)s_posts_session);
+    Serial.printf("TX sessione    : %s\n", _u64_to_string(s_tx_bytes_session).c_str());
+    Serial.printf("RX sessione    : %s\n", _u64_to_string(s_rx_bytes_session).c_str());
+    if (g_dc_model.api.last_error[0] != '\0') {
+        Serial.printf("Ultimo errore  : %s\n", g_dc_model.api.last_error);
+    }
     Serial.println("=================================");
 }
